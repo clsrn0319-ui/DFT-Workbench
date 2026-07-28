@@ -169,6 +169,17 @@ export const DESCRIPTORS: DescriptorDef[] = [
     radarMax: 10,
   },
   {
+    key: 'binder_solvation_free_energy',
+    label: '용매화 자유에너지',
+    unit: 'kJ/mol',
+    group: '열화학·반응',
+    definition: '선택한 용매 모델에서의 ΔG_solv. 용매 친화성·redox·ion binding 해석에 사용.',
+    caution: '용매 모델·온도에 종속. 기체상 계산에서는 산출되지 않음.',
+    direction: 'lower',
+    radarMin: -60,
+    radarMax: 0,
+  },
+  {
     key: 'binder_li_binding_energy',
     label: 'Li⁺ 결합 에너지',
     unit: 'kJ/mol',
@@ -239,6 +250,23 @@ export const DESCRIPTORS: DescriptorDef[] = [
 ]
 
 export const descriptorByKey = (key: string) => DESCRIPTORS.find((d) => d.key === key)
+
+// 물성 지문 5축 스크리닝 프리셋 (안정성·Si 접착·극성·내산화성·용매화)
+export const SCREENING_RADAR_PRESET = [
+  'binder_homo_lumo_gap',
+  'binder_si_binding_energy',
+  'binder_dipole_moment',
+  'binder_oxidation_potential',
+  'binder_solvation_free_energy',
+]
+
+// 활물질 표면 흡착에너지 보조 키 (descriptor 사전 외 — 표면 모델 명시 전제의 보기용)
+export const SURFACE_ADHESION_KEYS: { key: string; surface: string }[] = [
+  { key: 'binder_adhesion_graphite', surface: 'Graphite' },
+  { key: 'binder_adhesion_si', surface: 'Si' },
+  { key: 'binder_adhesion_nmc811', surface: 'NMC811' },
+  { key: 'binder_adhesion_lfp', surface: 'LFP' },
+]
 
 // DFT로 산출되는 항목 (계면·실험 제외) = 16개 중 계산 가능 셋
 export const COMPUTED_KEYS = DESCRIPTORS.filter((d) => !d.interfacial).map((d) => d.key)

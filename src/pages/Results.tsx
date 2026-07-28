@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import type { PageId } from '../App'
 import type { CalcJob } from '../types'
-import { HomoLumoChart, VoltageWindowChart, seriesColor } from '../charts'
+import {
+  EnergyLevelDiagram,
+  HomoLumoChart,
+  SurfaceAdhesionBars,
+  VoltageWindowChart,
+  seriesColor,
+} from '../charts'
 import { descriptorByKey } from '../data/descriptors'
 import { StatusBadge, fmtDate } from '../ui'
 
@@ -12,6 +18,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const { materials, jobs, pins, compareIds, dispatch, materialById, solventById, publishedJobs } = store
   const [selectedId, setSelectedId] = useState(materialId ?? materials[0]?.id ?? '')
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
+  const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -195,15 +202,39 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
             <section className="card">
               <div className="card-head">
                 <h2>2. HOMO / LUMO / gap</h2>
+                <div className="seg">
+                  <button className={orbitalView === 'range' ? 'on' : ''} onClick={() => setOrbitalView('range')}>
+                    수평 축
+                  </button>
+                  <button className={orbitalView === 'diagram' ? 'on' : ''} onClick={() => setOrbitalView('diagram')}>
+                    에너지 준위
+                  </button>
+                </div>
               </div>
-              <HomoLumoChart
-                entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
-              />
+              {orbitalView === 'range' ? (
+                <HomoLumoChart
+                  entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                />
+              ) : (
+                <EnergyLevelDiagram
+                  entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                />
+              )}
               <div className="chart-note">
                 전자구조 경향의 보조 지표 — 전압 범위와 불일치할 수 있습니다 (기획서 6.1).
               </div>
             </section>
           </div>
+
+          <section className="card">
+            <div className="card-head">
+              <h2>활물질 표면 흡착에너지</h2>
+              <span className="muted small">표면 모델 고정(cluster) 전제의 보기용 값 — 부록 D 비교 규칙 적용</span>
+            </div>
+            <SurfaceAdhesionBars
+              entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+            />
+          </section>
 
           <section className="card">
             <div className="card-head">

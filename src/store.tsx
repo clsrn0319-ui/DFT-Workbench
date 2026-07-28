@@ -41,6 +41,7 @@ type Action =
   | { type: 'cancelJob'; id: string }
   | { type: 'deleteJob'; id: string }
   | { type: 'togglePin'; key: string }
+  | { type: 'setPins'; keys: string[] }
   | { type: 'setTheme'; theme: ThemeTokens }
   | { type: 'toggleCompare'; id: string }
   | { type: 'setCompare'; ids: string[] }
@@ -206,6 +207,8 @@ function reducer(state: State, action: Action): State {
         : [...state.pins, action.key]
       return { ...state, pins }
     }
+    case 'setPins':
+      return { ...state, pins: action.keys }
     case 'setTheme':
       return { ...state, theme: action.theme }
     case 'toggleCompare': {

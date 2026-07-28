@@ -329,3 +329,182 @@ export function FingerprintRadar({
     </div>
   )
 }
+
+// ── 에너지 준위 다이어그램 (세로형: 실선 HOMO · 점선 LUMO · 밴드갭) ──
+export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
+  const tip = useTip()
+  const rows = entries.filter((e) => e.values.binder_homo && e.values.binder_lumo && !e.overlay)
+  if (!rows.length) return null
+
+  const W = 640
+  const H = 320
+  const padL = 46
+  const padT = 26
+  const padB = 30
+  const plotW = W - padL - 14
+  const plotH = H - padT - padB
+
+  const all = rows.flatMap((e) => [e.values.binder_homo.value, e.values.binder_lumo.value])
+  const maxV = Math.ceil(Math.max(...all, 1) + 0.5)
+  const minV = Math.floor(Math.min(...all, -1) - 0.5)
+  const y = (v: number) => padT + ((maxV - v) / (maxV - minV)) * plotH
+
+  const colW = plotW / rows.length
+  const levelW = Math.min(90, colW * 0.55)
+  const ticks: number[] = []
+  for (let t = minV; t <= maxV; t += 2) ticks.push(t)
+
+  return (
+    <div className="chart-box">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="HOMO LUMO 에너지 준위 다이어그램">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} x2={W - 14} y1={y(t)} y2={y(t)} className="gridline" />
+            <text x={padL - 8} y={y(t) + 4} className="axis-label" textAnchor="end">
+              {t}
+            </text>
+          </g>
+        ))}
+        <text x={14} y={14} className="axis-label">
+          eV
+        </text>
+        {rows.map((e, i) => {
+          const homo = e.values.binder_homo.value
+          const lumo = e.values.binder_lumo.value
+          const gap = e.values.binder_homo_lumo_gap?.value ?? lumo - homo
+          const cx = padL + colW * i + colW / 2
+          const x1 = cx - levelW / 2
+          const mid = (y(homo) + y(lumo)) / 2
+          return (
+            <g key={e.label}>
+              <line
+                x1={x1}
+                x2={x1 + levelW}
+                y1={y(homo)}
+                y2={y(homo)}
+                stroke={e.color}
+                strokeWidth={3}
+                strokeLinecap="round"
+                onMouseMove={(ev) => tip.show(ev, `${e.label} HOMO ${homo.toFixed(2)} eV`)}
+                onMouseLeave={tip.hide}
+              />
+              <line
+                x1={x1}
+                x2={x1 + levelW}
+                y1={y(lumo)}
+                y2={y(lumo)}
+                stroke={e.color}
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeDasharray="6 4"
+                onMouseMove={(ev) => tip.show(ev, `${e.label} LUMO ${lumo.toFixed(2)} eV`)}
+                onMouseLeave={tip.hide}
+              />
+              <line x1={cx} x2={cx} y1={y(lumo) + 3} y2={y(homo) - 3} className="gridline" strokeDasharray="2 3" />
+              <text x={cx + 6} y={mid + 4} className="value-label">
+                {gap.toFixed(2)} eV
+              </text>
+              <text x={cx} y={H - 10} className="axis-label" textAnchor="middle">
+                {trunc(e.label, 12)}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+      {tip.node}
+      <div className="chart-note">실선 = HOMO · 점선 = LUMO · 세로 점선 = 밴드갭 (전자구조 경향 보조 지표)</div>
+    </div>
+  )
+}
+
+// ── 활물질 표면 흡착에너지 묶음 막대 (|E_ad|, kJ/mol) ─────────────
+const ADHESION_SURFACES: { key: string; label: string }[] = [
+  { key: 'binder_adhesion_graphite', label: 'Graphite' },
+  { key: 'binder_adhesion_si', label: 'Si' },
+  { key: 'binder_adhesion_nmc811', label: 'NMC811' },
+  { key: 'binder_adhesion_lfp', label: 'LFP' },
+]
+
+export function SurfaceAdhesionBars({ entries }: { entries: SeriesEntry[] }) {
+  const tip = useTip()
+  const rows = entries.filter((e) => !e.overlay && ADHESION_SURFACES.some((s) => e.values[s.key]))
+  if (!rows.length) {
+    return (
+      <div className="empty small">
+        표면 흡착에너지 값이 없는 결과입니다. 최신 엔진으로 재계산하면 표시됩니다.
+      </div>
+    )
+  }
+
+  const W = 640
+  const H = 300
+  const padL = 52
+  const padT = 26
+  const padB = 30
+  const plotW = W - padL - 14
+  const plotH = H - padT - padB
+
+  const maxV = Math.max(
+    ...rows.flatMap((e) => ADHESION_SURFACES.map((s) => Math.abs(e.values[s.key]?.value ?? 0))),
+    10,
+  )
+  const top = Math.ceil(maxV / 20) * 20 + 10
+  const groupW = plotW / ADHESION_SURFACES.length
+  const barW = Math.min(24, (groupW * 0.72) / rows.length)
+  const ticks = [0, top / 2, top]
+
+  return (
+    <div className="chart-box">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="활물질 표면 흡착에너지 비교">
+        {ticks.map((t) => (
+          <g key={t}>
+            <line
+              x1={padL}
+              x2={W - 14}
+              y1={padT + plotH - (t / top) * plotH}
+              y2={padT + plotH - (t / top) * plotH}
+              className={t === 0 ? 'baseline' : 'gridline'}
+            />
+            <text x={padL - 8} y={padT + plotH - (t / top) * plotH + 4} className="axis-label" textAnchor="end">
+              {Math.round(t)}
+            </text>
+          </g>
+        ))}
+        <text x={14} y={14} className="axis-label">
+          |E_ad| (kJ/mol)
+        </text>
+        {ADHESION_SURFACES.map((surf, gi) => {
+          const gx = padL + groupW * gi + groupW / 2
+          const total = rows.length * barW + (rows.length - 1) * 2
+          return (
+            <g key={surf.key}>
+              {rows.map((e, i) => {
+                const dv = e.values[surf.key]
+                if (!dv) return null
+                const v = Math.abs(dv.value)
+                const h = (v / top) * plotH
+                const x = gx - total / 2 + i * (barW + 2)
+                return (
+                  <path
+                    key={e.label}
+                    d={`M${x},${padT + plotH} v${-Math.max(h - 4, 0)} q0,-4 4,-4 h${barW - 8} q4,0 4,4 v${Math.max(h - 4, 0)} z`}
+                    fill={e.color}
+                    onMouseMove={(ev) => tip.show(ev, `${e.label} / ${surf.label}: ${dv.value} ${dv.unit}`)}
+                    onMouseLeave={tip.hide}
+                  />
+                )
+              })}
+              <text x={gx} y={H - 10} className="axis-label" textAnchor="middle">
+                {surf.label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+      {tip.node}
+      <div className="chart-note">
+        막대가 길수록 해당 표면 흡착이 강함 (E_ad 음수 방향). 표면 모델이 다른 값과는 비교 금지 (부록 D).
+      </div>
+    </div>
+  )
+}

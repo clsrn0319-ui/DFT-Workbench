@@ -117,9 +117,23 @@ export function computeDescriptors(
   const enthalpy = liBind * 0.92 + jit('ent', 3)
   const dgIonEx = liBind * 0.33 + 8 + jit('dg', 3)
   const nboCharge = 0.18 + rand01(seed + 'nbo') * 0.45
+  const dgSolv = eps > 0 ? -(2 + dipole * 3.5 + base.hba * 2.5) * eps + jit('sv', 2) : null
+
+  // 활물질 표면 흡착에너지 (kJ/mol, 표면 모델 고정 전제의 보기용 보조값)
+  const adhGraphite = -(12 + base.alpha * 0.35) + jit('ag', 3)
+  const adhNmc = -(18 + Math.abs(mepMin) * 1.1 + base.hbd * 8) + jit('an2', 3)
+  const adhLfp = -(15 + Math.abs(mepMin) * 0.9 + base.hbd * 6) + jit('af', 3)
 
   const r = (v: number, digits = 2) => +v.toFixed(digits)
+  const extras: Record<string, DescriptorValue> = {
+    binder_adhesion_graphite: { value: r(adhGraphite, 1), unit: 'kJ/mol' },
+    binder_adhesion_si: { value: r(siBind, 1), unit: 'kJ/mol' },
+    binder_adhesion_nmc811: { value: r(adhNmc, 1), unit: 'kJ/mol' },
+    binder_adhesion_lfp: { value: r(adhLfp, 1), unit: 'kJ/mol' },
+    ...(dgSolv !== null ? { binder_solvation_free_energy: { value: r(dgSolv, 1), unit: 'kJ/mol' } } : {}),
+  }
   return {
+    ...extras,
     binder_homo: { value: r(homo, 3), unit: 'eV' },
     binder_lumo: { value: r(lumo, 3), unit: 'eV' },
     binder_homo_lumo_gap: { value: r(gap, 3), unit: 'eV' },
