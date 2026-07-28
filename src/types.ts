@@ -1,69 +1,135 @@
-export type Category =
-  | '불소계'
-  | '고무계'
-  | '셀룰로오스계'
-  | '아크릴계'
-  | '수용성'
-  | '니트릴계'
-  | '에테르계'
-  | '기타'
+// ── 물질 (기획서 5.1 Material) ─────────────────────────────────
+export type MaterialType = '바인더 모노머' | '용매' | '첨가제' | '염' | '기타'
+export type OriginType = '상용' | '합성' | '개질' | '미상'
+export type ReadyState = 'Needs decision' | 'Ready with warning' | 'Ready' | 'Expert review'
 
-export interface Molecule {
+export interface Material {
   id: string
   name: string
-  abbreviation: string
+  casNo: string // 빈 문자열 = 미부여
   smiles: string
-  category: Category
-  monomer: string
-  mw: number // 단량체 분자량 (g/mol)
+  formula: string
+  mw: number
+  type: MaterialType
+  originType: OriginType
+  tags: string[]
+  note: string
+  precursorCas: string[]
+  structureVersion: number // SMILES 변경 시 증가
+  readyState: ReadyState
+  createdAt: number
+  updatedAt: number
+  builtin: boolean
+  dictId?: string // 내장 사전 항목과 연결 (물성 기준값·작용기 참조)
+}
+
+// ── 용매 프리셋 (기획서 4.4 / 5.1 SolventPreset) ────────────────
+export interface SolventPreset {
+  id: string
+  kind: 'single' | 'mixed'
+  name: string
+  abbr: string
+  smiles?: string
+  formula?: string
+  components?: { abbr: string; ratio: number }[] // 혼합
+  ratioBasis?: '부피비' | '질량비' | '몰비'
+  modelKey: string // xTB/DFT implicit solvent 모델 키
+  version: string // "1.0" → 편집 시 "1.1"
   note?: string
   builtin: boolean
 }
 
-export type Functional = 'B3LYP' | 'PBE0' | 'M06-2X' | 'ωB97X-D' | 'PBE'
-export type BasisSet = '6-31G(d)' | '6-311+G(d,p)' | 'def2-SVP' | 'def2-TZVP'
-export type SolventModel = 'none' | 'PCM(H2O)' | 'SMD(H2O)' | 'SMD(NMP)'
+// ── 계산 설정 (기획서 4.5) ──────────────────────────────────────
+export type EnvType = '배터리 전해액' | '진공·기체' | '고체·주기계' | '사용자 정의'
+export type CalcStructure = '모노머' | '2량체' | '3량체' | '사용자 구조'
+export type AccuracyLevel = '빠름' | '표준' | '정밀'
+export type CalcPurpose = '전기화학 안정성' | '전자구조' | '사용자 정의'
 
-export interface CalcSettings {
-  functional: Functional
-  basis: BasisSet
-  solvent: SolventModel
-  dispersion: boolean // D3(BJ) 분산 보정
+export interface ExpertSettings {
   charge: number
   multiplicity: number
+  nConformers: number
+  rmsdThreshold: number // Å
+  energyWindow: number // kcal/mol
+  engine: 'PySCF' | 'CP2K'
+  functional: string
+  basis: string
+  dispersion: boolean
+  scfTol: string
+  grid: number
 }
 
-export type Surface = 'Graphite' | 'Si' | 'NMC811' | 'LFP'
-
-export interface DftResult {
-  homo: number // eV
-  lumo: number // eV
-  gap: number // eV
-  dipole: number // Debye
-  polarizability: number // a.u.
-  espMin: number // kcal/mol
-  espMax: number // kcal/mol
-  oxidationPotential: number // V vs Li/Li+
-  reductionPotential: number // V vs Li/Li+
-  solvationEnergy: number // kcal/mol
-  adhesion: Record<Surface, number> // eV (음수 = 흡착 안정)
-  totalEnergy: number // Hartree
-  scfCycles: number
-  wallTimeSec: number
+export interface CalcSettings {
+  envType: EnvType
+  solventId: string | null // null = 진공
+  temperature: number // K
+  atmosphere: '불활성' | '공기' | '사용자 정의'
+  structure: CalcStructure
+  accuracy: AccuracyLevel
+  purpose: CalcPurpose
+  referenceElectrode: 'Li/Li+' | 'SHE'
+  expert: ExpertSettings
 }
 
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
+// ── 작업·결과 (기획서 13.2 상태 게이트) ─────────────────────────
+export type JobStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'COMPUTED'
+  | 'VALIDATING'
+  | 'PUBLISHED'
+  | 'NEEDS_REVIEW'
+  | 'FAILED'
 
-export interface Job {
+export interface DescriptorValue {
+  value: number
+  unit: string
+}
+
+export interface CalcResult {
+  descriptors: Record<string, DescriptorValue>
+  validationStatus: 'PASSED' | 'NEEDS_REVIEW'
+  validationNotes: string[]
+  publishedAt?: number
+  protocolId: string
+  structureHash: string
+}
+
+export interface CalcJob {
   id: string
-  moleculeId: string
+  materialId: string
+  structureVersion: number
   settings: CalcSettings
   status: JobStatus
-  progress: number // 0–100
+  progress: number
   stage: string
+  logs: string[]
   createdAt: number
-  startedAt?: number
   finishedAt?: number
-  result?: DftResult
+  result?: CalcResult
   error?: string
+}
+
+// ── 참고 오버레이 (외부/실험, 기획서 4.7·12.7) ──────────────────
+export interface ExternalReference {
+  dictId: string
+  source: string // 'Materials Project (MPcules)' 등
+  sourceId: string
+  method: string
+  solvent: string
+  values: Record<string, DescriptorValue>
+  retrievedAt: string
+}
+
+// ── 테마 (기획서 14) ────────────────────────────────────────────
+export interface ThemeTokens {
+  mode: 'light' | 'dark' | 'high-contrast'
+  background: string
+  card: string
+  border: string
+  accent: string // 딥 틸
+  pin: string // 앰버
+  chartSeries: string[] // 물질 series 색 8개
+  mepNegative: string
+  mepPositive: string
 }

@@ -1,36 +1,12 @@
-import type { CalcSettings, DftResult, Surface } from '../types'
+import type { CalcResult, CalcSettings, DescriptorValue } from '../types'
+import { DICTIONARY } from '../data/dictionary'
 
-// 실제 DFT 코드가 연결되기 전까지 사용하는 결정론적 모의 엔진.
-// 동일한 (분자, 계산조건) 조합은 항상 동일한 결과를 반환한다.
+// ── 프로토타입 모의 계산 엔진 ───────────────────────────────────
+// 기획서 13장의 파이프라인(FastAPI + RDKit/xTB/PySCF/CP2K + 검증 게이트)을
+// 브라우저 안에서 흐름 확인용으로 시뮬레이션한다. 동일 (물질, 조건) 입력은
+// 항상 동일한 결과를 반환하며, 상용 배포 시 이 모듈이 실제 API 클라이언트로
+// 교체된다. (기획서 1.2 "이전 HTML에서 흐름 확인용 시뮬레이션" 계층)
 
-interface BaseProps {
-  homo: number
-  lumo: number
-  dipole: number
-  polarizability: number
-  espMin: number
-  espMax: number
-  solvation: number
-  adhesion: Record<Surface, number>
-  energy: number
-}
-
-// B3LYP/6-311+G(d,p) 기준의 대표값 (문헌 수준의 근사치, 데모용)
-const BASE: Record<string, BaseProps> = {
-  pvdf: { homo: -8.72, lumo: 0.94, dipole: 1.39, polarizability: 24.1, espMin: -18.2, espMax: 21.5, solvation: -2.1, adhesion: { Graphite: -0.34, Si: -0.42, NMC811: -0.58, LFP: -0.49 }, energy: -277.35 },
-  ptfe: { homo: -9.61, lumo: 0.81, dipole: 0.0, polarizability: 27.9, espMin: -9.8, espMax: 14.2, solvation: -0.8, adhesion: { Graphite: -0.28, Si: -0.31, NMC811: -0.44, LFP: -0.38 }, energy: -475.61 },
-  sbr: { homo: -6.68, lumo: -0.38, dipole: 0.42, polarizability: 84.3, espMin: -14.6, espMax: 12.9, solvation: -1.4, adhesion: { Graphite: -0.61, Si: -0.37, NMC811: -0.35, LFP: -0.33 }, energy: -309.62 },
-  cmc: { homo: -7.21, lumo: 0.31, dipole: 3.86, polarizability: 132.4, espMin: -46.3, espMax: 44.1, solvation: -18.9, adhesion: { Graphite: -0.41, Si: -1.08, NMC811: -0.82, LFP: -0.74 }, energy: -800.44 },
-  paa: { homo: -7.43, lumo: -0.41, dipole: 1.88, polarizability: 40.6, espMin: -37.4, espMax: 41.8, solvation: -8.6, adhesion: { Graphite: -0.39, Si: -1.21, NMC811: -0.88, LFP: -0.79 }, energy: -267.21 },
-  lipaa: { homo: -6.94, lumo: 0.22, dipole: 6.71, polarizability: 44.8, espMin: -58.1, espMax: 22.4, solvation: -52.3, adhesion: { Graphite: -0.36, Si: -1.34, NMC811: -0.95, LFP: -0.86 }, energy: -274.68 },
-  pva: { homo: -7.08, lumo: 0.53, dipole: 1.67, polarizability: 27.3, espMin: -33.5, espMax: 35.7, solvation: -5.9, adhesion: { Graphite: -0.32, Si: -0.86, NMC811: -0.66, LFP: -0.6 }, energy: -153.83 },
-  pan: { homo: -8.03, lumo: -0.62, dipole: 3.92, polarizability: 38.2, espMin: -31.8, espMax: 23.6, solvation: -6.2, adhesion: { Graphite: -0.44, Si: -0.72, NMC811: -0.69, LFP: -0.61 }, energy: -170.86 },
-  peo: { homo: -7.34, lumo: 1.12, dipole: 1.89, polarizability: 26.8, espMin: -29.4, espMax: 20.1, solvation: -4.3, adhesion: { Graphite: -0.3, Si: -0.63, NMC811: -0.57, LFP: -0.52 }, energy: -153.79 },
-  pvp: { homo: -6.61, lumo: 0.18, dipole: 4.12, polarizability: 74.5, espMin: -41.2, espMax: 19.8, solvation: -9.7, adhesion: { Graphite: -0.47, Si: -0.78, NMC811: -0.71, LFP: -0.64 }, energy: -363.53 },
-  alginate: { homo: -7.02, lumo: 0.36, dipole: 5.94, polarizability: 118.9, espMin: -55.7, espMax: 30.2, solvation: -48.7, adhesion: { Graphite: -0.38, Si: -1.16, NMC811: -0.85, LFP: -0.77 }, energy: -763.19 },
-}
-
-// 사용자 정의 분자용: id 해시 기반의 그럴듯한 기본값 생성
 function hash(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) {
@@ -40,123 +16,174 @@ function hash(s: string): number {
   return h >>> 0
 }
 
-function rand01(seed: string): number {
-  return (hash(seed) % 100000) / 100000
+const rand01 = (seed: string) => (hash(seed) % 100000) / 100000
+
+interface BaseProps {
+  homo: number
+  lumo: number
+  dipole: number
+  alpha: number
+  liBind: number
+  hbd: number
+  hba: number
 }
 
-function fallbackBase(id: string, smiles: string): BaseProps {
-  const key = id + smiles
-  const r = (tag: string) => rand01(key + tag)
-  const homo = -6.2 - r('h') * 3.2
+function baseFor(dictId: string | undefined, smiles: string): BaseProps {
+  const entry = dictId ? DICTIONARY.find((d) => d.dictId === dictId) : undefined
+  if (entry) return entry.base
+  const r = (tag: string) => rand01(smiles + tag)
   return {
-    homo,
-    lumo: -0.8 + r('l') * 2.0,
-    dipole: r('d') * 5.5,
-    polarizability: 20 + r('p') * 110,
-    espMin: -(10 + r('em') * 45),
-    espMax: 10 + r('ex') * 35,
-    solvation: -(1 + r('s') * 30),
-    adhesion: {
-      Graphite: -(0.25 + r('ag') * 0.4),
-      Si: -(0.3 + r('as') * 1.0),
-      NMC811: -(0.3 + r('an') * 0.7),
-      LFP: -(0.3 + r('af') * 0.6),
-    },
-    energy: -(120 + r('e') * 700),
+    homo: -6.3 - r('h') * 3.0,
+    lumo: -0.8 + r('l') * 1.9,
+    dipole: r('d') * 6,
+    alpha: 25 + r('a') * 100,
+    liBind: -(50 + r('li') * 110),
+    hbd: Math.floor(r('hbd') * 3),
+    hba: Math.floor(r('hba') * 4),
   }
 }
 
-// 범함수별 보정 (B3LYP 기준): [HOMO 이동, LUMO 이동]
+// 함수별 궤도 보정 (B3LYP 기준)
 const FUNC_SHIFT: Record<string, [number, number]> = {
   B3LYP: [0, 0],
-  PBE0: [-0.25, 0.21],
+  'PBE0-D3(BJ)': [-0.25, 0.21],
   'M06-2X': [-0.62, 0.48],
   'ωB97X-D': [-1.05, 0.82],
   PBE: [0.95, -0.78],
 }
 
 const BASIS_SCALE: Record<string, number> = {
-  '6-31G(d)': 0.93,
-  '6-311+G(d,p)': 1.0,
-  'def2-SVP': 0.95,
-  'def2-TZVP': 1.01,
+  'def2-SVP': 0.94,
+  'def2-TZVP': 1.0,
+  'def2-TZVPD': 1.01,
+  '6-311+G(d,p)': 0.99,
 }
 
-const SOLV_STAB: Record<string, number> = {
-  none: 0,
-  'PCM(H2O)': 1.0,
-  'SMD(H2O)': 1.15,
-  'SMD(NMP)': 0.85,
+const SOLV_EPS: Record<string, number> = {
+  // modelKey → 상대 유전 안정화 계수
+  'smd:ec': 1.2,
+  'smd:dmc': 0.55,
+  'smd:emc': 0.5,
+  'smd:water': 1.35,
+  'smd:nmp': 0.9,
+  'smd:ec-dmc-11': 1.0,
 }
 
-export function computeResult(
-  moleculeId: string,
+const STRUCT_SCALE: Record<string, number> = {
+  모노머: 1,
+  '2량체': 1.6,
+  '3량체': 2.1,
+  '사용자 구조': 1.3,
+}
+
+export function computeDescriptors(
+  materialKey: string,
+  dictId: string | undefined,
   smiles: string,
   s: CalcSettings,
-): DftResult {
-  const base = BASE[moleculeId] ?? fallbackBase(moleculeId, smiles)
-  const seed = `${moleculeId}|${s.functional}|${s.basis}|${s.solvent}|${s.dispersion}|${s.charge}`
-  const jitter = (tag: string, amp: number) => (rand01(seed + tag) - 0.5) * amp
+  solventModelKey: string | null,
+): Record<string, DescriptorValue> {
+  const base = baseFor(dictId, smiles)
+  const seed = `${materialKey}|${s.envType}|${solventModelKey}|${s.temperature}|${s.structure}|${s.accuracy}|${s.expert.functional}|${s.expert.basis}|${s.expert.charge}`
+  const jit = (tag: string, amp: number) => (rand01(seed + tag) - 0.5) * amp
 
-  const [dh, dl] = FUNC_SHIFT[s.functional]
-  const bs = BASIS_SCALE[s.basis]
-  const sv = SOLV_STAB[s.solvent]
+  const [dh, dl] = FUNC_SHIFT[s.expert.functional] ?? [0, 0]
+  const bs = BASIS_SCALE[s.expert.basis] ?? 1
+  const eps = solventModelKey ? (SOLV_EPS[solventModelKey] ?? 0.8) : 0
+  const sc = STRUCT_SCALE[s.structure]
 
-  const homo = (base.homo + dh) * bs + jitter('h', 0.08) - sv * 0.05
-  const lumo = (base.lumo + dl) * bs + jitter('l', 0.08) + sv * 0.03
+  const homo = (base.homo + dh) * bs - eps * 0.06 + jit('h', 0.06)
+  const lumo = (base.lumo + dl) * bs + eps * 0.04 + jit('l', 0.06)
   const gap = lumo - homo
-  const dipole = base.dipole * (1 + sv * 0.18) + jitter('d', 0.1)
-  const solvationEnergy = s.solvent === 'none' ? 0 : base.solvation * sv + jitter('s', 0.6)
+  const dipole = Math.abs(base.dipole * (1 + eps * 0.15) + jit('d', 0.15))
 
-  // 산화전위 ≈ -HOMO 기반, 환원전위 ≈ -LUMO 기반의 선형 근사 (vs Li/Li+)
-  const oxidationPotential = -homo - 1.46 + jitter('op', 0.05)
-  const reductionPotential = -lumo - 1.46 + jitter('rp', 0.05)
+  // Koopmans 기반 근사 + 용매·이완 보정
+  const vip = -homo + 1.05 + jit('vip', 0.1) - eps * 0.12
+  const vea = -lumo - 0.85 + jit('vea', 0.1) + eps * 0.1
+  // 전위 (V vs Li/Li+): 절대전위 스케일 근사 변환
+  const shift = s.referenceElectrode === 'Li/Li+' ? 1.46 : 4.44 - 3.04
+  const eox = vip - shift - eps * 0.18 + jit('eox', 0.05)
+  // 환원 전위 ∝ 전자친화도: VEA가 낮을수록(음수) 환원이 어렵고 하한이 낮아진다
+  const ered = vea + (s.referenceElectrode === 'Li/Li+' ? 1.74 : 0.34) + eps * 0.1 + jit('ered', 0.05)
 
-  const dispBonus = s.dispersion ? 1.12 : 1.0
-  const adhesion = Object.fromEntries(
-    (Object.keys(base.adhesion) as Surface[]).map((surf) => [
-      surf,
-      +(base.adhesion[surf] * dispBonus + jitter('a' + surf, 0.04)).toFixed(3),
-    ]),
-  ) as Record<Surface, number>
+  const mepMin = -(8 + dipole * 6.2 + base.hba * 3.5) + jit('mn', 1.5)
+  const mepMax = 10 + dipole * 3.4 + base.hbd * 7 + jit('mx', 1.5)
 
-  const basisCost = { '6-31G(d)': 1, 'def2-SVP': 1.1, '6-311+G(d,p)': 2.2, 'def2-TZVP': 2.6 }[s.basis]
+  const liBind = base.liBind * (1 - eps * 0.22) * (1 + (sc - 1) * 0.15) + jit('li', 4)
+  const pf6Bind = -(8 + mepMax * 0.55) * (1 - eps * 0.18) + jit('pf', 2)
+  const siBind = -(25 + Math.abs(mepMin) * 1.4 + base.hbd * 12) + jit('si', 4)
+  const hbond = base.hbd > 0 ? -(6 + base.hbd * 9 + base.hba * 2) + jit('hb', 2) : -(2 + base.hba * 1.5)
 
+  const enthalpy = liBind * 0.92 + jit('ent', 3)
+  const dgIonEx = liBind * 0.33 + 8 + jit('dg', 3)
+  const nboCharge = 0.18 + rand01(seed + 'nbo') * 0.45
+
+  const r = (v: number, digits = 2) => +v.toFixed(digits)
   return {
-    homo: +homo.toFixed(3),
-    lumo: +lumo.toFixed(3),
-    gap: +gap.toFixed(3),
-    dipole: +Math.abs(dipole).toFixed(3),
-    polarizability: +(base.polarizability * bs * (1 + jitter('pol', 0.04))).toFixed(1),
-    espMin: +(base.espMin * (1 + sv * 0.1)).toFixed(1),
-    espMax: +(base.espMax * (1 + sv * 0.08)).toFixed(1),
-    oxidationPotential: +oxidationPotential.toFixed(2),
-    reductionPotential: +reductionPotential.toFixed(2),
-    solvationEnergy: +solvationEnergy.toFixed(2),
-    adhesion,
-    totalEnergy: +(base.energy * bs + jitter('e', 0.01)).toFixed(5),
-    scfCycles: 9 + (hash(seed) % 14),
-    wallTimeSec: Math.round(40 * basisCost * (1 + rand01(seed + 'wt'))),
+    binder_homo: { value: r(homo, 3), unit: 'eV' },
+    binder_lumo: { value: r(lumo, 3), unit: 'eV' },
+    binder_homo_lumo_gap: { value: r(gap, 3), unit: 'eV' },
+    binder_ionization_energy: { value: r(vip), unit: 'eV' },
+    binder_electron_affinity: { value: r(vea), unit: 'eV' },
+    binder_oxidation_potential: { value: r(eox), unit: `V vs ${s.referenceElectrode}` },
+    binder_reduction_potential: { value: r(ered), unit: `V vs ${s.referenceElectrode}` },
+    binder_meps_max_positive: { value: r(mepMax, 1), unit: 'kcal/mol' },
+    binder_meps_min_negative: { value: r(mepMin, 1), unit: 'kcal/mol' },
+    binder_dipole_moment: { value: r(dipole), unit: 'D' },
+    binder_nbo_charge_cationic_site: { value: r(nboCharge, 3), unit: 'e' },
+    binder_enthalpy: { value: r(enthalpy, 1), unit: 'kJ/mol' },
+    binder_gibbs_free_energy_ion_exchange: { value: r(dgIonEx, 1), unit: 'kJ/mol' },
+    binder_li_binding_energy: { value: r(liBind, 1), unit: 'kJ/mol' },
+    binder_pf6_binding_energy: { value: r(pf6Bind, 1), unit: 'kJ/mol' },
+    binder_binder_hbond_energy: { value: r(hbond, 1), unit: 'kJ/mol' },
+    binder_si_binding_energy: { value: r(siBind, 1), unit: 'kJ/mol' },
   }
 }
 
-export const STAGES = [
-  { at: 0, label: '입력 검증 및 초기 구조 생성' },
-  { at: 10, label: '기하 구조 최적화' },
-  { at: 45, label: 'SCF 수렴' },
-  { at: 70, label: '진동수 계산' },
-  { at: 85, label: '물성 산출 (HOMO/LUMO·ESP·흡착)' },
-  { at: 100, label: '완료' },
+export function buildResult(
+  materialKey: string,
+  dictId: string | undefined,
+  smiles: string,
+  structureVersion: number,
+  s: CalcSettings,
+  solventModelKey: string | null,
+): CalcResult {
+  const descriptors = computeDescriptors(materialKey, dictId, smiles, s, solventModelKey)
+  const seed = materialKey + s.expert.functional + s.expert.basis + s.structure
+  // 검증 게이트 시뮬레이션: 일부 조합은 NEEDS_REVIEW (기획서 13.2)
+  const review = hash(seed + 'validate') % 11 === 0
+  return {
+    descriptors,
+    validationStatus: review ? 'NEEDS_REVIEW' : 'PASSED',
+    validationNotes: review
+      ? ['진동수 계산에서 저주파 허수 모드 1개 검출 — conformer 재탐색 후 재검증 필요']
+      : ['SCF·geometry·frequency·상태 일치·파일 완전성 검사 통과'],
+    protocolId: `PROTO-${s.accuracy === '정밀' ? 'HIGH' : s.accuracy === '빠름' ? 'FAST' : 'STD'}-1.0`,
+    structureHash: `sha256:${hash(smiles + structureVersion).toString(16).padStart(8, '0')}`,
+  }
+}
+
+// ── 파이프라인 단계 (기획서 7.1) ────────────────────────────────
+export const PIPELINE_STAGES = [
+  { at: 0, label: '구조 해석 (RDKit 파싱·원자가 검사)' },
+  { at: 8, label: '표준화·Descriptor (canonical 구조·hash)' },
+  { at: 16, label: '3D conformer 생성 (ETKDG·RMSD 중복 제거)' },
+  { at: 28, label: 'xTB 사전 최적화 (GFN2-xTB)' },
+  { at: 45, label: 'DFT 구조 최적화·SCF 수렴' },
+  { at: 68, label: '진동수·열보정 계산' },
+  { at: 80, label: '중성/양이온/음이온 상태 계산' },
+  { at: 92, label: '결과 집계·전위 변환' },
+  { at: 100, label: '계산 완료' },
 ]
 
 export function stageFor(progress: number): string {
-  let label = STAGES[0].label
-  for (const st of STAGES) if (progress >= st.at) label = st.label
+  let label = PIPELINE_STAGES[0].label
+  for (const st of PIPELINE_STAGES) if (progress >= st.at) label = st.label
   return label
 }
 
-// 진행 속도: 기저함수가 클수록 느리게 (데모용 15~40초 내외)
-export function progressStep(basis: string): number {
-  const cost = { '6-31G(d)': 1, 'def2-SVP': 1.1, '6-311+G(d,p)': 1.8, 'def2-TZVP': 2.2 }[basis] ?? 1
-  return 8 / cost // 1초 틱당 % 증가량
+export function progressStep(accuracy: string, structure: string): number {
+  const acc = { 빠름: 1.6, 표준: 1, 정밀: 0.55 }[accuracy] ?? 1
+  const str = { 모노머: 1, '2량체': 0.7, '3량체': 0.5, '사용자 구조': 0.8 }[structure] ?? 1
+  return 7 * acc * str // 1초 틱당 % (표준 모노머 ≈ 15초)
 }
