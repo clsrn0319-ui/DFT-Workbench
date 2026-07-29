@@ -360,3 +360,71 @@ C=C(C)C(=O)O`,value:m,onChange:x=>p(x.target.value)}),f&&l.jsx("div",{className:
   document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!panel.classList.contains('rv-hidden'))close();});
 })();
 </script>
+
+<!-- ===== 랜딩(시작) 페이지 ===== -->
+<style>
+.lp{position:fixed;inset:0;z-index:920;display:flex;flex-direction:column;overflow-y:auto;background:var(--page,#fff);color:var(--text-1,#171716);font-family:system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif}
+.lp::before{content:"";position:fixed;inset:0;pointer-events:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'%3E%3Cg fill='none' stroke='%230f766e' stroke-opacity='.07'%3E%3Cpath d='M28 0.5 55.5 16.5v32L28 64.5 0.5 48.5v-32z'/%3E%3Cpath d='M28 64.5 55.5 80.5v32L28 128.5 0.5 112.5v-32z'/%3E%3C/g%3E%3C/svg%3E");background-size:56px 97px}
+.lp-inner{position:relative;width:min(880px,100%);margin:0 auto;padding:64px 28px 48px;display:flex;flex-direction:column;min-height:100%}
+.lp-brand{display:flex;align-items:center;gap:10px;margin-bottom:48px}
+.lp-mark{font-size:26px;color:var(--accent,#0f766e);line-height:1}
+.lp-brand-name{font-weight:800;font-size:13px;letter-spacing:.5px}
+.lp-brand-sub{font-size:11px;color:var(--muted,#898781)}
+.lp-badge{margin-left:auto;font-size:11px;font-weight:600;padding:3px 11px;border-radius:99px;border:1px dashed color-mix(in srgb,var(--pin,#d97706) 55%,transparent);color:#a15505;background:color-mix(in srgb,var(--pin,#d97706) 7%,transparent)}
+.lp h1{margin:0 0 14px;font-size:clamp(28px,5vw,40px);line-height:1.25;letter-spacing:-.5px;text-wrap:balance}
+.lp h1 em{font-style:normal;color:var(--accent,#0f766e)}
+.lp-lede{margin:0 0 34px;font-size:15px;line-height:1.7;color:var(--text-2,#52514e);max-width:600px}
+.lp-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:38px}
+@media (max-width:680px){.lp-steps{grid-template-columns:1fr}}
+.lp-step{border:1px solid var(--border,#e5e5e0);border-radius:12px;background:var(--surface,#fff);padding:16px 18px}
+.lp-step-no{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--accent,#0f766e) 12%,transparent);color:var(--accent,#0f766e);font-weight:800;font-size:13px;margin-bottom:9px;font-variant-numeric:tabular-nums}
+.lp-step b{display:block;font-size:13.5px;margin-bottom:4px}
+.lp-step p{margin:0;font-size:12.5px;line-height:1.55;color:var(--muted,#898781)}
+.lp-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.lp-enter{border:none;border-radius:10px;background:var(--accent,#0f766e);color:#fff;font:700 15px/1 inherit;font-family:inherit;padding:15px 30px;cursor:pointer;box-shadow:0 4px 14px rgba(15,118,110,.25)}
+.lp-enter:hover{filter:brightness(1.08)}
+.lp-report{border:1px solid var(--border,#e5e5e0);border-radius:10px;background:var(--surface,#fff);color:var(--text-2,#52514e);font:600 13.5px/1 inherit;font-family:inherit;padding:15px 22px;cursor:pointer}
+.lp-report:hover{border-color:var(--accent,#0f766e);color:var(--accent,#0f766e)}
+.lp-enter:focus-visible,.lp-report:focus-visible{outline:2px solid var(--accent,#0f766e);outline-offset:2px}
+.lp-foot{margin-top:auto;padding-top:44px;font-size:11.5px;color:var(--muted,#898781)}
+.lp-closing{opacity:0;pointer-events:none}
+@media (prefers-reduced-motion:no-preference){.lp{transition:opacity .28s ease}.lp-inner{animation:lp-rise .45s ease}@keyframes lp-rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}}
+</style>
+<div class="lp" id="lp" role="dialog" aria-labelledby="lp-title">
+  <div class="lp-inner">
+    <div class="lp-brand">
+      <span class="lp-mark" aria-hidden="true">⬡</span>
+      <div>
+        <div class="lp-brand-name">BINDER SCREENING</div>
+        <div class="lp-brand-sub">분자 물성 · DFT 워크벤치</div>
+      </div>
+      <span class="lp-badge">시연용 프로토타입 · 모의 데이터</span>
+    </div>
+    <h1 id="lp-title">바인더 후보 분자의 물성을<br><em>등록 → 계산 → 비교</em> 한 흐름으로</h1>
+    <p class="lp-lede">SMILES 기반으로 물질을 등록하고 구조 최적화·DFT 계산을 요청한 뒤, 검증(PUBLISHED)을 통과한 결과만 활물질 기준과 나란히 비교하는 스크리닝 워크벤치입니다. 이 프로토타입은 브라우저 내 모의 엔진으로 동작하며, 화면 흐름과 정보 구조 검증을 목적으로 합니다.</p>
+    <div class="lp-steps">
+      <div class="lp-step"><span class="lp-step-no">1</span><b>물질 입력 · 특징 정리</b><p>이름/CAS 검색으로 SMILES를 찾아 등록하고 고유 특징을 확인합니다.</p></div>
+      <div class="lp-step"><span class="lp-step-no">2</span><b>환경 · 구조 최적화</b><p>1단계(전자구조·구조 최적화) → 2단계(전기화학 안정성) 순서로 계산합니다.</p></div>
+      <div class="lp-step"><span class="lp-step-no">3</span><b>DFT 결과 · 물질 비교</b><p>검증 통과(PUBLISHED) 결과를 활물질 기준과 함께 비교합니다.</p></div>
+    </div>
+    <div class="lp-actions">
+      <button type="button" class="lp-enter" id="lp-enter">워크벤치 시작하기 →</button>
+      <button type="button" class="lp-report" id="lp-report">📋 검토 보고서 보기</button>
+    </div>
+    <div class="lp-foot">통합 기획서 v4.0 기준 · 결과 수치는 브라우저 내 모의 엔진이 생성한 시뮬레이션 값입니다</div>
+  </div>
+</div>
+<script>
+(function(){
+  var lp=document.getElementById('lp');
+  document.getElementById('lp-enter').addEventListener('click',function(){
+    lp.classList.add('lp-closing');
+    var done=function(){lp.remove();};
+    matchMedia('(prefers-reduced-motion: no-preference)').matches?setTimeout(done,300):done();
+  });
+  document.getElementById('lp-report').addEventListener('click',function(){
+    var b=document.getElementById('rv-open');
+    if(b)b.click();
+  });
+})();
+</script>
