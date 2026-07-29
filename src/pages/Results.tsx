@@ -17,6 +17,7 @@ import { StatusBadge, fmtDate } from '../ui'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
 import { ConformerExplorer } from '../structure/ConformerExplorer'
 import { InteractionExplorer } from '../structure/InteractionExplorer'
+import { OrbitalViewer } from '../structure/OrbitalViewer'
 import { IRUVSpectra } from '../structure/spectra'
 import { representativeBonds } from '../structure/encyclopedia'
 import { calcHint } from './Calc'
@@ -30,7 +31,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
   const [colorMode, setColorMode] = useState<ColorMode>('cpk')
   const [refIds, setRefIds] = useState<string[]>(DEFAULT_REF_IDS)
-  const [structView, setStructView] = useState<'opt' | 'conformer' | 'interaction'>('opt')
+  const [structView, setStructView] = useState<'opt' | 'orbital' | 'conformer' | 'interaction'>('opt')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -281,6 +282,9 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                   <button className={structView === 'opt' ? 'on' : ''} onClick={() => setStructView('opt')}>
                     최적 구조
                   </button>
+                  <button className={structView === 'orbital' ? 'on' : ''} onClick={() => setStructView('orbital')}>
+                    오비탈 · ESP 표면
+                  </button>
                   <button className={structView === 'conformer' ? 'on' : ''} onClick={() => setStructView('conformer')}>
                     Conformer 탐색
                   </button>
@@ -376,6 +380,14 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                   )}
                 </aside>
               </div>
+            )}
+            {structView === 'orbital' && (
+              <OrbitalViewer
+                smiles={material.smiles}
+                homo={d.binder_homo?.value}
+                lumo={d.binder_lumo?.value}
+                espRange={[d.binder_meps_min_negative?.value, d.binder_meps_max_positive?.value]}
+              />
             )}
             {structView === 'conformer' && <ConformerExplorer smiles={material.smiles} />}
             {structView === 'interaction' && <InteractionExplorer smiles={material.smiles} descriptors={d} />}
