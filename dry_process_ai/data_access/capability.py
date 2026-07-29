@@ -92,6 +92,39 @@ def build_capability(
             if positive:
                 cap.max_reduction_ratio = float(np.quantile(positive, 0.95))
 
+    # 단계 프로파일 — 실측 이력의 단계별 로딩 배율·밀도 배율·스프링백 중앙값.
+    # 갭 스케줄(FF-03)이 실제 공정 경로(초기 로딩 ~3×, 단계별 상이한 스프링백)에
+    # 앵커되게 한다. 판정선 동적 산출 원칙(FV-04)의 일부다.
+    if not stage_long.empty:
+        acc = {s: {"lr": [], "dr": [], "sb": []} for s in STAGES}
+        for _, grp in stage_long.groupby("lot_id"):
+            g = grp.set_index("stage_index")
+            if "L2" not in g.index:
+                continue
+            final_l = g.loc["L2", "loading_mg_cm2"]
+            final_d = g.loc["L2", "composite_density_gcc"]
+            if not (pd.notna(final_l) and final_l > 0 and pd.notna(final_d) and final_d > 0):
+                continue
+            for s in STAGES:
+                if s not in g.index:
+                    continue
+                row = g.loc[s]
+                l_v, d_v = row.get("loading_mg_cm2"), row.get("composite_density_gcc")
+                t_v, gap_v = row.get("composite_thickness_um"), row.get("gap_um")
+                if pd.notna(l_v) and l_v > 0:
+                    acc[s]["lr"].append(float(l_v) / float(final_l))
+                if pd.notna(d_v) and d_v > 0:
+                    acc[s]["dr"].append(float(d_v) / float(final_d))
+                if pd.notna(t_v) and pd.notna(gap_v) and gap_v > 0:
+                    acc[s]["sb"].append(float(t_v) / float(gap_v) - 1.0)
+        for s in STAGES:
+            if acc[s]["lr"] and acc[s]["dr"]:
+                cap.stage_profile[s] = {
+                    "loading_ratio": float(np.median(acc[s]["lr"])),
+                    "density_ratio": float(np.median(acc[s]["dr"])),
+                    "springback": float(np.median(acc[s]["sb"])) if acc[s]["sb"] else None,
+                }
+
     # 학습 범위 (FV-01 ⑥)
     for col in ("active_material_content", "binder_content", "conductive_content"):
         series = df[col].dropna()

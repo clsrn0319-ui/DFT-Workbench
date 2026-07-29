@@ -55,8 +55,17 @@ def search_gap_schedule(
         required_loading, target_density_gcc
     )
 
+    # ---- 실측 단계 프로파일 앵커 경로 (우선) ----
+    # 실제 공정은 M1 로딩이 최종의 수 배(트리밍·전개)이고 스프링백이 단계별로
+    # 크게 다르다. 이력 프로파일이 있으면 그것으로 계획한다 (FV-04 동적 산출).
+    profile = capability.stage_profile
+    if profile and all(s in profile for s in stages):
+        return _profile_schedule(
+            required_loading, final_thickness, target_density_gcc, capability, stages,
+        )
+
     d0 = initial_density_gcc or capability.min_density_gcc
-    notes = []
+    notes = ["단계 이력 프로파일 부재 — 기하 보간 계획으로 대체 (실측 축적 시 자동 전환)"]
     if d0 is None:
         d0 = target_density_gcc * 0.8
         notes.append("초기 시트 밀도 이력이 없어 목표 밀도의 80% 로 가정")
@@ -108,6 +117,75 @@ def search_gap_schedule(
         final_thickness_um=final_thickness,
         springback_ratio=capability.springback_ratio,
         notes=notes,
+    )
+
+
+def _profile_schedule(
+    required_loading: float,
+    final_thickness: float,
+    target_density_gcc: float,
+    capability: ProcessCapability,
+    stages: tuple,
+) -> GapSchedule:
+    """실측 단계 프로파일 기반 계획.
+
+    로딩_k = 필요 로딩 × 이력 로딩 배율_k,
+    밀도_k = 목표 밀도 × 이력 밀도 배율_k (단조 증가 보정),
+    두께_k = 로딩 ÷ 밀도 ÷ 0.1 (질량 보존 종속),
+    갭_k  = 두께_k ÷ (1 + 단계별 스프링백).
+    """
+    profile = capability.stage_profile
+    gaps, t_plan, d_plan, l_plan = {}, {}, {}, {}
+    prev_t, prev_d = float("inf"), -float("inf")
+    for k, stage in enumerate(stages):
+        p = profile[stage]
+        if k == len(stages) - 1:
+            lk, dk = required_loading, target_density_gcc
+        else:
+            lk = required_loading * p["loading_ratio"]
+            dk = target_density_gcc * p["density_ratio"]
+        dk = max(dk, prev_d)                       # 밀도 단조 증가
+        tk = physics.final_composite_thickness_um(lk, dk)
+        if tk > prev_t:                             # 두께 단조 감소
+            tk = prev_t * 0.999
+            dk = physics.composite_density_gcc(lk, tk)
+        if k == len(stages) - 1:
+            tk = final_thickness
+            dk = physics.composite_density_gcc(lk, tk)
+        prev_t, prev_d = tk, dk
+
+        springback = p.get("springback")
+        if springback is None:
+            springback = capability.springback_ratio
+        gap = tk / (1.0 + max(springback, 0.0))
+        if capability.min_gap_um is not None and gap < capability.min_gap_um * (1.0 - 1e-9):
+            raise ScheduleInfeasible(
+                f"{stage} 필요 갭 {gap:.1f} μm < 설비 최소 갭 {capability.min_gap_um:.1f} μm (스프링백 여유 위반)"
+            )
+        gaps[stage] = round(gap, 1)
+        t_plan[stage] = round(tk, 2)
+        d_plan[stage] = round(dk, 4)
+        l_plan[stage] = round(lk, 3)
+
+    thicknesses = [t_plan[s] for s in stages]
+    worst_reduction = max(
+        (1.0 - b / a for a, b in zip(thicknesses, thicknesses[1:]) if a > 0), default=0.0,
+    )
+    if worst_reduction > capability.max_reduction_ratio * 1.5:
+        raise ScheduleInfeasible(
+            f"프로파일 계획의 최대 단계 압하율 {worst_reduction:.1%} 가 이력 한계"
+            f" {capability.max_reduction_ratio:.1%} 를 크게 초과 — 압연 단수 추가 필요"
+        )
+
+    return GapSchedule(
+        gaps_um=gaps,
+        planned_thickness_um=t_plan,
+        planned_density_gcc=d_plan,
+        planned_loading_mg_cm2=l_plan,
+        required_loading_mg_cm2=required_loading,
+        final_thickness_um=final_thickness,
+        springback_ratio=capability.springback_ratio,
+        notes=[f"실측 단계 프로파일 앵커 계획 (근거 {capability.lot_count} Lot — FV-04 동적 산출)"],
     )
 
 

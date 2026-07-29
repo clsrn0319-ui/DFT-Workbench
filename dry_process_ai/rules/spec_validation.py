@@ -64,6 +64,11 @@ class ProcessCapability:
     target_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     # 기준(최빈) 조성의 도전재 함량 — 조성-밀도 양립성 판정 기준점
     reference_conductive_wt: float | None = None
+    # 단계 프로파일 (FV-04 동적 산출): 실측 이력의 단계별 중앙값
+    #   {stage: {"loading_ratio": 로딩_k/로딩_L2, "density_ratio": 밀도_k/밀도_L2,
+    #            "springback": 두께_k/갭_k − 1 (이력 없으면 None)}}
+    # 갭 스케줄 탐색(FF-03)이 실제 공정 경로에 앵커되도록 한다.
+    stage_profile: dict[str, dict] = field(default_factory=dict)
     # 산출 근거 Lot 수 — 화면 표기용
     lot_count: int = 0
 
