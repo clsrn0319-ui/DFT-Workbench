@@ -1,0 +1,15 @@
+# 대용량 모델·registry 는 Git 제외 — artifacts/ 로 관리 (코딩 컨벤션)
+artifacts/
+data/*.db
+data/raw/
+data/processed/
+data/pool/
+data/reference/
+outputs/
+wheelhouse/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
