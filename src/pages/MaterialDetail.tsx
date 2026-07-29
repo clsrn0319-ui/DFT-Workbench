@@ -5,6 +5,8 @@ import { DICTIONARY } from '../data/dictionary'
 import { EXTERNAL_REFS } from '../data/externalRefs'
 import { DESCRIPTOR_GROUPS, DESCRIPTORS } from '../data/descriptors'
 import { ReadyBadge, StatusBadge, Tabs, fmtDate } from '../ui'
+import { Molecule2D } from '../structure/Molecule2D'
+import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
 
 // 기획서 4.3 + 12장 — 개인 화학 물성 페이지
 export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: string) => void; materialId: string | null } & Partial<Nav>) {
@@ -12,6 +14,8 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
   const { materials, jobs, pins, dispatch, latestPublished } = store
   const [selectedId, setSelectedId] = useState(materialId ?? materials[0]?.id ?? '')
   const [tab, setTab] = useState('구조 · 특징')
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
+  const [colorMode, setColorMode] = useState<ColorMode>('cpk')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -107,11 +111,32 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
             </tbody>
           </table>
         </div>
-        <div className="structure-thumb" aria-label="구조 미리보기 자리">
-          <div className="structure-placeholder">
-            <span className="mono">{material.formula || material.smiles}</span>
-            <span className="small muted">2D/3D 뷰어 — 상용 버전에서 RDKit 렌더링</span>
+        <div className="structure-thumb">
+          <div className="structure-toolbar">
+            <div className="seg">
+              <button className={viewMode === '2d' ? 'on' : ''} onClick={() => setViewMode('2d')}>
+                2D
+              </button>
+              <button className={viewMode === '3d' ? 'on' : ''} onClick={() => setViewMode('3d')}>
+                3D
+              </button>
+            </div>
+            {viewMode === '3d' && (
+              <div className="seg">
+                <button className={colorMode === 'cpk' ? 'on' : ''} onClick={() => setColorMode('cpk')}>
+                  원소
+                </button>
+                <button className={colorMode === 'charge' ? 'on' : ''} onClick={() => setColorMode('charge')}>
+                  전하
+                </button>
+              </div>
+            )}
           </div>
+          {viewMode === '2d' ? (
+            <Molecule2D smiles={material.smiles} height={190} />
+          ) : (
+            <Molecule3D smiles={material.smiles} colorMode={colorMode} height={220} />
+          )}
         </div>
       </section>
 

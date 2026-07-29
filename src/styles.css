@@ -904,22 +904,39 @@ details.expert summary {
 
 .structure-thumb {
   flex-shrink: 0;
-  width: 240px;
+  width: 320px;
+  border: 1px solid var(--grid);
+  border-radius: 10px;
+  padding: 8px;
 }
 
-.structure-placeholder {
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  height: 100%;
-  min-height: 130px;
+.structure-toolbar {
   display: flex;
-  flex-direction: column;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.mat-thumb {
+  border: 1px solid var(--grid);
+  border-radius: 8px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.mep-legend {
+  display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: center;
-  padding: 12px;
-  text-align: center;
-  color: var(--text-2);
+  margin-top: 6px;
+}
+
+.mep-bar {
+  flex: 1;
+  max-width: 220px;
+  height: 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
 }
 
 .fact-list {

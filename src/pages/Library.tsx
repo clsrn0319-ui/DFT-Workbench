@@ -5,6 +5,7 @@ import type { Material, MaterialType, OriginType } from '../types'
 import { searchDictionary, validateCas, type DictEntry } from '../data/dictionary'
 import { COMPUTED_KEYS } from '../data/descriptors'
 import { Field, InitialBadge, ReadyBadge, StatusBadge } from '../ui'
+import { Molecule2D } from '../structure/Molecule2D'
 
 type SortKey = '최근 수정' | '이름' | '최근 사용'
 
@@ -116,6 +117,9 @@ export function Library({ go }: Nav) {
                 <button className="mat-name" onClick={() => go('detail', m.id)}>
                   {m.name}
                 </button>
+                <div className="mat-thumb" onClick={() => go('detail', m.id)}>
+                  <Molecule2D smiles={m.smiles} height={92} compact />
+                </div>
                 <div className="mono small muted ellipsis">{m.smiles}</div>
                 <div className="small muted">
                   {m.casNo || 'CAS 미부여'} · 구조 v{m.structureVersion}

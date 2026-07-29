@@ -17,7 +17,27 @@ const ACCURACY: { id: AccuracyLevel; desc: string }[] = [
   { id: '표준', desc: 'conformer 30 · PBE0-D3(BJ)/def2-TZVP — 권장 기본' },
   { id: '정밀', desc: 'conformer 50 · tight 수렴 · 상위 basis 재확인' },
 ]
-const PURPOSES: CalcPurpose[] = ['전기화학 안정성', '전자구조', '사용자 정의']
+
+const PURPOSES: { id: CalcPurpose; step: string; desc: string }[] = [
+  {
+    id: '전자구조(구조 최적화)',
+    step: '1단계',
+    desc: 'conformer→xTB→DFT로 최적 구조를 찾고 HOMO/LUMO·MEP·쌍극자를 산출. 최적화 구조 저장',
+  },
+  {
+    id: '전기화학 안정성',
+    step: '2단계',
+    desc: '1단계에서 공개된 최적화 구조를 불러와 중성/양이온/음이온 계산 — 전위·열화학·결합에너지 산출',
+  },
+  {
+    id: '전체 계산',
+    step: '일괄',
+    desc: '두 단계를 한 번에 수행 (1단계 결과 재사용 없이 전체 파이프라인 실행)',
+  },
+]
+
+// 결과 화면 등에서 "이 구조로 2단계 계산" 진입 시 목적을 미리 지정하는 힌트
+export const calcHint: { purpose?: CalcPurpose } = {}
 
 // 기획서 4.5 — 기본 화면 / 자동 처리·경고 / 전문 계산 설정(접힘)
 export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void; materialId: string | null }) {
@@ -25,7 +45,11 @@ export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void
   const { materials, solvents, jobs, dispatch, materialById, solventById } = store
   const [tab, setTab] = useState('간편 설정')
   const [selected, setSelected] = useState<string[]>(materialId ? [materialId] : [])
-  const [settings, setSettings] = useState<CalcSettings>(DEFAULT_SETTINGS)
+  const [settings, setSettings] = useState<CalcSettings>(() => {
+    const purpose = calcHint.purpose
+    calcHint.purpose = undefined
+    return purpose ? { ...DEFAULT_SETTINGS, purpose } : DEFAULT_SETTINGS
+  })
   const [expertOpen, setExpertOpen] = useState(false)
   const [submitted, setSubmitted] = useState(0)
 
@@ -37,21 +61,43 @@ export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void
   const toggle = (id: string) =>
     setSelected((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))
 
+  // 2단계 계산의 기준 구조: 현재 구조 버전에서 공개된 1단계(또는 전체) 결과 중 최신
+  const baseFor = (id: string) => {
+    const m = materialById(id)
+    return jobs
+      .filter(
+        (j) =>
+          j.materialId === id &&
+          j.status === 'PUBLISHED' &&
+          j.structureVersion === m?.structureVersion &&
+          j.settings.purpose !== '전기화학 안정성',
+      )
+      .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))[0]
+  }
+
+  const isStage2 = settings.purpose === '전기화학 안정성'
+
   const warnings: string[] = []
   for (const id of selected) {
     const m = materialById(id)
     if (!m) continue
     if (m.smiles.includes('.')) warnings.push(`${m.name}: 다중 fragment (이온쌍) — 계산 대상 상태 확인 필요`)
     if (m.readyState === 'Needs decision') warnings.push(`${m.name}: 준비 상태 'Needs decision' — 구조 확인 권장`)
+    if (isStage2 && !baseFor(id))
+      warnings.push(
+        `${m.name}: 1단계(전자구조·구조 최적화) 공개 결과가 없어 제출에서 제외됩니다 — 먼저 1단계를 계산하세요.`,
+      )
   }
   if (settings.envType === '배터리 전해액' && !settings.solventId)
     warnings.push('배터리 전해액 환경에는 용매 프리셋 선택이 필요합니다.')
 
+  const submittable = isStage2 ? selected.filter((id) => baseFor(id)) : selected
+
   const submit = () => {
-    const jobsToAdd = selected
+    const jobsToAdd = submittable
       .map((id) => materialById(id))
       .filter((m): m is NonNullable<typeof m> => !!m)
-      .map((m) => makeJob(m, settings))
+      .map((m) => makeJob(m, settings, isStage2 ? baseFor(m.id)?.id : undefined))
     dispatch({ type: 'submitJobs', jobs: jobsToAdd })
     setSubmitted(jobsToAdd.length)
     setSelected([])
@@ -186,17 +232,22 @@ export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void
                     ))}
                   </select>
                 </Field>
-                <Field label="계산 목적">
-                  <select
-                    className="input"
-                    value={settings.purpose}
-                    onChange={(e) => setSettings({ ...settings, purpose: e.target.value as CalcPurpose })}
-                  >
-                    {PURPOSES.map((p) => (
-                      <option key={p}>{p}</option>
-                    ))}
-                  </select>
-                </Field>
+              </div>
+              <div className="option-group" style={{ marginTop: 12 }}>
+                <div className="option-title">계산 목적 — 2단계 흐름</div>
+                {PURPOSES.map((p) => (
+                  <label key={p.id} className="radio-row">
+                    <input
+                      type="radio"
+                      name="purpose"
+                      checked={settings.purpose === p.id}
+                      onChange={() => setSettings({ ...settings, purpose: p.id })}
+                    />
+                    <span className="chip">{p.step}</span>
+                    <b>{p.id}</b>
+                    <span className="muted small">{p.desc}</span>
+                  </label>
+                ))}
               </div>
               <div className="option-group">
                 <div className="option-title">최적화 수준</div>
@@ -309,19 +360,44 @@ export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void
               )}
 
               <div className="summary-box">
-                <div className="option-title">계산 요약</div>
+                <div className="option-title">계산 요약 — {settings.purpose}</div>
                 <code className="mono small">
                   {settings.envType} · {solventById(settings.solventId)?.abbr ?? '용매 없음'} ·{' '}
                   {settings.temperature} K · {settings.structure} · {settings.expert.functional}/
                   {settings.expert.basis} · 기준 {settings.referenceElectrode}
                 </code>
-                <div className="small muted">
-                  자동 처리: 구조 검증 → 수소/전하 점검 → conformer {settings.expert.nConformers}개 →
-                  GFN2-xTB → DFT(중성/양이온/음이온) → 검증 게이트
-                </div>
+                {isStage2 ? (
+                  <>
+                    <div className="small muted">
+                      자동 처리: 1단계 최적화 구조 로드 → SCF → 양이온/음이온 상태 → 열보정·결합 계산 →
+                      전위 변환 → 검증 게이트 (conformer·구조 최적화 생략)
+                    </div>
+                    {submittable.length > 0 && (
+                      <div className="small">
+                        {submittable.map((id) => (
+                          <div key={id} className="mono small muted">
+                            {materialById(id)?.name}: 기준 구조 {baseFor(id)?.id} (v
+                            {baseFor(id)?.structureVersion})
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="small muted">
+                    자동 처리: 구조 검증 → 수소/전하 점검 → conformer {settings.expert.nConformers}개 →
+                    GFN2-xTB → DFT 구조 최적화
+                    {settings.purpose === '전체 계산' ? ' → 중성/양이온/음이온 → 전위 변환' : ' → 전자구조 산출'} →
+                    검증 게이트
+                  </div>
+                )}
               </div>
-              <button className="btn primary big" disabled={!selected.length} onClick={submit}>
-                {selected.length ? `작업 ${selected.length}건 제출` : '대상 물질을 선택하세요'}
+              <button className="btn primary big" disabled={!submittable.length} onClick={submit}>
+                {submittable.length
+                  ? `작업 ${submittable.length}건 제출${isStage2 && submittable.length < selected.length ? ` (${selected.length - submittable.length}건 제외)` : ''}`
+                  : isStage2 && selected.length
+                    ? '선택 물질에 1단계 공개 결과가 없습니다'
+                    : '대상 물질을 선택하세요'}
               </button>
             </section>
           </div>
@@ -348,8 +424,12 @@ export function Calc({ go, materialId }: { go: (p: PageId, mid?: string) => void
                     <span className="mono small muted"> {j.id}</span>
                   </div>
                   <div className="small muted">
-                    {j.settings.envType} · {solventById(j.settings.solventId)?.abbr ?? '용매 없음'} ·{' '}
-                    {j.settings.structure} · {j.settings.expert.functional}/{j.settings.expert.basis}
+                    {j.settings.purpose} · {j.settings.envType} ·{' '}
+                    {solventById(j.settings.solventId)?.abbr ?? '용매 없음'} · {j.settings.structure} ·{' '}
+                    {j.settings.expert.functional}/{j.settings.expert.basis}
+                    {j.baseJobId && (
+                      <span className="mono"> · 기준 구조 {j.baseJobId}</span>
+                    )}
                   </div>
                   {(j.status === 'RUNNING' || j.status === 'VALIDATING') && (
                     <>

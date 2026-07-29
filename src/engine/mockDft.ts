@@ -154,6 +154,17 @@ export function computeDescriptors(
   }
 }
 
+// 1단계(전자구조·구조 최적화)에서 산출되는 descriptor
+const STAGE1_KEYS = [
+  'binder_homo',
+  'binder_lumo',
+  'binder_homo_lumo_gap',
+  'binder_dipole_moment',
+  'binder_meps_max_positive',
+  'binder_meps_min_negative',
+  'binder_nbo_charge_cationic_site',
+]
+
 export function buildResult(
   materialKey: string,
   dictId: string | undefined,
@@ -162,7 +173,14 @@ export function buildResult(
   s: CalcSettings,
   solventModelKey: string | null,
 ): CalcResult {
-  const descriptors = computeDescriptors(materialKey, dictId, smiles, s, solventModelKey)
+  let descriptors = computeDescriptors(materialKey, dictId, smiles, s, solventModelKey)
+  // 계산 목적별 산출 범위: 1단계는 전자구조 subset, 2단계·전체는 전체 세트
+  // (2단계는 불러온 최적화 구조 기준의 전자구조 값을 함께 포함해 공개한다)
+  if (s.purpose === '전자구조(구조 최적화)') {
+    descriptors = Object.fromEntries(
+      Object.entries(descriptors).filter(([k]) => STAGE1_KEYS.includes(k)),
+    )
+  }
   const seed = materialKey + s.expert.functional + s.expert.basis + s.structure
   // 검증 게이트 시뮬레이션: 일부 조합은 NEEDS_REVIEW (기획서 13.2)
   const review = hash(seed + 'validate') % 11 === 0
@@ -185,19 +203,31 @@ export const PIPELINE_STAGES = [
   { at: 28, label: 'xTB 사전 최적화 (GFN2-xTB)' },
   { at: 45, label: 'DFT 구조 최적화·SCF 수렴' },
   { at: 68, label: '진동수·열보정 계산' },
-  { at: 80, label: '중성/양이온/음이온 상태 계산' },
-  { at: 92, label: '결과 집계·전위 변환' },
+  { at: 82, label: 'HOMO/LUMO·MEP·부분전하 산출' },
   { at: 100, label: '계산 완료' },
 ]
 
-export function stageFor(progress: number): string {
-  let label = PIPELINE_STAGES[0].label
-  for (const st of PIPELINE_STAGES) if (progress >= st.at) label = st.label
+// 2단계: conformer/최적화를 건너뛰고 저장된 최적 구조에서 시작
+export const STAGE2_STAGES = [
+  { at: 0, label: '1단계 최적화 구조 로드·검증 (hash 일치 확인)' },
+  { at: 12, label: 'SCF 수렴 (중성 기준 상태)' },
+  { at: 30, label: '양이온/음이온 상태 계산 (VIP·VEA)' },
+  { at: 58, label: '열보정·용매화 자유에너지' },
+  { at: 74, label: 'Li⁺/PF₆⁻/표면 결합 모티프 계산' },
+  { at: 92, label: '전위 변환·결과 집계' },
+  { at: 100, label: '계산 완료' },
+]
+
+export function stageFor(progress: number, purpose?: string): string {
+  const table = purpose === '전기화학 안정성' ? STAGE2_STAGES : PIPELINE_STAGES
+  let label = table[0].label
+  for (const st of table) if (progress >= st.at) label = st.label
   return label
 }
 
-export function progressStep(accuracy: string, structure: string): number {
+export function progressStep(accuracy: string, structure: string, purpose?: string): number {
   const acc = { 빠름: 1.6, 표준: 1, 정밀: 0.55 }[accuracy] ?? 1
   const str = { 모노머: 1, '2량체': 0.7, '3량체': 0.5, '사용자 구조': 0.8 }[structure] ?? 1
-  return 7 * acc * str // 1초 틱당 % (표준 모노머 ≈ 15초)
+  const stage2 = purpose === '전기화학 안정성' ? 1.5 : 1 // 최적화 생략 → 더 빠름
+  return 7 * acc * str * stage2 // 1초 틱당 % (표준 모노머 ≈ 15초)
 }

@@ -11,6 +11,8 @@ import {
 } from '../charts'
 import { descriptorByKey } from '../data/descriptors'
 import { StatusBadge, fmtDate } from '../ui'
+import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
+import { calcHint } from './Calc'
 
 // 기획서 4.6 — 물질별 DFT 계산 결과 (우선순위 1~13 중 프론트 범위)
 export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => void; materialId: string | null }) {
@@ -19,6 +21,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const [selectedId, setSelectedId] = useState(materialId ?? materials[0]?.id ?? '')
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
+  const [colorMode, setColorMode] = useState<ColorMode>('cpk')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -179,24 +182,43 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
             <section className="card">
               <div className="card-head">
                 <h2>1. 전기화학 안정 전압 범위</h2>
+                {job.baseJobId && <span className="muted small mono">기준 구조 {job.baseJobId}</span>}
               </div>
-              <VoltageWindowChart
-                entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
-              />
-              <div className="mini-cards">
-                <div className="mini-card">
-                  <div className="stat-label">환원 한계</div>
-                  <b>{d.binder_reduction_potential.value} {d.binder_reduction_potential.unit}</b>
+              {d.binder_oxidation_potential && d.binder_reduction_potential ? (
+                <>
+                  <VoltageWindowChart
+                    entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                  />
+                  <div className="mini-cards">
+                    <div className="mini-card">
+                      <div className="stat-label">환원 한계</div>
+                      <b>{d.binder_reduction_potential.value} {d.binder_reduction_potential.unit}</b>
+                    </div>
+                    <div className="mini-card">
+                      <div className="stat-label">산화 한계</div>
+                      <b>{d.binder_oxidation_potential.value} {d.binder_oxidation_potential.unit}</b>
+                    </div>
+                    <div className="mini-card">
+                      <div className="stat-label">안정 window</div>
+                      <b>{(d.binder_oxidation_potential.value - d.binder_reduction_potential.value).toFixed(2)} V</b>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="empty small">
+                  이 결과는 1단계(전자구조·구조 최적화)까지만 계산되었습니다. 저장된 최적화 구조를 불러와
+                  전기화학 안정성을 계산하세요.
+                  <button
+                    className="btn primary"
+                    onClick={() => {
+                      calcHint.purpose = '전기화학 안정성'
+                      go('calc', material.id)
+                    }}
+                  >
+                    이 구조로 2단계(전기화학 안정성) 계산 →
+                  </button>
                 </div>
-                <div className="mini-card">
-                  <div className="stat-label">산화 한계</div>
-                  <b>{d.binder_oxidation_potential.value} {d.binder_oxidation_potential.unit}</b>
-                </div>
-                <div className="mini-card">
-                  <div className="stat-label">안정 window</div>
-                  <b>{(d.binder_oxidation_potential.value - d.binder_reduction_potential.value).toFixed(2)} V</b>
-                </div>
-              </div>
+              )}
             </section>
 
             <section className="card">
@@ -226,14 +248,40 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
             </section>
           </div>
 
+          {d.binder_adhesion_si && (
+            <section className="card">
+              <div className="card-head">
+                <h2>활물질 표면 흡착에너지</h2>
+                <span className="muted small">표면 모델 고정(cluster) 전제의 보기용 값 — 부록 D 비교 규칙 적용</span>
+              </div>
+              <SurfaceAdhesionBars
+                entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+              />
+            </section>
+          )}
+
           <section className="card">
             <div className="card-head">
-              <h2>활물질 표면 흡착에너지</h2>
-              <span className="muted small">표면 모델 고정(cluster) 전제의 보기용 값 — 부록 D 비교 규칙 적용</span>
+              <h2>5. 최적화 3D 구조 · 물성 시각화</h2>
+              <div className="seg">
+                <button className={colorMode === 'cpk' ? 'on' : ''} onClick={() => setColorMode('cpk')}>
+                  원소 (CPK)
+                </button>
+                <button className={colorMode === 'charge' ? 'on' : ''} onClick={() => setColorMode('charge')}>
+                  부분전하 · MEP
+                </button>
+              </div>
             </div>
-            <SurfaceAdhesionBars
-              entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
-            />
+            <Molecule3D smiles={material.smiles} colorMode={colorMode} height={300} />
+            <div className="chart-note">
+              구조 출처:{' '}
+              {job.baseJobId
+                ? `1단계 최적화 결과 ${job.baseJobId}에서 로드`
+                : `이 작업(${job.id})의 구조 최적화 결과`}
+              {colorMode === 'charge' &&
+                d.binder_meps_min_negative &&
+                ` · MEP 극값: ${d.binder_meps_min_negative.value} ~ ${d.binder_meps_max_positive?.value} kcal/mol`}
+            </div>
           </section>
 
           <section className="card">
@@ -252,17 +300,19 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                   ['binder_pf6_binding_energy', 'PF₆⁻ 결합'],
                   ['binder_si_binding_energy', 'Si 결합'],
                 ] as const
-              ).map(([key, label]) => {
-                const dv = d[key]
-                return (
-                  <div key={key} className="mini-card">
-                    <div className="stat-label">{label}</div>
-                    <b>
-                      {dv.value} {dv.unit}
-                    </b>
-                  </div>
-                )
-              })}
+              )
+                .filter(([key]) => d[key])
+                .map(([key, label]) => {
+                  const dv = d[key]
+                  return (
+                    <div key={key} className="mini-card">
+                      <div className="stat-label">{label}</div>
+                      <b>
+                        {dv.value} {dv.unit}
+                      </b>
+                    </div>
+                  )
+                })}
             </div>
           </section>
 
@@ -302,6 +352,12 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                   <td className="mono">
                     {job.result!.protocolId} · v{job.structureVersion} · {job.result!.structureHash.slice(0, 18)}…
                   </td>
+                </tr>
+                <tr>
+                  <th>계산 목적</th>
+                  <td>{job.settings.purpose}</td>
+                  <th>기준 구조</th>
+                  <td className="mono">{job.baseJobId ?? '— (이 작업에서 최적화)'}</td>
                 </tr>
               </tbody>
             </table>

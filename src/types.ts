@@ -43,7 +43,8 @@ export interface SolventPreset {
 export type EnvType = '배터리 전해액' | '진공·기체' | '고체·주기계' | '사용자 정의'
 export type CalcStructure = '모노머' | '2량체' | '3량체' | '사용자 구조'
 export type AccuracyLevel = '빠름' | '표준' | '정밀'
-export type CalcPurpose = '전기화학 안정성' | '전자구조' | '사용자 정의'
+// 2단계 계산 흐름: ① 전자구조·구조 최적화 → ② 최적 구조를 불러와 전기화학 안정성
+export type CalcPurpose = '전자구조(구조 최적화)' | '전기화학 안정성' | '전체 계산'
 
 export interface ExpertSettings {
   charge: number
@@ -99,6 +100,7 @@ export interface CalcJob {
   id: string
   materialId: string
   structureVersion: number
+  baseJobId?: string // 2단계(전기화학) 계산이 불러온 1단계 최적화 구조의 작업 ID
   settings: CalcSettings
   status: JobStatus
   progress: number

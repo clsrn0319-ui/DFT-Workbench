@@ -113,7 +113,7 @@ function promoteQueue(jobs: CalcJob[]): CalcJob[] {
   return jobs.map((j) => {
     if (running < MAX_RUNNING && j.status === 'QUEUED') {
       running++
-      return { ...j, status: 'RUNNING' as const, stage: stageFor(0), logs: [...j.logs, '워커 할당 — 계산 시작'] }
+      return { ...j, status: 'RUNNING' as const, stage: stageFor(0, j.settings.purpose), logs: [...j.logs, '워커 할당 — 계산 시작'] }
     }
     return j
   })
@@ -230,8 +230,8 @@ function reducer(state: State, action: Action): State {
       let jobs = state.jobs.map((j) => {
         if (j.status === 'RUNNING') {
           changed = true
-          const next = Math.min(100, j.progress + progressStep(j.settings.accuracy, j.settings.structure) * (0.7 + Math.random() * 0.6))
-          const stage = stageFor(next)
+          const next = Math.min(100, j.progress + progressStep(j.settings.accuracy, j.settings.structure, j.settings.purpose) * (0.7 + Math.random() * 0.6))
+          const stage = stageFor(next, j.settings.purpose)
           const logs = stage !== j.stage ? [...j.logs, stage] : j.logs
           if (next >= 100) {
             return {
@@ -327,16 +327,20 @@ export function useStore(): Store {
   return s
 }
 
-export function makeJob(material: Material, settings: CalcSettings): CalcJob {
+export function makeJob(material: Material, settings: CalcSettings, baseJobId?: string): CalcJob {
   return {
     id: `JOB-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
     materialId: material.id,
     structureVersion: material.structureVersion,
+    baseJobId,
     settings,
     status: 'QUEUED',
     progress: 0,
     stage: '큐 대기',
-    logs: [`작업 생성 — 구조 v${material.structureVersion}, ${settings.envType}`],
+    logs: [
+      `작업 생성 — 구조 v${material.structureVersion}, ${settings.envType}` +
+        (baseJobId ? ` · 기준 구조 ${baseJobId}` : ''),
+    ],
     createdAt: Date.now(),
   }
 }
@@ -348,7 +352,7 @@ export const DEFAULT_SETTINGS: CalcSettings = {
   atmosphere: '불활성',
   structure: '모노머',
   accuracy: '표준',
-  purpose: '전기화학 안정성',
+  purpose: '전자구조(구조 최적화)',
   referenceElectrode: 'Li/Li+',
   expert: {
     charge: 0,
