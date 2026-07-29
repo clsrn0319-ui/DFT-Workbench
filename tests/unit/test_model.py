@@ -14,9 +14,11 @@ def test_masked_mse_ignores_nan():
 
     y_true = tf.constant([[1.0, np.nan], [np.nan, 2.0]])
     y_pred = tf.constant([[1.5, 100.0], [100.0, 2.5]])
-    # NaN 위치의 큰 오차(100)는 손실에 기여하지 않아야 한다
-    loss = float(masked_mse(y_true, y_pred))
-    assert loss == pytest.approx((0.5 ** 2 + 0.5 ** 2) / 2)
+    # 샘플별 손실 벡터 — NaN 위치의 큰 오차(100)는 기여하지 않는다
+    loss = masked_mse(y_true, y_pred).numpy()
+    assert loss.shape == (2,)
+    assert loss[0] == pytest.approx(0.25)
+    assert loss[1] == pytest.approx(0.25)
 
 
 def test_masked_mse_all_nan_returns_zero():
@@ -24,7 +26,19 @@ def test_masked_mse_all_nan_returns_zero():
 
     y_true = tf.constant([[np.nan, np.nan]])
     y_pred = tf.constant([[1.0, 2.0]])
-    assert float(masked_mse(y_true, y_pred)) == 0.0
+    assert float(masked_mse(y_true, y_pred).numpy()[0]) == 0.0
+
+
+def test_masked_mse_per_sample_enables_priority_weighting():
+    """샘플별 반환이어야 sample_weight(실측 1.0 > 생성 0.3)가 적용된다."""
+    from dry_process_ai.core.model.losses import masked_mse
+
+    y_true = tf.constant([[1.0, 1.0], [1.0, 1.0]])
+    y_pred = tf.constant([[2.0, 2.0], [2.0, 2.0]])
+    per_sample = masked_mse(y_true, y_pred).numpy()
+    weighted = per_sample * np.array([1.0, 0.3])
+    assert weighted[0] == pytest.approx(1.0)
+    assert weighted[1] == pytest.approx(0.3)
 
 
 def _tiny_spec():

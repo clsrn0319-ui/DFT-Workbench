@@ -84,6 +84,10 @@ MC_DROPOUT_SAMPLES = 30
 # B등급(간헐 측정) 변수를 역방향 최적화 제약으로 사용하기 위한 최소 실측 건수 (FB-07)
 INTERMITTENT_CONSTRAINT_MIN_COUNT = 10
 
+# 학습 샘플 가중치 — 실측 1순위, 생성(합성) 2순위 (규칙 R3 학습 보강 용도 한정)
+MEASURED_SAMPLE_WEIGHT = 1.0
+GENERATED_SAMPLE_WEIGHT = 0.3
+
 # 의사 라벨 물리 정합성 필터 최소 통과율 (FT-04): 미만이면 Student 학습 중단
 PSEUDO_LABEL_MIN_PASS_RATE = 0.5
 

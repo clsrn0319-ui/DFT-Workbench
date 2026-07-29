@@ -18,7 +18,12 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from dry_process_ai.config import DEFAULT_SEED, PSEUDO_LABEL_MIN_PASS_RATE
+from dry_process_ai.config import (
+    DEFAULT_SEED,
+    GENERATED_SAMPLE_WEIGHT,
+    MEASURED_SAMPLE_WEIGHT,
+    PSEUDO_LABEL_MIN_PASS_RATE,
+)
 from dry_process_ai.core.model.builder import (
     AUX_OUTPUT_COLUMNS,
     FINAL_OUTPUT_COLUMNS,
@@ -86,6 +91,19 @@ def train_teacher_student(
     x_all = scaled[feature_cols].fillna(0.5).to_numpy(dtype=np.float32)  # 입력 결측은 중앙 보완(FF-06 대응은 서비스에서 명시)
     y_all = _target_frames(scaled)
 
+    # 실측 1순위 가중 — 생성(합성) Lot 은 낮은 샘플 가중치로 보조 학습에만 기여
+    if "source_flag" in df.columns:
+        weights = np.where(
+            df["source_flag"].to_numpy() == "measured",
+            MEASURED_SAMPLE_WEIGHT, GENERATED_SAMPLE_WEIGHT,
+        ).astype(np.float32)
+    else:
+        weights = np.full(len(df), MEASURED_SAMPLE_WEIGHT, dtype=np.float32)
+
+    def _sw(mask: np.ndarray | None = None) -> dict[str, np.ndarray]:
+        w = weights if mask is None else weights[mask]
+        return {k: w for k in ("stage", "final", "aux", "perf")}
+
     spec = ModelSpec(
         feature_columns=feature_cols,
         scale_params={c: registry.params[c] for c in target_cols},
@@ -103,6 +121,7 @@ def train_teacher_student(
         h = teacher.fit(
             x_all[perf_complete],
             {k: v[perf_complete] for k, v in y_all.items()},
+            sample_weight=_sw(perf_complete),
             epochs=epochs, batch_size=batch_size, verbose=verbose,
         )
         teacher_history = {k: [float(x) for x in v] for k, v in h.history.items()}
@@ -138,9 +157,10 @@ def train_teacher_student(
                 existing = y_student["perf"][pos[idx]]
                 y_student["perf"][pos[idx]] = np.where(np.isnan(existing), row_scaled, existing)
 
-    # ---- ④ Student 통합 학습 ----
+    # ---- ④ Student 통합 학습 (실측 1순위 가중) ----
     student = build_model(spec)
-    h = student.fit(x_all, y_student, epochs=epochs, batch_size=batch_size, verbose=verbose)
+    h = student.fit(x_all, y_student, sample_weight=_sw(),
+                    epochs=epochs, batch_size=batch_size, verbose=verbose)
 
     measured = (df["source_flag"] == "measured").sum() if "source_flag" in df.columns else len(df)
     return TrainingResult(
