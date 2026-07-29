@@ -468,25 +468,40 @@ export function EnergyLevelDiagram({
         <text x={14} y={14} className="axis-label">
           eV
         </text>
-        {refs.map((m) => {
-          const v = m.role === '음극' ? m.vMin : m.vMax
-          const ey = y(fermiEv(v))
-          const color = m.role === '음극' ? 'var(--accent)' : 'var(--pin)'
-          return (
+        {(() => {
+          // 라벨이 세로로 겹치지 않도록 최소 간격(11px)으로 밀어냄
+          const items = refs
+            .map((m) => {
+              const v = m.role === '음극' ? m.vMin : m.vMax
+              return { m, v, ey: y(fermiEv(v)), color: m.role === '음극' ? 'var(--accent)' : 'var(--pin)' }
+            })
+            .sort((a, b) => a.ey - b.ey)
+          const GAP = 11
+          const labelY: number[] = []
+          items.forEach((it, i) => {
+            let ly = it.ey + 3.5
+            if (i > 0 && ly - labelY[i - 1] < GAP) ly = labelY[i - 1] + GAP
+            labelY.push(ly)
+          })
+          return items.map((it, i) => (
             <g
-              key={m.id}
+              key={it.m.id}
               onMouseMove={(ev) =>
-                tip.show(ev, `${m.name} μ ≈ ${fermiEv(v).toFixed(2)} eV (${v} V vs Li/Li⁺, ${m.role})`)
+                tip.show(ev, `${it.m.name} μ ≈ ${fermiEv(it.v).toFixed(2)} eV (${it.v} V vs Li/Li⁺, ${it.m.role})`)
               }
               onMouseLeave={tip.hide}
             >
-              <line x1={padL} x2={padL + plotW} y1={ey} y2={ey} stroke={color} strokeWidth={1.6} strokeDasharray="5 4" opacity={0.75} />
-              <text x={padL + plotW + 6} y={ey + 3.5} fontSize={10} fill={color}>
-                {m.name}
+              <line x1={padL} x2={padL + plotW} y1={it.ey} y2={it.ey} stroke={it.color} strokeWidth={1.6} strokeDasharray="5 4" opacity={0.75} />
+              {/* 라벨이 준위선에서 밀려나면 지시선 연결 */}
+              {Math.abs(labelY[i] - (it.ey + 3.5)) > 1 && (
+                <line x1={padL + plotW} x2={padL + plotW + 5} y1={it.ey} y2={labelY[i] - 3.5} stroke={it.color} strokeWidth={0.8} opacity={0.5} />
+              )}
+              <text x={padL + plotW + 7} y={labelY[i]} fontSize={10} fill={it.color}>
+                {it.m.name}
               </text>
             </g>
-          )
-        })}
+          ))
+        })()}
         {rows.map((e, i) => {
           const homo = e.values.binder_homo.value
           const lumo = e.values.binder_lumo.value
