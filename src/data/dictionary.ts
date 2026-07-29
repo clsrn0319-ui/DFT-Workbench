@@ -14,6 +14,19 @@ export interface DictEntry {
   functionalGroups: string[] // 작용기 자동 인식 결과 (SMARTS 서버 검출 대체)
   trends: string[] // 구조 기반 물성 경향 (해석 계층)
   cautions: string[] // 구조만으로 확정 불가 항목
+  // 백과 문헌 참고값 (대표값 — 조건에 따라 달라질 수 있음)
+  ency?: {
+    state?: string // 상온 상태·외관
+    bp?: string
+    mp?: string
+    density?: string
+    solubility?: string
+    acidBase?: string
+    reactivity?: string // 중합성·안정성
+    isomers?: string
+    optical?: string // 광학·색
+    extra?: string[]
+  }
   // 모의 엔진 기준값 (B3LYP/def2-TZVP·기체상 기준의 데모용 근사치)
   base: {
     homo: number
@@ -40,6 +53,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', 'C–F 결합 ×2'],
     trends: ['불소로 인한 낮은 HOMO — 내산화성 우수 가능성', '낮은 극성 표면 에너지', 'H-bond 공여 부위 없음'],
     cautions: ['결정성·압전성 등 고분자 벌크 물성은 단량체 계산으로 확정 불가'],
+    ency: {
+      state: '무색 기체 (상온)',
+      bp: '-83 °C',
+      mp: '-144 °C',
+      density: '0.617 g/mL (액화, 24 °C)',
+      solubility: '물에 난용, 유기용매 일부 용해',
+      acidBase: '중성 — 산·염기 작용기 없음',
+      reactivity: '라디칼 중합으로 PVDF 생성. 인화성 기체 — 가압 저장',
+      isomers: '구조이성질체: 1,2-difluoroethylene (cis/trans 기하이성질체 존재)',
+      optical: '무색 · 카이랄 중심 없음 · 반자성',
+    },
     base: { homo: -8.72, lumo: 0.94, dipole: 1.39, alpha: 24.1, liBind: -68, hbd: 0, hba: 0 },
   },
   {
@@ -55,6 +79,16 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', 'C–F 결합 ×4'],
     trends: ['전불소화 — 매우 낮은 HOMO, 넓은 안정 범위 기대', '무극성, 흡착·용매화 약함'],
     cautions: ['피브릴화 등 공정 물성은 계산 범위 밖'],
+    ency: {
+      state: '무색 기체 (상온)',
+      bp: '-76 °C',
+      mp: '-142 °C',
+      solubility: '물에 거의 불용',
+      acidBase: '중성',
+      reactivity: '라디칼 중합으로 PTFE 생성. 산소 존재 시 폭발성 과산화물 형성 주의',
+      isomers: '동일 분자식의 유의미한 이성질체 없음',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -9.61, lumo: 0.81, dipole: 0.0, alpha: 27.9, liBind: -42, hbd: 0, hba: 0 },
   },
   {
@@ -70,6 +104,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '방향족 고리(벤젠)'],
     trends: ['공액 π계 — 높은 HOMO, 산화에 상대적으로 민감', '분산(π–π) 상호작용으로 흑연 친화 가능성'],
     cautions: ['SBR 공중합 조성비에 따른 물성은 별도 계산 필요'],
+    ency: {
+      state: '무색 액체 (특유의 냄새)',
+      bp: '145 °C',
+      mp: '-31 °C',
+      density: '0.906 g/mL',
+      solubility: '물 0.03 g/100 mL (난용), 유기용매 혼화',
+      acidBase: '중성 (벤질 위치 약산성 pKa ≈ 43)',
+      reactivity: '열·빛에 의한 자발 라디칼 중합 — 저해제(TBC) 첨가 유통',
+      isomers: '구조이성질체: cyclooctatetraene, cubane 등 (C8H8)',
+      optical: 'UV 흡수 (방향족 π→π*, ~245 nm) · 무색 · 반자성',
+    },
     base: { homo: -6.68, lumo: -0.38, dipole: 0.42, alpha: 84.3, liBind: -74, hbd: 0, hba: 0 },
   },
   {
@@ -85,6 +130,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '카복실산 –COOH', '카보닐 C=O'],
     trends: ['카복실기 — 강한 H-bond 공여/수용', 'O 주변 음전위 집중 — Li⁺ 배위 후보', '높은 극성·수계 친화'],
     cautions: ['탈양성자화 상태(pH 의존)는 별도 화학 상태로 계산'],
+    ency: {
+      state: '무색 액체 (자극성 냄새)',
+      bp: '141 °C',
+      mp: '14 °C',
+      density: '1.051 g/mL',
+      solubility: '물과 완전 혼화 (친수성)',
+      acidBase: '약산 — pKa 4.25 (카복실산)',
+      reactivity: '자발 중합 위험 — 저해제(MEHQ) 첨가 유통. 카복실기는 에스터화·중화 반응',
+      isomers: '구조이성질체: β-propiolactone, vinyl formate 등 (C3H4O2)',
+      optical: '무색 · 카이랄 중심 없음 · 반자성',
+    },
     base: { homo: -7.43, lumo: -0.41, dipole: 1.88, alpha: 40.6, liBind: -122, hbd: 1, hba: 2 },
   },
   {
@@ -100,6 +156,15 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '카복실레이트 –COO⁻', '이온쌍(Li⁺)'],
     trends: ['음이온성 — 매우 강한 음전위, Li⁺ 강배위', '이온성 응집·수계 분산'],
     cautions: ['이온쌍 해리 상태는 용매·농도 의존 — 명시적 용매 검토 권장'],
+    ency: {
+      state: '백색 고체 (염)',
+      solubility: '물에 잘 녹음 (이온성 염)',
+      acidBase: '약염기성 수용액 (카복실레이트 짝염기)',
+      reactivity: '라디칼 중합 가능. 이온결합(Li⁺–COO⁻)과 공유결합 혼재',
+      isomers: '아크릴산의 리튬염 — 산 형태(PAA)와 상호 전환',
+      optical: '백색 · 반자성',
+      extra: ['HSAB: Li⁺(경질 산) + 카복실레이트 O(경질 염기) — 강한 이온쌍'],
+    },
     base: { homo: -6.94, lumo: 0.22, dipole: 6.71, alpha: 44.8, liBind: -152, hbd: 0, hba: 2 },
   },
   {
@@ -115,6 +180,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '니트릴 –C≡N'],
     trends: ['니트릴 극성기 — 큰 쌍극자', '낮은 LUMO — 환원 민감 가능성', 'N 고립전자쌍 Li⁺ 배위 후보'],
     cautions: ['전기화학 환원 분해 경로는 반응 계산으로 확인 필요'],
+    ency: {
+      state: '무색 액체',
+      bp: '77 °C',
+      mp: '-84 °C',
+      density: '0.806 g/mL',
+      solubility: '물 7 g/100 mL, 유기용매 혼화',
+      acidBase: '니트릴 N은 매우 약한 루이스 염기',
+      reactivity: '라디칼 중합으로 PAN 생성. 독성·인화성 — 취급 주의',
+      isomers: '구조이성질체: isocyanomethane 등 (C3H3N)',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -8.03, lumo: -0.62, dipole: 3.92, alpha: 38.2, liBind: -95, hbd: 0, hba: 1 },
   },
   {
@@ -130,6 +206,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '락탐(고리 아마이드)', '카보닐 C=O'],
     trends: ['아마이드 O 음전위 — Li⁺ 배위·H-bond 수용', '높은 극성, 수계·NMP 겸용 분산'],
     cautions: ['분산제 성능은 입자·용매 조건 의존'],
+    ency: {
+      state: '무색~미황색 액체',
+      bp: '92 °C (11 mmHg) / 약 217 °C (분해 동반)',
+      mp: '13 °C',
+      density: '1.04 g/mL',
+      solubility: '물과 혼화 (친수성 아마이드)',
+      acidBase: '아마이드 O 약한 루이스 염기',
+      reactivity: '라디칼 중합으로 PVP 생성. 락탐 고리는 가수분해에 비교적 안정',
+      isomers: '고리 아마이드(락탐) — 개환 이성질체 존재 가능',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -6.61, lumo: 0.18, dipole: 4.12, alpha: 74.5, liBind: -118, hbd: 0, hba: 1 },
   },
   {
@@ -145,6 +232,13 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '하이드록실 –OH'],
     trends: ['–OH H-bond 공여·수용 — 접착·수계 친화', '중간 극성'],
     cautions: ['실제 PVA는 초산비닐 가수분해물 — 잔류 아세테이트 영향 별도'],
+    ency: {
+      state: '불안정 화학종 (단리 곤란)',
+      reactivity: 'keto-enol 타우토머화로 아세트알데하이드로 빠르게 이성질화 — 실제 PVA는 초산비닐 중합 후 가수분해로 제조',
+      isomers: '타우토머: acetaldehyde (안정형), 구조이성질체: ethylene oxide',
+      acidBase: '엔올 –OH 약산성',
+      optical: '반자성',
+    },
     base: { homo: -7.08, lumo: 0.53, dipole: 1.67, alpha: 27.3, liBind: -98, hbd: 1, hba: 1 },
   },
   {
@@ -160,6 +254,14 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['카복실산 –COOH', '하이드록실 –OH ×4', '에테르 고리(피라노스)'],
     trends: ['다중 –OH/–COOH — 매우 강한 H-bond 네트워크', '수계 증점·강한 표면 흡착 가능성'],
     cautions: ['치환도(DS)에 따른 실제 CMC 물성 분포는 단위 구조로 확정 불가'],
+    ency: {
+      state: '백색~크림색 분말 (고분자)',
+      solubility: 'Na염은 물에 잘 녹아 점성 용액 형성',
+      acidBase: '카복실기 pKa ≈ 3~4 — pH에 따라 이온화도 변화',
+      reactivity: '가수분해·효소 분해 가능. 치환도(DS)에 따라 물성 변화',
+      isomers: '글루코스 단위의 α/β 아노머, 치환 위치 이성질체 다수',
+      optical: '카이랄 중심 다수 (당류) — 광학 활성',
+    },
     base: { homo: -7.21, lumo: 0.31, dipole: 3.86, alpha: 132.4, liBind: -138, hbd: 5, hba: 8 },
   },
   {
@@ -175,6 +277,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['C=C 비닐기', '에스터 –C(=O)O–', '카보닐 C=O'],
     trends: ['에스터 O 음전위 — Li⁺ 배위 후보', '중간 극성, 유기용매 친화'],
     cautions: ['가수분해 안정성은 조건 의존'],
+    ency: {
+      state: '무색 액체 (과일 냄새)',
+      bp: '100.5 °C',
+      mp: '-48 °C',
+      density: '0.94 g/mL',
+      solubility: '물 1.5 g/100 mL, 유기용매 혼화',
+      acidBase: '에스터 O 매우 약한 루이스 염기',
+      reactivity: '라디칼 중합으로 PMMA 생성 (저해제 MEHQ 유통). 강산·강염기에서 가수분해',
+      isomers: '구조이성질체: ethyl acrylate, butyrolactone 계열 (C5H8O2)',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -7.31, lumo: 0.12, dipole: 1.96, alpha: 58.9, liBind: -108, hbd: 0, hba: 2 },
   },
   {
@@ -190,6 +303,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['고리형 카보네이트', '카보닐 C=O'],
     trends: ['카보닐 O 강한 음전위 — Li⁺ 용매화 주역', '높은 유전율·점도'],
     cautions: ['SEI 형성 경로는 환원 분해 반응 계산 필요'],
+    ency: {
+      state: '백색 고체 (상온) → 36 °C 이상 무색 액체',
+      bp: '248 °C',
+      mp: '36.4 °C',
+      density: '1.32 g/mL (39 °C)',
+      solubility: '물과 혼화, 고유전율 (ε ≈ 90, 40 °C)',
+      acidBase: '카보닐 O 약한 루이스 염기 — Li⁺ 강배위',
+      reactivity: '음극 표면에서 환원 분해되어 SEI 형성. 가수분해는 느림',
+      isomers: '구조이성질체: β-propiolactone 유도체 등 (C3H4O3)',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -8.41, lumo: 0.47, dipole: 5.35, alpha: 44.2, liBind: -128, hbd: 0, hba: 3 },
   },
   {
@@ -205,6 +329,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['선형 카보네이트', '카보닐 C=O'],
     trends: ['낮은 점도 — 혼합 용매의 유동성 담당', 'EC 대비 약한 Li⁺ 배위'],
     cautions: [],
+    ency: {
+      state: '무색 액체',
+      bp: '90 °C',
+      mp: '4 °C',
+      density: '1.07 g/mL',
+      solubility: '물 13.9 g/100 mL, 저유전율 (ε ≈ 3.1) — 점도 낮음',
+      acidBase: '중성에 가까움',
+      reactivity: '메틸화제로 작용 가능. 혼합 전해액의 저점도 성분',
+      isomers: '구조이성질체: methyl glycolate 등 (C3H6O3)',
+      optical: '무색 · 반자성',
+    },
     base: { homo: -8.15, lumo: 0.61, dipole: 0.91, alpha: 47.6, liBind: -102, hbd: 0, hba: 3 },
   },
   {
@@ -220,6 +355,17 @@ export const DICTIONARY: DictEntry[] = [
     functionalGroups: ['고리형 카보네이트', 'C=C(고리 내)', '카보닐 C=O'],
     trends: ['공액으로 낮은 LUMO — 우선 환원(SEI 첨가제) 후보'],
     cautions: ['첨가제 성능은 농도·조합 의존'],
+    ency: {
+      state: '무색 액체 (상온 부근 고화)',
+      bp: '162 °C',
+      mp: '22 °C',
+      density: '1.35 g/mL',
+      solubility: '카보네이트 용매와 혼화',
+      acidBase: '카보닐 O 약한 루이스 염기',
+      reactivity: '우선 환원되어 안정한 SEI 형성 (대표 첨가제). 고온 저장 시 중합 주의',
+      isomers: 'EC의 탈수소 유도체 — 고리 내 C=C 공액',
+      optical: '무색 · UV 흡수 (공액 카보네이트) · 반자성',
+    },
     base: { homo: -7.62, lumo: -0.45, dipole: 4.57, alpha: 41.8, liBind: -112, hbd: 0, hba: 3 },
   },
 ]

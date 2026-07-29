@@ -7,6 +7,7 @@ import { DESCRIPTOR_GROUPS, DESCRIPTORS } from '../data/descriptors'
 import { ReadyBadge, StatusBadge, Tabs, fmtDate } from '../ui'
 import { Molecule2D } from '../structure/Molecule2D'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
+import { analyzeMolecule } from '../structure/encyclopedia'
 
 // 기획서 4.3 + 12장 — 개인 화학 물성 페이지
 export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: string) => void; materialId: string | null } & Partial<Nav>) {
@@ -141,10 +142,12 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
       </section>
 
       <Tabs
-        tabs={['구조 · 특징', 'Descriptor', '외부 참고', '이력']}
+        tabs={['구조 · 특징', '화학 백과', 'Descriptor', '외부 참고', '이력']}
         active={tab}
         onChange={setTab}
       />
+
+      {tab === '화학 백과' && <Encyclopedia smiles={material.smiles} dictId={material.dictId} />}
 
       {tab === '구조 · 특징' && (
         <div className="grid-2">
@@ -356,5 +359,271 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
         </section>
       )}
     </div>
+  )
+}
+
+// ── 화학 백과 탭 — 조성·구조 / 결합 / 물리 / 반응성 / 기타 / 유기·무기 관점 ──
+// 출처 배지: [구조 계산] 그래프에서 자동 산출 · [문헌] 대표 참고값 · [규칙] 화학 규칙 추론
+function SourceChip({ kind }: { kind: '구조 계산' | '문헌' | '규칙' }) {
+  return (
+    <span className={kind === '문헌' ? 'badge overlay-badge' : 'chip soft'} style={{ marginLeft: 6 }}>
+      {kind}
+    </span>
+  )
+}
+
+function EncyRow({ label, value, source }: { label: string; value: React.ReactNode; source: '구조 계산' | '문헌' | '규칙' }) {
+  if (value === undefined || value === null || value === '') return null
+  return (
+    <tr>
+      <td style={{ width: 170 }}>
+        {label}
+        <SourceChip kind={source} />
+      </td>
+      <td>{value}</td>
+    </tr>
+  )
+}
+
+function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
+  const profile = analyzeMolecule(smiles)
+  const dict = dictId ? DICTIONARY.find((d) => d.dictId === dictId) : undefined
+  const ency = dict?.ency
+
+  if (!profile) {
+    return <div className="empty card">구조를 해석할 수 없어 백과 정보를 생성하지 못했습니다: {smiles}</div>
+  }
+
+  const imf: string[] = []
+  if (profile.isIonic) imf.push('이온성 상호작용')
+  if (profile.hbd > 0) imf.push(`수소결합 (공여 ${profile.hbd} · 수용 ${profile.hba})`)
+  else if (profile.hba > 0) imf.push(`수소결합 수용만 가능 (${profile.hba}곳)`)
+  if (profile.polarityClass !== '무극성') imf.push('쌍극자-쌍극자 상호작용')
+  imf.push('반데르발스(분산) 힘')
+
+  return (
+    <>
+      <div className="grid-2">
+        <section className="card">
+          <div className="card-head">
+            <h2>1. 조성과 구조</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow label="분자식" value={<span className="mono">{profile.formula}</span>} source="구조 계산" />
+              <EncyRow label="분자량" value={`${profile.mw} g/mol`} source="구조 계산" />
+              <EncyRow
+                label="원소 조성"
+                value={Object.entries(profile.elementCounts)
+                  .map(([e, n]) => `${e} ${n}개`)
+                  .join(' · ')}
+                source="구조 계산"
+              />
+              <EncyRow
+                label="결합 방식"
+                value={`단일 ${profile.bondCounts.single} · 이중 ${profile.bondCounts.double} · 삼중 ${profile.bondCounts.triple}${profile.aromatic ? ' · 방향족 고리 포함' : ''}`}
+                source="구조 계산"
+              />
+              <EncyRow
+                label="고리 구조"
+                value={profile.ringClosures > 0 ? `고리 ${profile.ringClosures}개${profile.aromatic ? ' (방향족 포함)' : ' (지방족)'}` : '비고리(사슬형)'}
+                source="구조 계산"
+              />
+              <EncyRow label="불포화도 (DBE)" value={profile.dbe} source="구조 계산" />
+              <EncyRow
+                label="작용기"
+                value={dict ? dict.functionalGroups.join(', ') : 'SMARTS 자동 인식은 백엔드 연동 시 제공'}
+                source={dict ? '규칙' : '규칙'}
+              />
+              <EncyRow label="이성질체" value={ency?.isomers} source="문헌" />
+              <EncyRow
+                label="입체 표기"
+                value={profile.hasStereoNotation ? 'SMILES에 입체 표기 포함 (@ / cis-trans)' : '표기된 입체중심 없음'}
+                source="구조 계산"
+              />
+            </tbody>
+          </table>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>2. 결합의 성질</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow
+                label="극성 결합"
+                value={
+                  profile.polarBonds.length
+                    ? profile.polarBonds.map((b) => `${b.label} ×${b.count} (ΔEN ${b.dEN})`).join(' · ')
+                    : '유의미한 극성 결합 없음 (ΔEN < 0.5)'
+                }
+                source="구조 계산"
+              />
+              <EncyRow
+                label="분자 전체 극성"
+                value={`${profile.polarityClass} — 결합 극성과 기하 구조의 벡터 합 (근사 Σq·r = ${profile.dipoleApprox})`}
+                source="규칙"
+              />
+              <EncyRow
+                label="공명 · 공액"
+                value={
+                  profile.aromatic
+                    ? '방향족 고리 — 고리형 공액 (휘켈 규칙 안정화)'
+                    : profile.conjugated
+                      ? '공액계 존재 (sp² 연결 ≥ 3) — 전자 비편재화'
+                      : '국소화된 결합 (뚜렷한 공액 없음)'
+                }
+                source="구조 계산"
+              />
+              <EncyRow
+                label="혼성화 분포"
+                value={`sp³ ${profile.hybridization.sp3} · sp² ${profile.hybridization.sp2} · sp ${profile.hybridization.sp}`}
+                source="구조 계산"
+              />
+              <EncyRow
+                label="결합 유형"
+                value={profile.isIonic ? '공유결합 + 이온결합 (형식전하/염 포함)' : '공유결합'}
+                source="구조 계산"
+              />
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div className="grid-2">
+        <section className="card">
+          <div className="card-head">
+            <h2>3. 물리적 특성</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow label="상온 상태" value={ency?.state} source="문헌" />
+              <EncyRow label="끓는점" value={ency?.bp} source="문헌" />
+              <EncyRow label="녹는점" value={ency?.mp} source="문헌" />
+              <EncyRow label="밀도" value={ency?.density} source="문헌" />
+              <EncyRow label="용해성" value={ency?.solubility} source="문헌" />
+              <EncyRow label="분자간 힘" value={imf.join(' → ')} source="규칙" />
+              <EncyRow
+                label="친수/소수성"
+                value={
+                  profile.isIonic || profile.hbd > 0
+                    ? '친수성 경향 (H-bond 공여/이온성)'
+                    : profile.polarityClass === '무극성'
+                      ? '소수성 경향'
+                      : '중간 극성 — 극성 유기용매 친화'
+                }
+                source="규칙"
+              />
+              {!ency && (
+                <tr>
+                  <td colSpan={2} className="muted small">
+                    문헌 참고값이 등록되지 않은 물질입니다 — 내장 사전 물질은 끓는점·녹는점 등 대표값이 함께
+                    표시됩니다.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>4. 반응성</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow label="산 · 염기 성질" value={ency?.acidBase} source="문헌" />
+              <EncyRow
+                label="친전자성 / 친핵성 부위"
+                value={
+                  profile.hba > 0 || profile.polarBonds.length
+                    ? 'O/N 고립전자쌍 부근 = 친핵성(전자 공여) 후보 · 카보닐 C/전자결핍 C = 친전자성 후보 — MEP 시각화(3D 전하 모드)로 확인'
+                    : '뚜렷한 극성 부위 없음 — 라디칼/π 반응 중심 위주'
+                }
+                source="규칙"
+              />
+              <EncyRow label="안정성 · 중합성" value={ency?.reactivity} source="문헌" />
+              <EncyRow
+                label="라디칼 여부"
+                value="닫힌 껍질(모든 전자 짝지음) — 라디칼 아님"
+                source="규칙"
+              />
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div className="grid-2">
+        <section className="card">
+          <div className="card-head">
+            <h2>5. 기타 특성 (광학 · 자성)</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow label="색 · 광학" value={ency?.optical} source="문헌" />
+              <EncyRow
+                label="흡광 경향"
+                value={
+                  profile.aromatic
+                    ? '방향족 π→π* 전이 — UV 영역 흡수'
+                    : profile.conjugated
+                      ? '공액계 — UV 흡수 가능 (n→π*, π→π*)'
+                      : '뚜렷한 발색단 없음 — 가시광 무색 예상'
+                }
+                source="규칙"
+              />
+              <EncyRow
+                label="자성"
+                value="반자성 (홀전자 없음 — 닫힌 껍질)"
+                source="규칙"
+              />
+              <EncyRow
+                label="카이랄성"
+                value={profile.hasStereoNotation ? '입체 표기 존재 — 광학 이성질체 검토 필요' : '표기된 카이랄 중심 없음'}
+                source="구조 계산"
+              />
+            </tbody>
+          </table>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>6. 무기·배위화학 관점</h2>
+          </div>
+          <table className="table">
+            <tbody>
+              <EncyRow
+                label="배위 가능 원자 (Li⁺ 등)"
+                value={
+                  profile.donorAtoms.length
+                    ? profile.donorAtoms.map((d) => `${d.element}: ${d.hsab}`).join(' · ')
+                    : '고립전자쌍 도너 원자 없음 — 배위 능력 낮음'
+                }
+                source="규칙"
+              />
+              <EncyRow
+                label="HSAB 관점"
+                value={
+                  profile.donorAtoms.some((d) => d.element === 'O' || d.element === 'F')
+                    ? 'Li⁺(경질 산)와 O/F(경질 염기)의 친화 — 전해액 내 배위 경쟁에 참여'
+                    : profile.donorAtoms.length
+                      ? '경계~연질 염기 중심 — Li⁺ 배위는 상대적으로 약함'
+                      : '해당 없음'
+                }
+                source="규칙"
+              />
+              {ency?.extra?.map((x) => (
+                <EncyRow key={x} label="추가 참고" value={x} source="문헌" />
+              ))}
+            </tbody>
+          </table>
+          <div className="chart-note">
+            [구조 계산] = SMILES 그래프에서 자동 산출 · [문헌] = 대표 참고값(조건에 따라 변동) · [규칙] = 화학
+            규칙 기반 추론(가설). DFT 계산과 무관한 백과 정보로, 물성 비교·보고서에는 포함되지 않습니다.
+          </div>
+        </section>
+      </div>
+    </>
   )
 }
