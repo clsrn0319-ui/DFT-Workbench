@@ -35,9 +35,24 @@ localStorage(중앙 DB 대체)입니다.
 
 ```bash
 npm install
-npm run dev      # 개발 서버
-npm run build    # 프로덕션 빌드 (dist/)
-npm run preview  # 빌드 미리보기
+npm run dev         # 개발 서버
+npm run build       # 프로덕션 빌드 (dist/)
+npm run preview     # 빌드 미리보기
+npm run standalone  # 단일 HTML 파일 생성 (dft-workbench.html)
 ```
 
+## 공유용 단일 HTML
+
+`npm run standalone` 을 실행하면 JS·CSS·아이콘이 모두 인라인된 **자립형 HTML 파일
+`dft-workbench.html`** 이 만들어집니다. 이 파일 하나만 있으면:
+
+- 브라우저로 **더블클릭해 바로 실행**됩니다 (서버·설치 불필요, 오프라인 동작).
+- 이메일·메신저로 **파일을 전달**하거나 GitHub Pages·사내 웹서버 등 **어디든 호스팅**하면
+  다른 사람이 링크로 접속할 수 있습니다.
+
+데이터(등록 물질·계산 결과·테마·백과 입력값)는 각자의 브라우저 `localStorage` 에 저장되어
+사용자마다 독립적으로 유지됩니다. PubChem 자동 조회만 인터넷 연결이 필요하며(회사 보안망에서는
+차단될 수 있음), 그 외 모든 기능은 오프라인으로 동작합니다.
+
 기술 스택: Vite + React 18 + TypeScript, 외부 차트 라이브러리 없이 SVG 차트 직접 구현.
+계산 결과는 브라우저 내 모의 엔진이 생성하며(프로토타입), 상용 배포 시 Python 백엔드로 교체됩니다.
