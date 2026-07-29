@@ -1,3 +1,17 @@
+// 백과 문헌/사용자 참고값 (조건에 따라 달라질 수 있는 대표값)
+export interface EncyData {
+  state?: string
+  bp?: string
+  mp?: string
+  density?: string
+  solubility?: string
+  acidBase?: string
+  reactivity?: string
+  isomers?: string
+  optical?: string
+  extra?: string[]
+}
+
 // ── 물질 (기획서 5.1 Material) ─────────────────────────────────
 export type MaterialType = '바인더 모노머' | '용매' | '첨가제' | '염' | '기타'
 export type OriginType = '상용' | '합성' | '개질' | '미상'
@@ -21,6 +35,7 @@ export interface Material {
   updatedAt: number
   builtin: boolean
   dictId?: string // 내장 사전 항목과 연결 (물성 기준값·작용기 참조)
+  userEncy?: EncyData // 사용자가 직접 입력한 백과 참고값 (문헌값보다 우선 표시)
 }
 
 // ── 용매 프리셋 (기획서 4.4 / 5.1 SolventPreset) ────────────────

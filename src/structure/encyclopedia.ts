@@ -190,3 +190,100 @@ function build(smiles: string, g: MolGraph): MolProfile {
     donorAtoms,
   }
 }
+
+// ── 작용기 자동 인식 (그래프 규칙 기반 — 임의 SMILES 지원) ───────
+// 상용 버전의 RDKit SMARTS 검출을 대체하는 클라이언트 규칙 엔진.
+
+export function detectFunctionalGroups(smiles: string): string[] {
+  const g = buildMolGraph(smiles)
+  if (!g) return []
+  const groups = new Map<string, number>()
+  const add = (name: string) => groups.set(name, (groups.get(name) ?? 0) + 1)
+
+  const nbrs = (i: number) => g.bonds.filter((b) => b.a === i || b.b === i).map((b) => (b.a === i ? b.b : b.a))
+  const bondOrder = (i: number, j: number) => g.bonds.find((b) => (b.a === i && b.b === j) || (b.a === j && b.b === i))?.order ?? 0
+
+  g.atoms.forEach((a, i) => {
+    if (a.isH) return
+    const nb = nbrs(i)
+    if (a.element === 'C') {
+      const dblO = nb.find((n) => g.atoms[n].element === 'O' && bondOrder(i, n) === 2)
+      if (dblO !== undefined) {
+        const singleO = nb.filter((n) => n !== dblO && g.atoms[n].element === 'O' && bondOrder(i, n) === 1)
+        const nNb = nb.find((n) => g.atoms[n].element === 'N')
+        if (singleO.length) {
+          const o = singleO[0]
+          const oNb = nbrs(o)
+          if (g.atoms[o].formalCharge < 0) add('카복실레이트 –COO⁻')
+          else if (oNb.some((n) => g.atoms[n].isH)) add('카복실산 –COOH')
+          else add('에스터 –C(=O)O–')
+        } else if (nNb !== undefined) {
+          const inRing = smiles.match(/\d/) && nb.length >= 2
+          add(inRing ? '아마이드/락탐 C(=O)N' : '아마이드 C(=O)N')
+        } else if (nb.some((n) => g.atoms[n].isH)) add('알데하이드 –CHO')
+        else add('케톤/카보닐 C=O')
+      }
+      if (nb.some((n) => g.atoms[n].element === 'N' && bondOrder(i, n) === 3)) add('니트릴 –C≡N')
+      const fCount = nb.filter((n) => g.atoms[n].element === 'F').length
+      if (fCount) for (let k = 0; k < fCount; k++) add('C–F 결합')
+      const clCount = nb.filter((n) => g.atoms[n].element === 'Cl').length
+      if (clCount) for (let k = 0; k < clCount; k++) add('C–Cl 결합')
+    }
+    if (a.element === 'O') {
+      const heavyNb = nb.filter((n) => !g.atoms[n].isH)
+      const hasH = nb.some((n) => g.atoms[n].isH)
+      const nextToCarbonyl = heavyNb.some((n) =>
+        nbrs(n).some((m) => g.atoms[m].element === 'O' && bondOrder(n, m) === 2),
+      )
+      if (hasH && heavyNb.length === 1 && !nextToCarbonyl) add('하이드록실 –OH')
+      if (!hasH && heavyNb.length === 2 && !nextToCarbonyl && bondOrder(heavyNb[0], i) === 1) add('에테르 C–O–C')
+    }
+    if (a.element === 'N') {
+      const triple = nb.some((n) => bondOrder(i, n) === 3)
+      const nextToCarbonyl = nb.some((n) => nbrs(n).some((m) => g.atoms[m].element === 'O' && bondOrder(n, m) === 2))
+      if (!triple && !nextToCarbonyl && nb.every((n) => ['C'].includes(g.atoms[n].element) || g.atoms[n].isH))
+        add('아민 N')
+    }
+    if (a.element === 'S') add('황 함유기 (S)')
+    if (a.element === 'P') add('인 함유기 (P)')
+  })
+
+  // 비닐 C=C (비방향족)
+  const aromaticIdx = new Set<number>()
+  // smiles-drawer는 케쿨레화하므로 방향족 판정은 smiles 소문자 존재 여부로 근사
+  const isAromaticMol = /[cnos]/.test(smiles.replace(/\[.*?\]/g, ''))
+  g.bonds.forEach((b) => {
+    if (b.order === 2 && g.atoms[b.a].element === 'C' && g.atoms[b.b].element === 'C') {
+      if (!isAromaticMol || !(aromaticIdx.has(b.a) && aromaticIdx.has(b.b))) add('C=C (비닐/알켄)')
+    }
+  })
+  if (isAromaticMol) add('방향족 고리')
+  if (smiles.includes('.')) add('이온쌍/다중 fragment')
+  if (/\[Li\+\]|\[Na\+\]|\[K\+\]/.test(smiles)) add('알칼리 금속 양이온')
+
+  return [...groups.entries()].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
+}
+
+// 작용기 → 물성 경향 해석 (가설 계층)
+const GROUP_TRENDS: [RegExp, string][] = [
+  [/카복실산/, '카복실기 — 강한 H-bond 공여/수용, O 주변 음전위 집중 (Li⁺ 배위·접착 후보), 수계 친화'],
+  [/카복실레이트/, '음이온성 카복실레이트 — 매우 강한 음전위, Li⁺ 강배위, 수용성'],
+  [/에스터/, '에스터 O 음전위 — Li⁺ 배위 후보, 강산·염기 조건에서 가수분해 가능'],
+  [/아마이드|락탐/, '아마이드 O 음전위 — H-bond 수용·Li⁺ 배위, 높은 극성'],
+  [/니트릴/, '니트릴 — 큰 쌍극자, 낮은 LUMO 경향 (환원 민감 가능성), N 고립전자쌍 배위 후보'],
+  [/하이드록실/, '–OH — H-bond 공여·수용, 접착·수계 친화'],
+  [/에테르/, '에테르 O — 약한 Li⁺ 배위, 유연한 사슬'],
+  [/방향족/, '공액 π계 — 높은 HOMO 경향(산화 민감), π–π 상호작용으로 흑연 친화 가능성'],
+  [/C–F/, '불소화 — 낮은 HOMO 경향(내산화성), 소수성·낮은 표면 에너지'],
+  [/C=C \(비닐/, '비닐기 — 라디칼 중합 가능 부위'],
+  [/아민/, '아민 N — 염기성·H-bond, 배위 후보'],
+  [/이온쌍/, '이온성 — 강한 정전기 상호작용, 해리 상태는 용매·농도 의존'],
+]
+
+export function deriveTrends(groups: string[]): string[] {
+  const out: string[] = []
+  for (const [re, trend] of GROUP_TRENDS) {
+    if (groups.some((gr) => re.test(gr))) out.push(trend)
+  }
+  return out
+}

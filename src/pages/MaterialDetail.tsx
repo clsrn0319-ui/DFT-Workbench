@@ -4,10 +4,11 @@ import type { Nav, PageId } from '../App'
 import { DICTIONARY } from '../data/dictionary'
 import { EXTERNAL_REFS } from '../data/externalRefs'
 import { DESCRIPTOR_GROUPS, DESCRIPTORS } from '../data/descriptors'
-import { ReadyBadge, StatusBadge, Tabs, fmtDate } from '../ui'
+import { Field, ReadyBadge, StatusBadge, Tabs, fmtDate } from '../ui'
 import { Molecule2D } from '../structure/Molecule2D'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
-import { analyzeMolecule } from '../structure/encyclopedia'
+import { analyzeMolecule, deriveTrends, detectFunctionalGroups } from '../structure/encyclopedia'
+import type { EncyData, Material } from '../types'
 
 // 기획서 4.3 + 12장 — 개인 화학 물성 페이지
 export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: string) => void; materialId: string | null } & Partial<Nav>) {
@@ -46,6 +47,10 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
   }
 
   const dict = material.dictId ? DICTIONARY.find((d) => d.dictId === material.dictId) : undefined
+  const autoGroups = detectFunctionalGroups(material.smiles)
+  const groups = autoGroups.length ? autoGroups : (dict?.functionalGroups ?? [])
+  const trends = [...new Set([...deriveTrends(groups), ...(dict?.trends ?? [])])]
+  const profile = analyzeMolecule(material.smiles)
   const pub = latestPublished(material.id)
   const refs = material.dictId ? EXTERNAL_REFS.filter((r) => r.dictId === material.dictId) : []
   const materialJobs = jobs.filter((j) => j.materialId === material.id).sort((a, b) => b.createdAt - a.createdAt)
@@ -142,12 +147,10 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
       </section>
 
       <Tabs
-        tabs={['구조 · 특징', '화학 백과', 'Descriptor', '외부 참고', '이력']}
+        tabs={['구조 · 특징', 'Descriptor', '외부 참고', '이력']}
         active={tab}
         onChange={setTab}
       />
-
-      {tab === '화학 백과' && <Encyclopedia smiles={material.smiles} dictId={material.dictId} />}
 
       {tab === '구조 · 특징' && (
         <div className="grid-2">
@@ -155,30 +158,33 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
             <div className="card-head">
               <h2>관찰 — 구조에서 직접 확인되는 사실</h2>
             </div>
-            {dict ? (
+            {groups.length ? (
               <ul className="fact-list">
-                {dict.functionalGroups.map((g) => (
+                {groups.map((g) => (
                   <li key={g}>
                     <span className="chip soft">{g}</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <div className="empty small">
-                내장 사전에 없는 구조입니다. 작용기 자동 인식(SMARTS)은 상용 버전의 RDKit 서버에서 수행됩니다.
-              </div>
+              <div className="empty small">인식된 작용기가 없습니다 (탄화수소 골격).</div>
             )}
+            <div className="chart-note">
+              작용기 자동 인식 — 구조 그래프 규칙 기반 (상용 버전은 RDKit SMARTS로 정밀화)
+            </div>
             <div className="card-head" style={{ marginTop: 14 }}>
               <h2>해석 — 화학 규칙 기반 경향 (가설)</h2>
             </div>
-            {dict?.trends.length ? (
+            {trends.length ? (
               <ul className="fact-list plain">
-                {dict.trends.map((t) => (
+                {trends.map((t) => (
                   <li key={t}>{t}</li>
                 ))}
               </ul>
             ) : (
-              <div className="empty small">해석 근거가 준비되지 않았습니다.</div>
+              <div className="empty small">
+                뚜렷한 극성·반응성 작용기가 없어 분산력 위주의 상호작용이 예상됩니다.
+              </div>
             )}
           </section>
           <section className="card">
@@ -188,8 +194,9 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
             <ul className="fact-list plain">
               <li>MEP/부분전하 분석으로 전하 집중 부위 확인</li>
               <li>중성/양이온/음이온 상태 계산으로 산화·환원 한계 산출</li>
-              {dict && dict.base.hba > 0 && <li>Li⁺ 배위 conformer 탐색 (배위 후보 {dict.base.hba}곳)</li>}
-              {dict && dict.base.hbd > 0 && <li>binder-binder dimer 수소결합 에너지 계산</li>}
+              {profile && profile.hba > 0 && <li>Li⁺ 배위 conformer 탐색 (O/N/F 배위 후보 {profile.hba}곳)</li>}
+              {profile && profile.hbd > 0 && <li>binder-binder dimer 수소결합 에너지 계산 (공여 {profile.hbd}곳)</li>}
+              {profile?.aromatic && <li>π–π 흡착 모티프 탐색 (흑연 표면)</li>}
             </ul>
             <div className="card-head" style={{ marginTop: 14 }}>
               <h2>주의 — 구조만으로 확정 불가</h2>
@@ -204,6 +211,8 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
           </section>
         </div>
       )}
+
+      {tab === '구조 · 특징' && <Encyclopedia material={material} groups={groups} />}
 
       {tab === 'Descriptor' && (
         <section className="card">
@@ -362,17 +371,20 @@ export function MaterialDetail({ go, materialId }: { go: (p: PageId, mid?: strin
   )
 }
 
-// ── 화학 백과 탭 — 조성·구조 / 결합 / 물리 / 반응성 / 기타 / 유기·무기 관점 ──
-// 출처 배지: [구조 계산] 그래프에서 자동 산출 · [문헌] 대표 참고값 · [규칙] 화학 규칙 추론
-function SourceChip({ kind }: { kind: '구조 계산' | '문헌' | '규칙' }) {
+// ── 백과 섹션 (구조·특징 탭 하단) — 조성·구조 / 결합 / 물리 / 반응성 / 기타 / 무기 관점 ──
+// 출처 배지: [구조 계산] 자동 산출 · [문헌] 대표 참고값 · [사용자 입력] 직접 편집값 · [규칙] 화학 규칙 추론
+type SourceKind = '구조 계산' | '문헌' | '사용자 입력' | '규칙'
+
+function SourceChip({ kind }: { kind: SourceKind }) {
+  const cls = kind === '문헌' ? 'badge overlay-badge' : kind === '사용자 입력' ? 'chip' : 'chip soft'
   return (
-    <span className={kind === '문헌' ? 'badge overlay-badge' : 'chip soft'} style={{ marginLeft: 6 }}>
+    <span className={cls} style={{ marginLeft: 6 }}>
       {kind}
     </span>
   )
 }
 
-function EncyRow({ label, value, source }: { label: string; value: React.ReactNode; source: '구조 계산' | '문헌' | '규칙' }) {
+function EncyRow({ label, value, source }: { label: string; value: React.ReactNode; source: SourceKind }) {
   if (value === undefined || value === null || value === '') return null
   return (
     <tr>
@@ -385,13 +397,110 @@ function EncyRow({ label, value, source }: { label: string; value: React.ReactNo
   )
 }
 
-function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
-  const profile = analyzeMolecule(smiles)
-  const dict = dictId ? DICTIONARY.find((d) => d.dictId === dictId) : undefined
-  const ency = dict?.ency
+const ENCY_FIELDS: { key: keyof EncyData; label: string }[] = [
+  { key: 'state', label: '상온 상태' },
+  { key: 'bp', label: '끓는점' },
+  { key: 'mp', label: '녹는점' },
+  { key: 'density', label: '밀도' },
+  { key: 'solubility', label: '용해성' },
+  { key: 'acidBase', label: '산 · 염기 성질' },
+  { key: 'reactivity', label: '안정성 · 중합성' },
+  { key: 'isomers', label: '이성질체' },
+  { key: 'optical', label: '색 · 광학' },
+]
+
+interface PubchemResult {
+  status: 'loading' | 'ok' | 'error'
+  message?: string
+  props?: Record<string, string | number>
+}
+
+function Encyclopedia({ material, groups }: { material: Material; groups: string[] }) {
+  const { dispatch } = useStore()
+  const [editing, setEditing] = useState(false)
+  const [form, setForm] = useState<EncyData>({})
+  const [pubchem, setPubchem] = useState<PubchemResult | null>(null)
+
+  const profile = analyzeMolecule(material.smiles)
+  const dict = material.dictId ? DICTIONARY.find((d) => d.dictId === material.dictId) : undefined
+  const litEncy = dict?.ency
+  const userEncy = material.userEncy
+
+  // 사용자 입력 > 문헌 순으로 병합, 출처 추적
+  const merged = (key: keyof EncyData): { value?: string; source: SourceKind } => {
+    const u = userEncy?.[key]
+    if (u && typeof u === 'string') return { value: u, source: '사용자 입력' }
+    const l = litEncy?.[key]
+    if (l && typeof l === 'string') return { value: l, source: '문헌' }
+    return { value: undefined, source: '문헌' }
+  }
+
+  const startEdit = () => {
+    const init: EncyData = {}
+    for (const f of ENCY_FIELDS) {
+      const v = userEncy?.[f.key] ?? litEncy?.[f.key]
+      if (typeof v === 'string') (init[f.key] as string | undefined) = v
+    }
+    setForm(init)
+    setEditing(true)
+  }
+
+  const saveEdit = () => {
+    const cleaned: EncyData = {}
+    for (const f of ENCY_FIELDS) {
+      const v = (form[f.key] as string | undefined)?.trim()
+      if (v) (cleaned[f.key] as string | undefined) = v
+    }
+    if (userEncy?.extra) cleaned.extra = userEncy.extra
+    dispatch({ type: 'updateMaterial', id: material.id, structureChanged: false, patch: { userEncy: cleaned } })
+    setEditing(false)
+  }
+
+  // PubChem PUG REST 조회 — 상용 버전은 백엔드 프록시가 캐시 (기획서 4.2.2)
+  const fetchPubchem = async () => {
+    setPubchem({ status: 'loading' })
+    try {
+      const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encodeURIComponent(material.smiles)}/property/MolecularFormula,MolecularWeight,IUPACName,XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,InChIKey/JSON`
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 8000)
+      const res = await fetch(url, { signal: controller.signal })
+      clearTimeout(timer)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      const props = json?.PropertyTable?.Properties?.[0]
+      if (!props) throw new Error('결과 없음')
+      setPubchem({ status: 'ok', props })
+    } catch (err) {
+      setPubchem({
+        status: 'error',
+        message:
+          '외부 조회 실패 (CORS·보안망 차단 또는 오프라인). 상용 버전에서는 백엔드 프록시가 PubChem을 조회·캐시하며, 조회 실패가 등록·수동 입력을 차단하지 않습니다.' +
+          (err instanceof Error && err.name !== 'AbortError' ? '' : ' (시간 초과)'),
+      })
+    }
+  }
+
+  const applyPubchem = () => {
+    if (pubchem?.status !== 'ok' || !pubchem.props) return
+    const p = pubchem.props
+    const lines = [
+      p.IUPACName && `IUPAC명: ${p.IUPACName}`,
+      p.InChIKey && `InChIKey: ${p.InChIKey}`,
+      p.XLogP !== undefined && `XLogP: ${p.XLogP}`,
+      p.TPSA !== undefined && `TPSA: ${p.TPSA} Å²`,
+      p.HBondDonorCount !== undefined && `H-bond 공여/수용: ${p.HBondDonorCount}/${p.HBondAcceptorCount}`,
+      'PubChem PUG REST 조회값',
+    ].filter((x): x is string => !!x)
+    dispatch({
+      type: 'updateMaterial',
+      id: material.id,
+      structureChanged: false,
+      patch: { userEncy: { ...(userEncy ?? {}), extra: lines } },
+    })
+  }
 
   if (!profile) {
-    return <div className="empty card">구조를 해석할 수 없어 백과 정보를 생성하지 못했습니다: {smiles}</div>
+    return <div className="empty card">구조를 해석할 수 없어 백과 정보를 생성하지 못했습니다: {material.smiles}</div>
   }
 
   const imf: string[] = []
@@ -401,8 +510,88 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
   if (profile.polarityClass !== '무극성') imf.push('쌍극자-쌍극자 상호작용')
   imf.push('반데르발스(분산) 힘')
 
+  const extraLines = [...(litEncy?.extra ?? []), ...(userEncy?.extra ?? [])]
+
   return (
     <>
+      <div className="toolbar" style={{ marginTop: 4 }}>
+        <span className="option-title" style={{ marginBottom: 0 }}>
+          화학 백과 — 물질 상세 정보
+        </span>
+        <button className="btn" onClick={editing ? () => setEditing(false) : startEdit}>
+          {editing ? '편집 닫기' : '문헌값 직접 입력 · 편집'}
+        </button>
+        <button className="btn" onClick={fetchPubchem} disabled={pubchem?.status === 'loading'}>
+          {pubchem?.status === 'loading' ? 'PubChem 조회 중…' : 'PubChem 자동 조회'}
+        </button>
+      </div>
+
+      {editing && (
+        <section className="card form-card">
+          <div className="card-head">
+            <h2>문헌값 직접 입력 · 편집</h2>
+            <span className="muted small">저장 시 [사용자 입력] 출처로 표시되며 문헌값보다 우선합니다</span>
+          </div>
+          <div className="form-grid">
+            {ENCY_FIELDS.map((f) => (
+              <Field key={f.key} label={f.label}>
+                <input
+                  className="input"
+                  value={(form[f.key] as string | undefined) ?? ''}
+                  onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                />
+              </Field>
+            ))}
+          </div>
+          <div className="form-actions">
+            <button className="btn primary" onClick={saveEdit}>
+              저장
+            </button>
+            <button className="btn" onClick={() => setEditing(false)}>
+              취소
+            </button>
+          </div>
+        </section>
+      )}
+
+      {pubchem?.status === 'error' && <div className="banner warn">{pubchem.message}</div>}
+      {pubchem?.status === 'ok' && pubchem.props && (
+        <section className="card">
+          <div className="card-head">
+            <h2>PubChem 조회 결과</h2>
+            <div className="row-actions">
+              <span className="badge overlay-badge">PubChem PUG REST</span>
+              <button className="btn ghost" onClick={applyPubchem}>
+                백과 참고값에 반영
+              </button>
+            </div>
+          </div>
+          <table className="kv-table">
+            <tbody>
+              <tr>
+                <th>IUPAC명</th>
+                <td>{pubchem.props.IUPACName ?? '—'}</td>
+                <th>InChIKey</th>
+                <td className="mono">{pubchem.props.InChIKey ?? '—'}</td>
+              </tr>
+              <tr>
+                <th>분자식 / MW</th>
+                <td>
+                  {pubchem.props.MolecularFormula} · {pubchem.props.MolecularWeight} g/mol
+                </td>
+                <th>XLogP / TPSA</th>
+                <td>
+                  {pubchem.props.XLogP ?? '—'} · {pubchem.props.TPSA ?? '—'} Å²
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="chart-note">
+            끓는점·녹는점 등 실험 물성 전문(PUG View)은 상용 버전의 서버 프록시가 조회·캐시합니다.
+          </div>
+        </section>
+      )}
+
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
@@ -430,12 +619,8 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
                 source="구조 계산"
               />
               <EncyRow label="불포화도 (DBE)" value={profile.dbe} source="구조 계산" />
-              <EncyRow
-                label="작용기"
-                value={dict ? dict.functionalGroups.join(', ') : 'SMARTS 자동 인식은 백엔드 연동 시 제공'}
-                source={dict ? '규칙' : '규칙'}
-              />
-              <EncyRow label="이성질체" value={ency?.isomers} source="문헌" />
+              <EncyRow label="작용기" value={groups.join(', ') || '없음 (탄화수소)'} source="구조 계산" />
+              <EncyRow label="이성질체" value={merged('isomers').value} source={merged('isomers').source} />
               <EncyRow
                 label="입체 표기"
                 value={profile.hasStereoNotation ? 'SMILES에 입체 표기 포함 (@ / cis-trans)' : '표기된 입체중심 없음'}
@@ -498,11 +683,11 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
           </div>
           <table className="table">
             <tbody>
-              <EncyRow label="상온 상태" value={ency?.state} source="문헌" />
-              <EncyRow label="끓는점" value={ency?.bp} source="문헌" />
-              <EncyRow label="녹는점" value={ency?.mp} source="문헌" />
-              <EncyRow label="밀도" value={ency?.density} source="문헌" />
-              <EncyRow label="용해성" value={ency?.solubility} source="문헌" />
+              <EncyRow label="상온 상태" value={merged('state').value} source={merged('state').source} />
+              <EncyRow label="끓는점" value={merged('bp').value} source={merged('bp').source} />
+              <EncyRow label="녹는점" value={merged('mp').value} source={merged('mp').source} />
+              <EncyRow label="밀도" value={merged('density').value} source={merged('density').source} />
+              <EncyRow label="용해성" value={merged('solubility').value} source={merged('solubility').source} />
               <EncyRow label="분자간 힘" value={imf.join(' → ')} source="규칙" />
               <EncyRow
                 label="친수/소수성"
@@ -515,11 +700,11 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
                 }
                 source="규칙"
               />
-              {!ency && (
+              {!merged('bp').value && !merged('state').value && (
                 <tr>
                   <td colSpan={2} className="muted small">
-                    문헌 참고값이 등록되지 않은 물질입니다 — 내장 사전 물질은 끓는점·녹는점 등 대표값이 함께
-                    표시됩니다.
+                    문헌 참고값이 아직 없습니다 — 위의 「문헌값 직접 입력 · 편집」 또는 「PubChem 자동 조회」로
+                    채울 수 있습니다.
                   </td>
                 </tr>
               )}
@@ -533,7 +718,7 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
           </div>
           <table className="table">
             <tbody>
-              <EncyRow label="산 · 염기 성질" value={ency?.acidBase} source="문헌" />
+              <EncyRow label="산 · 염기 성질" value={merged('acidBase').value} source={merged('acidBase').source} />
               <EncyRow
                 label="친전자성 / 친핵성 부위"
                 value={
@@ -543,12 +728,8 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
                 }
                 source="규칙"
               />
-              <EncyRow label="안정성 · 중합성" value={ency?.reactivity} source="문헌" />
-              <EncyRow
-                label="라디칼 여부"
-                value="닫힌 껍질(모든 전자 짝지음) — 라디칼 아님"
-                source="규칙"
-              />
+              <EncyRow label="안정성 · 중합성" value={merged('reactivity').value} source={merged('reactivity').source} />
+              <EncyRow label="라디칼 여부" value="닫힌 껍질(모든 전자 짝지음) — 라디칼 아님" source="규칙" />
             </tbody>
           </table>
         </section>
@@ -561,7 +742,7 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
           </div>
           <table className="table">
             <tbody>
-              <EncyRow label="색 · 광학" value={ency?.optical} source="문헌" />
+              <EncyRow label="색 · 광학" value={merged('optical').value} source={merged('optical').source} />
               <EncyRow
                 label="흡광 경향"
                 value={
@@ -573,11 +754,7 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
                 }
                 source="규칙"
               />
-              <EncyRow
-                label="자성"
-                value="반자성 (홀전자 없음 — 닫힌 껍질)"
-                source="규칙"
-              />
+              <EncyRow label="자성" value="반자성 (홀전자 없음 — 닫힌 껍질)" source="규칙" />
               <EncyRow
                 label="카이랄성"
                 value={profile.hasStereoNotation ? '입체 표기 존재 — 광학 이성질체 검토 필요' : '표기된 카이랄 중심 없음'}
@@ -613,14 +790,15 @@ function Encyclopedia({ smiles, dictId }: { smiles: string; dictId?: string }) {
                 }
                 source="규칙"
               />
-              {ency?.extra?.map((x) => (
-                <EncyRow key={x} label="추가 참고" value={x} source="문헌" />
+              {extraLines.map((x) => (
+                <EncyRow key={x} label="추가 참고" value={x} source={userEncy?.extra?.includes(x) ? '사용자 입력' : '문헌'} />
               ))}
             </tbody>
           </table>
           <div className="chart-note">
-            [구조 계산] = SMILES 그래프에서 자동 산출 · [문헌] = 대표 참고값(조건에 따라 변동) · [규칙] = 화학
-            규칙 기반 추론(가설). DFT 계산과 무관한 백과 정보로, 물성 비교·보고서에는 포함되지 않습니다.
+            [구조 계산] = SMILES 그래프에서 자동 산출 · [문헌] = 대표 참고값(조건에 따라 변동) · [사용자 입력] =
+            직접 편집값(문헌값보다 우선) · [규칙] = 화학 규칙 기반 추론(가설). DFT 계산과 무관한 백과 정보로,
+            물성 비교·보고서에는 포함되지 않습니다.
           </div>
         </section>
       </div>
