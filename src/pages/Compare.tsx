@@ -2,15 +2,18 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import type { Nav } from '../App'
 import {
+  ActiveMaterialPicker,
   EnergyLevelDiagram,
   FingerprintRadar,
   HomoLumoChart,
   Legend,
   SurfaceAdhesionBars,
   VoltageWindowChart,
+  refsByIds,
   seriesColor,
   type SeriesEntry,
 } from '../charts'
+import { DEFAULT_REF_IDS } from '../data/activeMaterials'
 import { DESCRIPTORS, SCREENING_RADAR_PRESET, descriptorByKey } from '../data/descriptors'
 import { EXTERNAL_REFS } from '../data/externalRefs'
 
@@ -19,6 +22,7 @@ export function Compare({ go }: Nav) {
   const store = useStore()
   const { materials, compareIds, pins, showOverlay, dispatch, materialById, latestPublished, solventById } = store
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
+  const [refIds, setRefIds] = useState<string[]>(DEFAULT_REF_IDS)
 
   const candidates = materials.filter((m) => latestPublished(m.id))
 
@@ -163,7 +167,8 @@ export function Compare({ go }: Nav) {
             <div className="card-head">
               <h2>전기화학 안정 전압 범위 (공통 축)</h2>
             </div>
-            <VoltageWindowChart entries={allEntries} />
+            <ActiveMaterialPicker selected={refIds} onChange={setRefIds} />
+            <VoltageWindowChart entries={allEntries} refs={refsByIds(refIds)} />
             <Legend entries={allEntries} />
           </section>
 
@@ -181,9 +186,9 @@ export function Compare({ go }: Nav) {
                 </div>
               </div>
               {orbitalView === 'range' ? (
-                <HomoLumoChart entries={allEntries} />
+                <HomoLumoChart entries={allEntries} refs={refsByIds(refIds)} />
               ) : (
-                <EnergyLevelDiagram entries={entries} />
+                <EnergyLevelDiagram entries={entries} refs={refsByIds(refIds)} />
               )}
               <Legend entries={orbitalView === 'range' ? allEntries : entries} />
             </section>

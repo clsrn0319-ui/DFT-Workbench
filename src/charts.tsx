@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import type { DescriptorValue } from './types'
 import { descriptorByKey } from './data/descriptors'
+import { ACTIVE_MATERIALS, fermiEv, type ActiveMaterialRef } from './data/activeMaterials'
 
 // 시리즈 색은 테마 CSS 변수(--series-N)를 사용 — 사용자 설정에 즉시 반영 (기획서 14)
 export const seriesColor = (i: number) => `var(--series-${(i % 8) + 1})`
@@ -31,6 +32,37 @@ function useTip() {
   return { show, hide, node }
 }
 
+// 활물질 기준 선택 칩 (전압 밴드·페르미 준위선 표시 대상)
+export function ActiveMaterialPicker({
+  selected,
+  onChange,
+}: {
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const toggle = (id: string) =>
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
+  return (
+    <div className="ref-picker">
+      <span className="small muted">활물질 기준:</span>
+      {ACTIVE_MATERIALS.map((m) => (
+        <button
+          key={m.id}
+          className={`ref-chip ${m.role === '음극' ? 'anode' : 'cathode'} ${selected.includes(m.id) ? 'on' : ''}`}
+          title={`${m.note} · ${m.vMin}~${m.vMax} V vs Li/Li⁺`}
+          onClick={() => toggle(m.id)}
+        >
+          {m.name}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function refsByIds(ids: string[]): ActiveMaterialRef[] {
+  return ACTIVE_MATERIALS.filter((m) => ids.includes(m.id))
+}
+
 export function Legend({ entries }: { entries: SeriesEntry[] }) {
   if (entries.length < 2) return null
   return (
@@ -50,7 +82,13 @@ export function Legend({ entries }: { entries: SeriesEntry[] }) {
 }
 
 // ── 전기화학 안정 전압 범위 (기획서 6.3: 기본 축 0~6 V 수평 막대) ──
-export function VoltageWindowChart({ entries }: { entries: SeriesEntry[] }) {
+export function VoltageWindowChart({
+  entries,
+  refs = [],
+}: {
+  entries: SeriesEntry[]
+  refs?: ActiveMaterialRef[]
+}) {
   const tip = useTip()
   const rows = entries.filter(
     (e) => e.values.binder_reduction_potential || e.values.binder_oxidation_potential,
@@ -67,7 +105,7 @@ export function VoltageWindowChart({ entries }: { entries: SeriesEntry[] }) {
   const W = 640
   const rowH = 40
   const padL = 110
-  const padT = 26
+  const padT = refs.length ? 52 : 26
   const H = padT + rows.length * rowH + 28
   const plotW = W - padL - 20
   const x = (v: number) => padL + ((v - min) / (max - min)) * plotW
@@ -89,6 +127,26 @@ export function VoltageWindowChart({ entries }: { entries: SeriesEntry[] }) {
         <text x={W - 20} y={14} className="axis-label" textAnchor="end">
           V vs 기준전극
         </text>
+        {refs.map((m, ri) => {
+          const bx1 = x(m.vMin)
+          const bx2 = x(m.vMax)
+          const color = m.role === '음극' ? 'var(--accent)' : 'var(--pin)'
+          const labelY = ri % 2 === 0 ? 22 : 36
+          return (
+            <g
+              key={m.id}
+              onMouseMove={(ev) => tip.show(ev, `${m.name} (${m.role}): ${m.vMin}~${m.vMax} V vs Li/Li⁺ — ${m.note}`)}
+              onMouseLeave={tip.hide}
+            >
+              <rect x={bx1} y={padT} width={Math.max(bx2 - bx1, 2)} height={H - 26 - padT} fill={color} opacity={0.1} />
+              <line x1={bx1} x2={bx1} y1={padT} y2={H - 26} stroke={color} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+              <line x1={bx2} x2={bx2} y1={padT} y2={H - 26} stroke={color} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+              <text x={(bx1 + bx2) / 2} y={labelY} textAnchor="middle" fontSize={10} fill={color}>
+                {m.name}
+              </text>
+            </g>
+          )
+        })}
         {rows.map((e, i) => {
           const red = e.values.binder_reduction_potential?.value
           const ox = e.values.binder_oxidation_potential?.value
@@ -142,25 +200,36 @@ export function VoltageWindowChart({ entries }: { entries: SeriesEntry[] }) {
         })}
       </svg>
       {tip.node}
-      <div className="chart-note">왼쪽 = 환원 한계, 오른쪽 = 산화 한계, 막대 = 안정 구간 (동일 기준 전극)</div>
+      <div className="chart-note">
+        왼쪽 = 환원 한계, 오른쪽 = 산화 한계, 막대 = 안정 구간 (동일 기준 전극)
+        {refs.length > 0 &&
+          ' · 세로 밴드 = 활물질 작동 전위 (틸=음극, 앰버=양극) — 바인더 안정 창이 밴드를 덮어야 해당 전극에서 안정'}
+      </div>
     </div>
   )
 }
 
 // ── HOMO/LUMO 공통 축 range bar (기획서 6.3: 기본 축 -8~1 eV) ────
-export function HomoLumoChart({ entries }: { entries: SeriesEntry[] }) {
+export function HomoLumoChart({
+  entries,
+  refs = [],
+}: {
+  entries: SeriesEntry[]
+  refs?: ActiveMaterialRef[]
+}) {
   const tip = useTip()
   const rows = entries.filter((e) => e.values.binder_homo && e.values.binder_lumo)
   if (!rows.length) return null
 
   const allE = rows.flatMap((e) => [e.values.binder_homo.value, e.values.binder_lumo.value])
-  const min = Math.min(-8, Math.floor(Math.min(...allE)))
+  const refE = refs.map((m) => fermiEv(m.role === '음극' ? m.vMin : m.vMax))
+  const min = Math.min(-8, Math.floor(Math.min(...allE, ...(refE.length ? refE : [0]))))
   const max = Math.max(1, Math.ceil(Math.max(...allE)))
 
   const W = 640
   const rowH = 40
   const padL = 110
-  const padT = 26
+  const padT = refs.length ? 52 : 26
   const H = padT + rows.length * rowH + 28
   const plotW = W - padL - 20
   const x = (v: number) => padL + ((v - min) / (max - min)) * plotW
@@ -182,6 +251,26 @@ export function HomoLumoChart({ entries }: { entries: SeriesEntry[] }) {
         <text x={W - 20} y={14} className="axis-label" textAnchor="end">
           eV
         </text>
+        {refs.map((m, ri) => {
+          const v = m.role === '음극' ? m.vMin : m.vMax
+          const ex = x(fermiEv(v))
+          const color = m.role === '음극' ? 'var(--accent)' : 'var(--pin)'
+          const labelY = ri % 2 === 0 ? 22 : 36
+          return (
+            <g
+              key={m.id}
+              onMouseMove={(ev) =>
+                tip.show(ev, `${m.name} μ ≈ ${fermiEv(v).toFixed(2)} eV (${v} V vs Li/Li⁺, ${m.role})`)
+              }
+              onMouseLeave={tip.hide}
+            >
+              <line x1={ex} x2={ex} y1={padT} y2={H - 26} stroke={color} strokeWidth={1.6} strokeDasharray="5 4" opacity={0.75} />
+              <text x={ex} y={labelY} textAnchor="middle" fontSize={10} fill={color}>
+                {m.name}
+              </text>
+            </g>
+          )
+        })}
         {rows.map((e, i) => {
           const homo = e.values.binder_homo.value
           const lumo = e.values.binder_lumo.value
@@ -222,7 +311,11 @@ export function HomoLumoChart({ entries }: { entries: SeriesEntry[] }) {
         })}
       </svg>
       {tip.node}
-      <div className="chart-note">왼쪽 끝 = HOMO, 오른쪽 끝 = LUMO, 막대 길이 = gap (전자구조 경향 보조 지표)</div>
+      <div className="chart-note">
+        왼쪽 끝 = HOMO, 오른쪽 끝 = LUMO, 막대 길이 = gap (전자구조 경향 보조 지표)
+        {refs.length > 0 &&
+          ' · 점선 = 전극 페르미 준위 근사 μ ≈ -(1.44 + V) eV — LUMO가 음극 준위보다 낮으면 환원, HOMO가 양극 준위보다 높으면 산화 위험'}
+      </div>
     </div>
   )
 }
@@ -331,7 +424,13 @@ export function FingerprintRadar({
 }
 
 // ── 에너지 준위 다이어그램 (세로형: 실선 HOMO · 점선 LUMO · 밴드갭) ──
-export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
+export function EnergyLevelDiagram({
+  entries,
+  refs = [],
+}: {
+  entries: SeriesEntry[]
+  refs?: ActiveMaterialRef[]
+}) {
   const tip = useTip()
   const rows = entries.filter((e) => e.values.binder_homo && e.values.binder_lumo && !e.overlay)
   if (!rows.length) return null
@@ -341,12 +440,13 @@ export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
   const padL = 46
   const padT = 26
   const padB = 30
-  const plotW = W - padL - 14
+  const plotW = W - padL - (refs.length ? 96 : 14)
   const plotH = H - padT - padB
 
   const all = rows.flatMap((e) => [e.values.binder_homo.value, e.values.binder_lumo.value])
+  const refE = refs.map((m) => fermiEv(m.role === '음극' ? m.vMin : m.vMax))
   const maxV = Math.ceil(Math.max(...all, 1) + 0.5)
-  const minV = Math.floor(Math.min(...all, -1) - 0.5)
+  const minV = Math.floor(Math.min(...all, ...(refE.length ? refE : [-1]), -1) - 0.5)
   const y = (v: number) => padT + ((maxV - v) / (maxV - minV)) * plotH
 
   const colW = plotW / rows.length
@@ -359,7 +459,7 @@ export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="HOMO LUMO 에너지 준위 다이어그램">
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={padL} x2={W - 14} y1={y(t)} y2={y(t)} className="gridline" />
+            <line x1={padL} x2={padL + plotW} y1={y(t)} y2={y(t)} className="gridline" />
             <text x={padL - 8} y={y(t) + 4} className="axis-label" textAnchor="end">
               {t}
             </text>
@@ -368,6 +468,25 @@ export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
         <text x={14} y={14} className="axis-label">
           eV
         </text>
+        {refs.map((m) => {
+          const v = m.role === '음극' ? m.vMin : m.vMax
+          const ey = y(fermiEv(v))
+          const color = m.role === '음극' ? 'var(--accent)' : 'var(--pin)'
+          return (
+            <g
+              key={m.id}
+              onMouseMove={(ev) =>
+                tip.show(ev, `${m.name} μ ≈ ${fermiEv(v).toFixed(2)} eV (${v} V vs Li/Li⁺, ${m.role})`)
+              }
+              onMouseLeave={tip.hide}
+            >
+              <line x1={padL} x2={padL + plotW} y1={ey} y2={ey} stroke={color} strokeWidth={1.6} strokeDasharray="5 4" opacity={0.75} />
+              <text x={padL + plotW + 6} y={ey + 3.5} fontSize={10} fill={color}>
+                {m.name}
+              </text>
+            </g>
+          )
+        })}
         {rows.map((e, i) => {
           const homo = e.values.binder_homo.value
           const lumo = e.values.binder_lumo.value
@@ -412,7 +531,10 @@ export function EnergyLevelDiagram({ entries }: { entries: SeriesEntry[] }) {
         })}
       </svg>
       {tip.node}
-      <div className="chart-note">실선 = HOMO · 점선 = LUMO · 세로 점선 = 밴드갭 (전자구조 경향 보조 지표)</div>
+      <div className="chart-note">
+        실선 = HOMO · 점선 = LUMO · 세로 점선 = 밴드갭
+        {refs.length > 0 && ' · 가로 점선 = 전극 페르미 준위 근사 (틸=음극, 앰버=양극)'}
+      </div>
     </div>
   )
 }

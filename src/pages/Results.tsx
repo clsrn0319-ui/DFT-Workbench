@@ -3,12 +3,15 @@ import { useStore } from '../store'
 import type { PageId } from '../App'
 import type { CalcJob } from '../types'
 import {
+  ActiveMaterialPicker,
   EnergyLevelDiagram,
   HomoLumoChart,
   SurfaceAdhesionBars,
   VoltageWindowChart,
+  refsByIds,
   seriesColor,
 } from '../charts'
+import { DEFAULT_REF_IDS } from '../data/activeMaterials'
 import { descriptorByKey } from '../data/descriptors'
 import { StatusBadge, fmtDate } from '../ui'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
@@ -22,6 +25,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
   const [colorMode, setColorMode] = useState<ColorMode>('cpk')
+  const [refIds, setRefIds] = useState<string[]>(DEFAULT_REF_IDS)
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -186,8 +190,10 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
               </div>
               {d.binder_oxidation_potential && d.binder_reduction_potential ? (
                 <>
+                  <ActiveMaterialPicker selected={refIds} onChange={setRefIds} />
                   <VoltageWindowChart
                     entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                    refs={refsByIds(refIds)}
                   />
                   <div className="mini-cards">
                     <div className="mini-card">
@@ -236,10 +242,12 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
               {orbitalView === 'range' ? (
                 <HomoLumoChart
                   entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                  refs={refsByIds(refIds)}
                 />
               ) : (
                 <EnergyLevelDiagram
                   entries={[{ label: material.name.split(' ')[0], color: seriesColor(0), values: d }]}
+                  refs={refsByIds(refIds)}
                 />
               )}
               <div className="chart-note">

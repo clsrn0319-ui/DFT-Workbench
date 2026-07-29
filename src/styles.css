@@ -1106,3 +1106,34 @@ details.expert summary {
   border-radius: 3px;
   display: inline-block;
 }
+
+/* ── 활물질 기준 칩 ─────────────────────────────────────────────── */
+.ref-picker {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.ref-chip {
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.ref-chip.anode.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.ref-chip.cathode.on {
+  border-color: var(--pin);
+  color: var(--pin);
+  background: color-mix(in srgb, var(--pin) 10%, transparent);
+}
