@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { StoreProvider } from './store'
+import { useEffect, useState } from 'react'
+import { StoreProvider, useStore } from './store'
 import { Dashboard } from './pages/Dashboard'
 import { Library } from './pages/Library'
 import { MaterialDetail } from './pages/MaterialDetail'
@@ -54,6 +54,15 @@ const NAV: { group: string; items: { id: PageId; label: string }[] }[] = [
 ]
 
 export default function App() {
+  return (
+    <StoreProvider>
+      <Shell />
+    </StoreProvider>
+  )
+}
+
+function Shell() {
+  const { appName, appSubtitle } = useStore()
   const [page, setPage] = useState<PageId>('dashboard')
   const [materialId, setMaterialId] = useState<string | null>(null)
 
@@ -62,15 +71,18 @@ export default function App() {
     setPage(p)
   }
 
+  useEffect(() => {
+    document.title = `${appName} — ${appSubtitle}`
+  }, [appName, appSubtitle])
+
   return (
-    <StoreProvider>
       <div className="layout">
         <aside className="sidebar">
           <div className="brand">
             <span className="brand-mark">⌬</span>
             <div>
-              <div className="brand-title">BINDER SCREENING</div>
-              <div className="brand-sub">분자 물성 · DFT 워크벤치</div>
+              <div className="brand-title">{appName}</div>
+              <div className="brand-sub">{appSubtitle}</div>
             </div>
           </div>
           <nav>
@@ -108,6 +120,5 @@ export default function App() {
           {page === 'settings' && <Settings />}
         </main>
       </div>
-    </StoreProvider>
   )
 }

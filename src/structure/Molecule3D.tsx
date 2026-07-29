@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CPK, VDW, buildMolGraph } from './molGraph'
+import { CPK, VDW, buildMolGraph, type MolGraph } from './molGraph'
 import { useStore } from '../store'
 
 export type ColorMode = 'cpk' | 'charge'
@@ -10,10 +10,12 @@ export function Molecule3D({
   smiles,
   colorMode,
   height = 260,
+  graphOverride,
 }: {
   smiles: string
   colorMode: ColorMode
   height?: number
+  graphOverride?: MolGraph | null
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { theme } = useStore()
@@ -26,7 +28,7 @@ export function Molecule3D({
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const mol = buildMolGraph(smiles)
+    const mol = graphOverride ?? buildMolGraph(smiles)
     if (!mol) {
       setFailed(true)
       return
@@ -178,7 +180,7 @@ export function Molecule3D({
       canvas.removeEventListener('pointerup', onUp)
       canvas.removeEventListener('wheel', onWheel)
     }
-  }, [smiles, colorMode, theme])
+  }, [smiles, colorMode, theme, graphOverride])
 
   if (failed) {
     return <div className="empty small">3D 구조를 생성할 수 없는 SMILES입니다: {smiles}</div>

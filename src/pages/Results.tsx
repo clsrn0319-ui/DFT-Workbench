@@ -15,6 +15,7 @@ import { DEFAULT_REF_IDS } from '../data/activeMaterials'
 import { descriptorByKey } from '../data/descriptors'
 import { StatusBadge, fmtDate } from '../ui'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
+import { ConformerExplorer } from '../structure/ConformerExplorer'
 import { calcHint } from './Calc'
 
 // 기획서 4.6 — 물질별 DFT 계산 결과 (우선순위 1~13 중 프론트 범위)
@@ -26,6 +27,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
   const [colorMode, setColorMode] = useState<ColorMode>('cpk')
   const [refIds, setRefIds] = useState<string[]>(DEFAULT_REF_IDS)
+  const [structView, setStructView] = useState<'opt' | 'conformer'>('opt')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -271,25 +273,43 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
           <section className="card">
             <div className="card-head">
               <h2>5. 최적화 3D 구조 · 물성 시각화</h2>
-              <div className="seg">
-                <button className={colorMode === 'cpk' ? 'on' : ''} onClick={() => setColorMode('cpk')}>
-                  원소 (CPK)
-                </button>
-                <button className={colorMode === 'charge' ? 'on' : ''} onClick={() => setColorMode('charge')}>
-                  부분전하 · MEP
-                </button>
+              <div className="row-actions">
+                <div className="seg">
+                  <button className={structView === 'opt' ? 'on' : ''} onClick={() => setStructView('opt')}>
+                    최적 구조
+                  </button>
+                  <button className={structView === 'conformer' ? 'on' : ''} onClick={() => setStructView('conformer')}>
+                    Conformer 탐색
+                  </button>
+                </div>
+                {structView === 'opt' && (
+                  <div className="seg">
+                    <button className={colorMode === 'cpk' ? 'on' : ''} onClick={() => setColorMode('cpk')}>
+                      원소 (CPK)
+                    </button>
+                    <button className={colorMode === 'charge' ? 'on' : ''} onClick={() => setColorMode('charge')}>
+                      부분전하 · MEP
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
-            <Molecule3D smiles={material.smiles} colorMode={colorMode} height={300} />
-            <div className="chart-note">
-              구조 출처:{' '}
-              {job.baseJobId
-                ? `1단계 최적화 결과 ${job.baseJobId}에서 로드`
-                : `이 작업(${job.id})의 구조 최적화 결과`}
-              {colorMode === 'charge' &&
-                d.binder_meps_min_negative &&
-                ` · MEP 극값: ${d.binder_meps_min_negative.value} ~ ${d.binder_meps_max_positive?.value} kcal/mol`}
-            </div>
+            {structView === 'opt' ? (
+              <>
+                <Molecule3D smiles={material.smiles} colorMode={colorMode} height={300} />
+                <div className="chart-note">
+                  구조 출처:{' '}
+                  {job.baseJobId
+                    ? `1단계 최적화 결과 ${job.baseJobId}에서 로드`
+                    : `이 작업(${job.id})의 구조 최적화 결과`}
+                  {colorMode === 'charge' &&
+                    d.binder_meps_min_negative &&
+                    ` · MEP 극값: ${d.binder_meps_min_negative.value} ~ ${d.binder_meps_max_positive?.value} kcal/mol`}
+                </div>
+              </>
+            ) : (
+              <ConformerExplorer smiles={material.smiles} />
+            )}
           </section>
 
           <section className="card">

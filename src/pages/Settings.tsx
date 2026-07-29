@@ -6,7 +6,7 @@ import { Field } from '../ui'
 
 // 기획서 14 — 사용자 정의 시각화·색상 시스템
 export function Settings() {
-  const { theme, dispatch } = useStore()
+  const { theme, appName, appSubtitle, dispatch } = useStore()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const set = (patch: Partial<ThemeTokens>) => dispatch({ type: 'setTheme', theme: { ...theme, ...patch } })
@@ -52,10 +52,35 @@ export function Settings() {
         </p>
       </header>
 
+      <section className="card">
+        <div className="card-head">
+          <h2>워크스페이스 이름</h2>
+          <span className="muted small">사이드바 상단과 브라우저 탭 제목에 즉시 반영됩니다</span>
+        </div>
+        <div className="form-grid">
+          <Field label="앱 이름">
+            <input
+              className="input"
+              value={appName}
+              onChange={(e) => dispatch({ type: 'setAppName', name: e.target.value, subtitle: appSubtitle })}
+              placeholder="BINDER SCREENING"
+            />
+          </Field>
+          <Field label="부제">
+            <input
+              className="input"
+              value={appSubtitle}
+              onChange={(e) => dispatch({ type: 'setAppName', name: appName, subtitle: e.target.value })}
+              placeholder="분자 물성 · DFT 워크벤치"
+            />
+          </Field>
+        </div>
+      </section>
+
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
-            <h2>워크스페이스</h2>
+            <h2>워크스페이스 색상</h2>
           </div>
           <div className="form-grid">
             <Field label="모드">

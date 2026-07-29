@@ -17,6 +17,17 @@ import { BUILTIN_SOLVENTS, bumpVersion } from './data/solvents'
 import { buildResult, progressStep, stageFor } from './engine/mockDft'
 import { DEFAULT_THEME, applyTheme } from './theme'
 
+export const DASHBOARD_WIDGETS = [
+  { id: 'stats', label: '요약 타일' },
+  { id: 'quick', label: '빠른 실행 · 워크플로우' },
+  { id: 'recent-materials', label: '최근 본 물질' },
+  { id: 'recent-jobs', label: '최근 활동' },
+  { id: 'compare-set', label: '비교 세트 요약' },
+  { id: 'server', label: '서버 상태' },
+] as const
+
+const DEFAULT_WIDGETS = ['stats', 'quick', 'recent-materials', 'recent-jobs', 'server']
+
 interface State {
   materials: Material[]
   solvents: SolventPreset[]
@@ -26,6 +37,9 @@ interface State {
   recent: string[] // 최근 본 물질 id
   compareIds: string[] // 비교 세트 (최대 8)
   showOverlay: boolean // 참고 오버레이 표시
+  appName: string // 워크스페이스 이름 (사용자 변경 가능)
+  appSubtitle: string
+  dashboardWidgets: string[] // 대시보드 위젯 순서·표시 목록
 }
 
 type Action =
@@ -46,6 +60,8 @@ type Action =
   | { type: 'toggleCompare'; id: string }
   | { type: 'setCompare'; ids: string[] }
   | { type: 'setOverlay'; show: boolean }
+  | { type: 'setAppName'; name: string; subtitle: string }
+  | { type: 'setWidgets'; ids: string[] }
 
 const STORAGE_KEY = 'dft-workbench-v4'
 
@@ -83,6 +99,9 @@ function initialState(): State {
     recent: [],
     compareIds: [],
     showOverlay: false,
+    appName: 'BINDER SCREENING',
+    appSubtitle: '분자 물성 · DFT 워크벤치',
+    dashboardWidgets: DEFAULT_WIDGETS,
   }
 }
 
@@ -225,6 +244,10 @@ function reducer(state: State, action: Action): State {
       return { ...state, compareIds: action.ids.slice(0, 8) }
     case 'setOverlay':
       return { ...state, showOverlay: action.show }
+    case 'setAppName':
+      return { ...state, appName: action.name || 'BINDER SCREENING', appSubtitle: action.subtitle }
+    case 'setWidgets':
+      return { ...state, dashboardWidgets: action.ids }
     case 'tick': {
       let changed = false
       let jobs = state.jobs.map((j) => {

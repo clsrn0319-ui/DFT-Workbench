@@ -234,3 +234,42 @@ export const VDW: Record<string, number> = {
   Na: 0.5,
   K: 0.55,
 }
+
+// ── Conformer 탐색 시뮬레이션 ───────────────────────────────────
+// conformer i (1..N)의 상대 에너지(kcal/mol)와 변형 구조를 결정론적으로 생성.
+// 에너지가 낮을수록 기준(이완) 구조에 가까운 좌표를 갖는다.
+
+export function conformerEnergy(smiles: string, i: number): number {
+  return +(0.4 + rand01(`${smiles}|conf${i}|E`) * 7.6).toFixed(2)
+}
+
+export function bestConformerAmong(smiles: string, n: number): { index: number; energy: number } {
+  let best = { index: 1, energy: conformerEnergy(smiles, 1) }
+  for (let i = 2; i <= n; i++) {
+    const e = conformerEnergy(smiles, i)
+    if (e < best.energy) best = { index: i, energy: e }
+  }
+  return best
+}
+
+function rand01(seed: string): number {
+  return (hash(seed) % 100000) / 100000
+}
+
+export function buildConformerGraph(smiles: string, confIdx: number): MolGraph | null {
+  const base = buildMolGraph(smiles)
+  if (!base) return null
+  const e = conformerEnergy(smiles, confIdx)
+  const amp = (e / 8) * 0.9 // 고에너지 conformer일수록 기준 구조에서 크게 벗어남
+  const atoms = base.atoms.map((a, i) => {
+    const r = (tag: string) => (hash(`${smiles}|c${confIdx}|${i}|${tag}`) % 100) / 100 - 0.5
+    const f = a.isH ? 1.3 : 0.8
+    return {
+      ...a,
+      x: a.x + r('x') * amp * f * 0.5,
+      y: a.y + r('y') * amp * f * 0.5,
+      z: a.z + r('z') * amp * f * 1.2,
+    }
+  })
+  return { atoms, bonds: base.bonds }
+}
