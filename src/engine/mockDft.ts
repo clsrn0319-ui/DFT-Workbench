@@ -1,5 +1,6 @@
 import type { CalcResult, CalcSettings, DescriptorValue } from '../types'
 import { DICTIONARY } from '../data/dictionary'
+import { buildMolGraph } from '../structure/molGraph'
 
 // ── 프로토타입 모의 계산 엔진 ───────────────────────────────────
 // 기획서 13장의 파이프라인(FastAPI + RDKit/xTB/PySCF/CP2K + 검증 게이트)을
@@ -119,6 +120,22 @@ export function computeDescriptors(
   const nboCharge = 0.18 + rand01(seed + 'nbo') * 0.45
   const dgSolv = eps > 0 ? -(2 + dipole * 3.5 + base.hba * 2.5) * eps + jit('sv', 2) : null
 
+  // ── 구조·열역학·분광·반응성·자기 (dft_information 문서 범주) ──
+  const g = buildMolGraph(smiles)
+  const nH = g ? g.atoms.filter((a) => a.isH).length : 4
+  const nHeavy = g ? g.atoms.length - nH : 5
+  const totalEnergy = -(nHeavy * 45 + nH * 0.6) * bs + jit('te', 0.02) // Hartree 근사
+  const zpe = nH * 27 + nHeavy * 13 + jit('zpe', 4) // kJ/mol
+  const entropy = 200 + nHeavy * 14 + nH * 6 + jit('S', 8) // J/mol·K
+  const gibbsCorr = zpe + 12 - (s.temperature * entropy) / 1000 + jit('gc', 3) // kJ/mol
+  const lowestFreq = 45 + rand01(seed + 'lf') * 160 // cm⁻¹ (양수 = 극소점)
+  const uvLambda = 1240 / Math.max(gap, 0.5) // nm (λ ≈ 1240/gap)
+  const chi = (vip + vea) / 2 // 전기음성도 χ
+  const eta = Math.max((vip - vea) / 2, 0.5) // 화학적 경도 η
+  const omega = (chi * chi) / (2 * eta) // 친전자성 지수 ω
+  const bde = 270 + rand01(seed + 'bde') * 130 - (base.hbd > 0 ? 15 : 0) // kJ/mol
+  const magSus = -(15 + (nHeavy * 12 + nH * 2) * 0.55) + jit('ms', 3) // 10⁻⁶ cm³/mol (반자성)
+
   // 활물질 표면 흡착에너지 (kJ/mol, 표면 모델 고정 전제의 보기용 보조값)
   const adhGraphite = -(12 + base.alpha * 0.35) + jit('ag', 3)
   const adhNmc = -(18 + Math.abs(mepMin) * 1.1 + base.hbd * 8) + jit('an2', 3)
@@ -131,6 +148,16 @@ export function computeDescriptors(
     binder_adhesion_nmc811: { value: r(adhNmc, 1), unit: 'kJ/mol' },
     binder_adhesion_lfp: { value: r(adhLfp, 1), unit: 'kJ/mol' },
     ...(dgSolv !== null ? { binder_solvation_free_energy: { value: r(dgSolv, 1), unit: 'kJ/mol' } } : {}),
+    binder_total_energy: { value: r(totalEnergy, 4), unit: 'Hartree' },
+    binder_zpe: { value: r(zpe, 1), unit: 'kJ/mol' },
+    binder_entropy: { value: r(entropy, 1), unit: 'J/mol·K' },
+    binder_gibbs_correction: { value: r(gibbsCorr, 1), unit: 'kJ/mol' },
+    binder_lowest_frequency: { value: r(lowestFreq, 0), unit: 'cm⁻¹' },
+    binder_uv_lambda_max: { value: r(uvLambda, 0), unit: 'nm' },
+    binder_electrophilicity: { value: r(omega, 2), unit: 'eV' },
+    binder_chemical_hardness: { value: r(eta, 2), unit: 'eV' },
+    binder_bde_weakest: { value: r(bde, 0), unit: 'kJ/mol' },
+    binder_magnetic_susceptibility: { value: r(magSus, 1), unit: '10⁻⁶ cm³/mol' },
   }
   return {
     ...extras,
@@ -163,6 +190,14 @@ const STAGE1_KEYS = [
   'binder_meps_max_positive',
   'binder_meps_min_negative',
   'binder_nbo_charge_cationic_site',
+  // 구조 최적화 + 진동수 계산에서 함께 산출
+  'binder_total_energy',
+  'binder_zpe',
+  'binder_entropy',
+  'binder_gibbs_correction',
+  'binder_lowest_frequency',
+  'binder_uv_lambda_max',
+  'binder_magnetic_susceptibility',
 ]
 
 export function buildResult(

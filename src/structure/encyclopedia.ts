@@ -287,3 +287,28 @@ export function deriveTrends(groups: string[]): string[] {
   }
   return out
 }
+
+// 대표 결합 길이 (표준 문헌값, Å) — 구조 정보 표시용
+const BOND_LEN: Record<string, number> = {
+  'C–C': 1.54, 'C=C': 1.34, 'C≡C': 1.2, 'C–O': 1.43, 'C=O': 1.22, 'C–N': 1.47,
+  'C=N': 1.28, 'C≡N': 1.16, 'C–F': 1.35, 'C–Cl': 1.77, 'C–S': 1.82, 'C–H': 1.09,
+  'O–H': 0.96, 'N–H': 1.01, 'H–O': 0.96, 'H–N': 1.01, 'F–P': 1.6, 'Li–O': 1.9,
+}
+
+export function representativeBonds(smiles: string): { label: string; len?: number; n: number }[] {
+  const g = buildMolGraph(smiles)
+  if (!g) return []
+  const map = new Map<string, number>()
+  for (const b of g.bonds) {
+    const A = g.atoms[b.a].element
+    const B = g.atoms[b.b].element
+    const [e1, e2] = [A, B].sort()
+    const sym = b.order === 2 ? '=' : b.order === 3 ? '≡' : '–'
+    const label = `${e1}${sym}${e2}`
+    map.set(label, (map.get(label) ?? 0) + 1)
+  }
+  return [...map.entries()]
+    .map(([label, n]) => ({ label, len: BOND_LEN[label], n }))
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 6)
+}

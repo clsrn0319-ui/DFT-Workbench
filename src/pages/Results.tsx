@@ -16,6 +16,9 @@ import { descriptorByKey } from '../data/descriptors'
 import { StatusBadge, fmtDate } from '../ui'
 import { Molecule3D, type ColorMode } from '../structure/Molecule3D'
 import { ConformerExplorer } from '../structure/ConformerExplorer'
+import { InteractionExplorer } from '../structure/InteractionExplorer'
+import { IRUVSpectra } from '../structure/spectra'
+import { representativeBonds } from '../structure/encyclopedia'
 import { calcHint } from './Calc'
 
 // 기획서 4.6 — 물질별 DFT 계산 결과 (우선순위 1~13 중 프론트 범위)
@@ -27,7 +30,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
   const [orbitalView, setOrbitalView] = useState<'range' | 'diagram'>('range')
   const [colorMode, setColorMode] = useState<ColorMode>('cpk')
   const [refIds, setRefIds] = useState<string[]>(DEFAULT_REF_IDS)
-  const [structView, setStructView] = useState<'opt' | 'conformer'>('opt')
+  const [structView, setStructView] = useState<'opt' | 'conformer' | 'interaction'>('opt')
 
   useEffect(() => {
     if (materialId) setSelectedId(materialId)
@@ -272,7 +275,7 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
 
           <section className="card">
             <div className="card-head">
-              <h2>5. 최적화 3D 구조 · 물성 시각화</h2>
+              <h2>시각 요약 — 최적화 3D 구조</h2>
               <div className="row-actions">
                 <div className="seg">
                   <button className={structView === 'opt' ? 'on' : ''} onClick={() => setStructView('opt')}>
@@ -280,6 +283,9 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                   </button>
                   <button className={structView === 'conformer' ? 'on' : ''} onClick={() => setStructView('conformer')}>
                     Conformer 탐색
+                  </button>
+                  <button className={structView === 'interaction' ? 'on' : ''} onClick={() => setStructView('interaction')}>
+                    상호작용 · 거리
                   </button>
                 </div>
                 {structView === 'opt' && (
@@ -294,22 +300,93 @@ export function Results({ go, materialId }: { go: (p: PageId, mid?: string) => v
                 )}
               </div>
             </div>
-            {structView === 'opt' ? (
-              <>
-                <Molecule3D smiles={material.smiles} colorMode={colorMode} height={300} />
-                <div className="chart-note">
-                  구조 출처:{' '}
-                  {job.baseJobId
-                    ? `1단계 최적화 결과 ${job.baseJobId}에서 로드`
-                    : `이 작업(${job.id})의 구조 최적화 결과`}
-                  {colorMode === 'charge' &&
-                    d.binder_meps_min_negative &&
-                    ` · MEP 극값: ${d.binder_meps_min_negative.value} ~ ${d.binder_meps_max_positive?.value} kcal/mol`}
+            {structView === 'opt' && (
+              <div className="visual-hero">
+                <aside className="side-panel">
+                  <div className="option-title">구조 · 에너지</div>
+                  {representativeBonds(material.smiles).map((b) => (
+                    <div key={b.label} className="fact-kv">
+                      <span>
+                        {b.label} ×{b.n}
+                      </span>
+                      <b>{b.len ? `${b.len} Å` : '—'}</b>
+                    </div>
+                  ))}
+                  {(
+                    [
+                      ['binder_total_energy', 'E_elec'],
+                      ['binder_zpe', 'ZPE'],
+                      ['binder_gibbs_correction', 'G_corr(298K)'],
+                      ['binder_entropy', 'S°(298K)'],
+                      ['binder_lowest_frequency', '최저 진동수'],
+                      ['binder_bde_weakest', '최약 BDE'],
+                    ] as const
+                  )
+                    .filter(([k]) => d[k])
+                    .map(([k, label]) => (
+                      <div key={k} className="fact-kv">
+                        <span>{label}</span>
+                        <b>
+                          {d[k].value} {d[k].unit}
+                        </b>
+                      </div>
+                    ))}
+                  <div className="chart-note">결합 길이 = 표준 문헌값 (실측 좌표는 백엔드 연동 시)</div>
+                </aside>
+                <div>
+                  <Molecule3D smiles={material.smiles} colorMode={colorMode} height={380} />
+                  <div className="chart-note">
+                    구조 출처:{' '}
+                    {job.baseJobId
+                      ? `1단계 최적화 결과 ${job.baseJobId}에서 로드`
+                      : `이 작업(${job.id})의 구조 최적화 결과`}
+                    {colorMode === 'charge' &&
+                      d.binder_meps_min_negative &&
+                      ` · MEP 극값: ${d.binder_meps_min_negative.value} ~ ${d.binder_meps_max_positive?.value} kcal/mol`}
+                  </div>
                 </div>
-              </>
-            ) : (
-              <ConformerExplorer smiles={material.smiles} />
+                <aside className="side-panel">
+                  <div className="option-title">전자구조 · 반응성</div>
+                  {(
+                    [
+                      ['binder_homo', 'HOMO'],
+                      ['binder_lumo', 'LUMO'],
+                      ['binder_homo_lumo_gap', 'gap'],
+                      ['binder_uv_lambda_max', 'UV λmax'],
+                      ['binder_electrophilicity', '친전자성 ω'],
+                      ['binder_chemical_hardness', '경도 η'],
+                      ['binder_nbo_charge_cationic_site', 'NBO(+site)'],
+                      ['binder_magnetic_susceptibility', '자화율 χm'],
+                    ] as const
+                  )
+                    .filter(([k]) => d[k])
+                    .map(([k, label]) => (
+                      <div key={k} className="fact-kv">
+                        <span>{label}</span>
+                        <b>
+                          {d[k].value} {d[k].unit}
+                        </b>
+                      </div>
+                    ))}
+                  {d.binder_uv_lambda_max && (
+                    <div className="chart-note">
+                      {d.binder_uv_lambda_max.value < 380 ? 'λmax < 380 nm → 무색 예상' : '가시광 흡수 → 유색 가능'}
+                      {' · 반자성 (닫힌 껍질)'}
+                    </div>
+                  )}
+                </aside>
+              </div>
             )}
+            {structView === 'conformer' && <ConformerExplorer smiles={material.smiles} />}
+            {structView === 'interaction' && <InteractionExplorer smiles={material.smiles} descriptors={d} />}
+          </section>
+
+          <section className="card">
+            <div className="card-head">
+              <h2>분광 예측 (IR · UV-Vis)</h2>
+              <span className="muted small">작용기 특성 진동수 · TD-DFT 근사 — 예측값</span>
+            </div>
+            <IRUVSpectra smiles={material.smiles} gap={d.binder_homo_lumo_gap?.value} />
           </section>
 
           <section className="card">

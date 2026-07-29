@@ -592,6 +592,8 @@ function Encyclopedia({ material, groups }: { material: Material; groups: string
         </section>
       )}
 
+      <details className="expert" open>
+        <summary>1 · 2 — 조성과 구조 / 결합의 성질</summary>
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
@@ -676,6 +678,10 @@ function Encyclopedia({ material, groups }: { material: Material; groups: string
         </section>
       </div>
 
+      </details>
+
+      <details className="expert">
+        <summary>3 · 4 — 물리적 특성 / 반응성</summary>
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
@@ -735,6 +741,10 @@ function Encyclopedia({ material, groups }: { material: Material; groups: string
         </section>
       </div>
 
+      </details>
+
+      <details className="expert">
+        <summary>5 · 6 — 기타 특성 / 무기·배위화학 관점</summary>
       <div className="grid-2">
         <section className="card">
           <div className="card-head">
@@ -802,6 +812,7 @@ function Encyclopedia({ material, groups }: { material: Material; groups: string
           </div>
         </section>
       </div>
+      </details>
     </>
   )
 }
