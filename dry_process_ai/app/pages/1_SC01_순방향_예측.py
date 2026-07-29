@@ -56,7 +56,7 @@ with left:
     st.caption("용량·밀도·두께 중 둘을 지정하면 나머지는 자동 결정됩니다")
     cap = st.number_input("목표 면적당 용량 (mAh/cm²)", 0.5, 20.0, 5.0, 0.1)
     den = st.number_input("목표 합제밀도 (g/cc)", 1.0, 4.5, 3.2, 0.05)
-    foil = st.number_input("집전체 두께 (μm)", 5.0, 50.0, 15.0, 0.5)
+    foil = st.number_input("집전체 두께 (μm)", 5.0, 50.0, 16.0, 0.5)
     side = st.selectbox("도포", ["single", "double"])
     area = st.number_input("전극 면적 (cm², 절대량 환산용 — 선택)", 0.0, 10000.0, 0.0, 1.0)
     mc = st.slider("MC Dropout 반복", 10, 100, 30)

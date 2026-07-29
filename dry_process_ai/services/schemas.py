@@ -34,7 +34,7 @@ class CompositionInput(BaseModel):
 
 
 class CollectorInput(BaseModel):
-    foil_thickness_um: float = Field(ge=0, default=15.0, description="Al foil 두께")
+    foil_thickness_um: float = Field(ge=0, default=16.0, description="Al foil 두께")
     coating_side: str = Field(default="single", pattern="^(single|double)$")
 
     @property
