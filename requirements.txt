@@ -1,0 +1,8 @@
+pyscf>=2.14
+pyscf-dispersion   # D3(BJ)/D4 분산 보정
+rdkit>=2024.3      # SMILES → 3D conformer
+pyberny            # DFT 구조 최적화 (geomeTRIC 미설치 환경 폴백)
+# geometric        # 선택: 설치되면 우선 사용 (일부 Debian 환경에서 빌드 실패)
+fastapi
+uvicorn[standard]
+pydantic>=2
