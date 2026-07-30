@@ -12,6 +12,8 @@ from dry_process_ai.core.optimize.backward import (
     BackwardDesigner,
     BackwardResult,
     ObjectiveSpec,
+    SpecAdvice,
+    advise_density_adjustment,
     usable_strength_constraints,
 )
 from dry_process_ai.data_access.capability import build_capability
@@ -24,6 +26,7 @@ class BackwardResponse:
     strength_constraint_info: dict
     model_version: str
     train_lot_count: int
+    spec_advice: SpecAdvice | None = None  # AI 스펙 조정 제언 (지정 밀도 존재 시)
 
 
 def run_backward(
@@ -32,6 +35,7 @@ def run_backward(
     train_df: pd.DataFrame,
     request: BackwardRequest,
     train_lot_count: int,
+    user_target_density_gcc: float | None = None,
 ) -> BackwardResponse:
     capability = build_capability(session)
     designer = BackwardDesigner(predictor, capability, train_df)
@@ -46,9 +50,17 @@ def run_backward(
         n_bo_calls=request.n_bo_calls,
         top_k=request.top_k,
     )
+    # 지정 밀도가 있으면 무제약 최적점과 대조해 스펙 조정 제언 산출
+    density_target = user_target_density_gcc
+    if density_target is None:
+        for o in objectives:
+            if o.column == "electrode_density_gcc" and o.direction == "equal":
+                density_target = o.target
+    advice = advise_density_adjustment(result, objectives, density_target)
     return BackwardResponse(
         result=result,
         strength_constraint_info=usable_strength_constraints(train_df),
         model_version=predictor.model_version,
         train_lot_count=train_lot_count,
+        spec_advice=advice,
     )

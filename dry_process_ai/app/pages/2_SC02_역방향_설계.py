@@ -22,10 +22,12 @@ train_df = load_train_df()
 
 # ---- 자연어 목표 입력 (FB-01 확장, 오프라인 규칙 해석 — R7) ----
 st.subheader("자연어 목표 입력")
-nl_text = st.text_input(
-    "예: 전기전도도가 개선된 전극. 면적당 용량 5 mAh/cm², 합제밀도 3.2 g/cc",
-    key="nl_goal_text",
-)
+nl_text = st.text_input("의도 (예: 전기전도도 개선 전극)", key="nl_goal_text")
+c_spec1, c_spec2 = st.columns(2)
+with c_spec1:
+    nl_cap = st.number_input("Target 면적당 용량 (mAh/cm²)", 0.5, 20.0, 5.0, 0.1, key="nl_cap")
+with c_spec2:
+    nl_den = st.number_input("Target 합제밀도 (g/cc)", 1.0, 4.5, 3.2, 0.05, key="nl_den")
 if st.button("해석 후 탐색 실행") and nl_text.strip():
     from dry_process_ai.services.nl_goal import parse_natural_goal
 
@@ -35,14 +37,20 @@ if st.button("해석 후 탐색 실행") and nl_text.strip():
     if parsed.unrecognized:
         st.warning("해석 가능한 목표 키워드가 없습니다 — 아래에서 직접 지정하세요.")
     else:
-        request = BackwardRequest(
-            objectives=parsed.objectives,
-            target_areal_capacity_mah_cm2=parsed.target_areal_capacity_mah_cm2 or 5.0,
-        )
+        # 텍스트 수치가 있으면 우선, 없으면 Target 필드 사용
+        target_cap = parsed.target_areal_capacity_mah_cm2 or nl_cap
+        target_den = parsed.target_density_gcc or nl_den
+        objectives = list(parsed.objectives)
+        if not any(o.column == "electrode_density_gcc" for o in objectives):
+            from dry_process_ai.services.schemas import BackwardObjective
+            objectives.append(BackwardObjective(
+                column="electrode_density_gcc", direction="equal", weight=2.0, target=target_den))
+        request = BackwardRequest(objectives=objectives, target_areal_capacity_mah_cm2=target_cap)
         with st.spinner("해석된 목표로 조성-공정 공간 탐색 중..."):
             with db_session() as session:
                 st.session_state["backward_response"] = run_backward(
-                    session, predictor, train_df, request, train_lot_count)
+                    session, predictor, train_df, request, train_lot_count,
+                    user_target_density_gcc=target_den)
 st.divider()
 
 TARGETS = [
@@ -89,6 +97,9 @@ if run:
 
 response = st.session_state.get("backward_response")
 if response is not None:
+    if getattr(response, "spec_advice", None) is not None:
+        advice = response.spec_advice
+        (st.info if advice.direction == "유지" else st.warning)(f"🔎 {advice.message}")
     result = response.result
     # FB-07 간헐 측정 제약 안내
     for col, info in response.strength_constraint_info.items():

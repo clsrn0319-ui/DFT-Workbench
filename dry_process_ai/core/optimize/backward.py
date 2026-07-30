@@ -64,6 +64,87 @@ class BackwardResult:
     excluded_constraints: list[str] = field(default_factory=list)  # FB-07 사유
 
 
+@dataclass
+class SpecAdvice:
+    """AI 스펙 조정 제언 — 사용자 지정 스펙과 무제약 최적점의 괴리를 정량 보고.
+
+    사용자 입력을 임의로 바꾸지 않는다(FV 동작 원칙) — 지정 스펙 결과는 그대로
+    제시하고, 주 목표를 더 개선하는 스펙 방향이 있으면 득실과 함께 제언만 한다.
+    """
+
+    parameter: str            # 예: "합제밀도"
+    user_target: float
+    recommended: float
+    direction: str            # "증가" | "감소" | "유지"
+    primary_column: str | None
+    value_at_target: float | None      # 지정 스펙 최선 후보의 주 목표 예측값
+    value_at_recommended: float | None  # 무제약 최선 후보의 주 목표 예측값
+    message: str
+
+
+def advise_density_adjustment(
+    result: BackwardResult,
+    objectives: list[ObjectiveSpec],
+    user_target_density: float | None,
+    threshold_gcc: float = 0.05,
+) -> SpecAdvice | None:
+    """주 목표만으로 재순위화한 무제약 최적 밀도와 사용자 지정 밀도를 대조한다.
+
+    탐색은 밀도를 변수로 다루므로, 지정 밀도 equal 목표를 제외한 주 목표
+    점수만으로 최선 후보를 찾으면 「목표 개선에 유리한 밀도 방향」이 드러난다.
+    """
+    if not result.candidates or user_target_density is None:
+        return None
+    primary_idx = [
+        i for i, o in enumerate(objectives)
+        if o.column not in ("electrode_density_gcc",)
+    ]
+    if not primary_idx:
+        return None
+
+    def primary_score(cand: Candidate) -> float:
+        return sum(objectives[i].weight * cand.objectives[i] for i in primary_idx)
+
+    best = min(result.candidates, key=primary_score)
+    primary_col = objectives[primary_idx[0]].column
+    near_target = [
+        c for c in result.candidates
+        if abs(c.target_density_gcc - user_target_density) <= threshold_gcc
+    ]
+    at_target = min(near_target, key=primary_score) if near_target else None
+
+    diff = best.target_density_gcc - user_target_density
+    v_best = best.predictions.get(primary_col)
+    v_target = at_target.predictions.get(primary_col) if at_target else None
+
+    if abs(diff) <= threshold_gcc:
+        return SpecAdvice(
+            parameter="합제밀도", user_target=user_target_density,
+            recommended=user_target_density, direction="유지",
+            primary_column=primary_col, value_at_target=v_target, value_at_recommended=v_best,
+            message=(f"지정 합제밀도 {user_target_density:.2f} g/cc 가 주 목표 기준으로도 "
+                     f"최적 근방입니다 — 조정 불필요"),
+        )
+
+    direction = "증가" if diff > 0 else "감소"
+    gain = ""
+    if v_best is not None and v_target is not None and abs(v_target) > 1e-12:
+        pct = (v_best - v_target) / abs(v_target) * 100.0
+        gain = f" ({primary_col} {v_target:.4g} → {v_best:.4g}, {pct:+.1f}%)"
+    caution = (
+        " 밀도 상향은 달성 이력·스프링백 여유의 스펙 타당성 검증(FV) 대상입니다."
+        if diff > 0 else
+        " 밀도 하향 시 합제층 두께가 증가합니다 (동일 로딩 기준)."
+    )
+    return SpecAdvice(
+        parameter="합제밀도", user_target=user_target_density,
+        recommended=best.target_density_gcc, direction=direction,
+        primary_column=primary_col, value_at_target=v_target, value_at_recommended=v_best,
+        message=(f"AI 추천: 주 목표 개선을 위해 합제밀도 {direction}를 추천합니다 — "
+                 f"{user_target_density:.2f} → {best.target_density_gcc:.2f} g/cc{gain}.{caution}"),
+    )
+
+
 def _objective_values(predictions: dict[str, float], objectives: list[ObjectiveSpec]) -> list[float]:
     """FB-02 — 모든 방향을 '작을수록 좋음' 목적으로 변환."""
     vals = []

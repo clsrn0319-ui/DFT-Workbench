@@ -137,6 +137,15 @@ def build_capability(
     l2_cap = df.get("L2_areal_capacity_mah_cm2")
     if l2_cap is not None and l2_cap.dropna().size:
         cap.target_ranges["areal_capacity_mah_cm2"] = (float(l2_cap.min()), float(l2_cap.max()))
-    if all_density.size:
+    # 목표 합제밀도의 탐색·검증 범위는 「최종 전극」 밀도 이력 기준 —
+    # 중간 단계(밀링) 밀도를 포함하면 역방향 탐색이 비현실적 저밀도 최종
+    # 스펙을 후보로 삼게 된다.
+    final_only = df["electrode_density_gcc"].dropna()
+    l2_density = df.get("L2_composite_density_gcc")
+    l2_vals = l2_density.dropna() if l2_density is not None else pd.Series(dtype=float)
+    finals = pd.concat([final_only, l2_vals])
+    if not finals.empty:
+        cap.target_ranges["composite_density_gcc"] = (float(finals.min()), float(finals.max()))
+    elif all_density.size:
         cap.target_ranges["composite_density_gcc"] = (float(np.min(all_density)), float(np.max(all_density)))
     return cap
