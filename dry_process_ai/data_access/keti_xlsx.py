@@ -10,7 +10,7 @@
     - 장기 유지율: 분율(0.8) 표기 → % 환산 (백분율 혼용 기록은 그대로 사용)
     - 단계별 두께는 원본이 이미 합제층 기준이므로 composite_thickness_um 으로
       직접 적재한다 (집전체 두께 미기록 — 재차감 방지)
-Milling 의 이중 갭(M12/M23)은 단일 stage gap 으로 평균 처리한다.
+Milling(3-roll mill)의 이중 갭은 전단(M12)·후단(M23)으로 분리 기록한다 — 후단이 출구 두께 기준.
 """
 
 from __future__ import annotations
@@ -82,10 +82,19 @@ def parse_keti_workbook(path: str | Path, sheet_name: str = "Experiment Data") -
             d = _f(row, cols["d"])
             if t is None and d is None:
                 continue
-            gaps = [g for g in (_f(row, c) for c in cols["gaps"]) if g is not None]
+            gap_values = [_f(row, c) for c in cols["gaps"]]
             entry: dict[str, float] = {}
-            if gaps:
-                entry["gap_um"] = sum(gaps) / len(gaps)
+            if len(gap_values) == 2:
+                # 3-roll mill: 전단(M12)/후단(M23 — 출구 기준) 분리 기록
+                front, rear = gap_values
+                if rear is not None:
+                    entry["gap_um"] = rear
+                elif front is not None:
+                    entry["gap_um"] = front  # 후단 미기록 시 전단으로 대체
+                if front is not None:
+                    entry["gap_front_um"] = front
+            elif gap_values and gap_values[0] is not None:
+                entry["gap_um"] = gap_values[0]
             if t is not None:
                 entry["composite_thickness_um"] = t  # 원본이 합제층 기준 — 재차감 금지
             if d is not None:

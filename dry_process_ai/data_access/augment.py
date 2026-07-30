@@ -117,9 +117,13 @@ def generate_augmented_payloads(
             if src.gap_um and src.composite_thickness_um:
                 springback = src.composite_thickness_um / src.gap_um - 1.0
             gap = t / (1.0 + springback) if springback is not None else None
+            gap_front = None
+            if gap is not None and src.gap_front_um and src.gap_um:
+                gap_front = gap * (src.gap_front_um / src.gap_um)  # 앵커 M12/M23 비율 계승
 
             stages[s] = {
                 **({"gap_um": round(gap, 1)} if gap is not None else {}),
+                **({"gap_front_um": round(gap_front, 1)} if gap_front is not None else {}),
                 "composite_thickness_um": round(t, 2),
                 "composite_density_gcc": round(d, 4),
                 "loading_mg_cm2": round(physics.loading_mg_cm2(t, d), 3),

@@ -42,13 +42,14 @@ def _quantize_milling_gap(gap: float, thickness_um: float, step: float | None = 
 
 @dataclass
 class GapSchedule:
-    gaps_um: dict[str, float]
+    gaps_um: dict[str, float]                 # 후단 갭 (M23 / R·L 단일 갭) — 출구 두께 기준
     planned_thickness_um: dict[str, float]
     planned_density_gcc: dict[str, float]
     planned_loading_mg_cm2: dict[str, float]
     required_loading_mg_cm2: float
     final_thickness_um: float
     springback_ratio: float
+    gaps_front_um: dict[str, float] = field(default_factory=dict)  # 전단 갭 (M12, 3-roll Milling 전용)
     notes: list[str] = field(default_factory=list)
 
 
@@ -108,7 +109,7 @@ def search_gap_schedule(
         )
 
     loading_path = np.linspace(loading0, required_loading, n)
-    gaps, t_plan, d_plan, l_plan = {}, {}, {}, {}
+    gaps, fronts, t_plan, d_plan, l_plan = {}, {}, {}, {}, {}
     for k, stage in enumerate(stages):
         tk = thickness0 * (per_stage_ratio ** (k + 1))
         if k == n - 1:
@@ -123,12 +124,15 @@ def search_gap_schedule(
                 f"{stage} 필요 갭 {gap:.1f} μm < 설비 최소 갭 {capability.min_gap_um:.1f} μm (스프링백 여유 위반)"
             )
         gaps[stage] = round(gap, 1)
+        if stage.startswith("M"):
+            fronts[stage] = gaps[stage]  # 이력 비율 부재 — 전단 = 후단
         t_plan[stage] = round(tk, 2)
         d_plan[stage] = round(dk, 4)
         l_plan[stage] = round(lk, 3)
 
     return GapSchedule(
         gaps_um=gaps,
+        gaps_front_um=fronts,
         planned_thickness_um=t_plan,
         planned_density_gcc=d_plan,
         planned_loading_mg_cm2=l_plan,
@@ -154,7 +158,7 @@ def _profile_schedule(
     갭_k  = 두께_k ÷ (1 + 단계별 스프링백).
     """
     profile = capability.stage_profile
-    gaps, t_plan, d_plan, l_plan = {}, {}, {}, {}
+    gaps, fronts, t_plan, d_plan, l_plan = {}, {}, {}, {}, {}
     prev_t, prev_d = float("inf"), -float("inf")
     for k, stage in enumerate(stages):
         p = profile[stage]
@@ -187,6 +191,10 @@ def _profile_schedule(
                 f"{stage} 필요 갭 {gap:.1f} μm < 설비 최소 갭 {capability.min_gap_um:.1f} μm (스프링백 여유 위반)"
             )
         gaps[stage] = round(gap, 1)
+        if stage.startswith("M"):
+            # 3-roll mill 전단 갭(M12) — 이력 M12/M23 비율 계승, 10 μm 양자화, 전단 ≥ 후단
+            ratio = p.get("front_ratio") or 1.0
+            fronts[stage] = max(round(gap * ratio / 10.0) * 10.0, gap)
         t_plan[stage] = round(tk, 2)
         d_plan[stage] = round(dk, 4)
         l_plan[stage] = round(lk, 3)
@@ -203,6 +211,7 @@ def _profile_schedule(
 
     return GapSchedule(
         gaps_um=gaps,
+        gaps_front_um=fronts,
         planned_thickness_um=t_plan,
         planned_density_gcc=d_plan,
         planned_loading_mg_cm2=l_plan,
@@ -252,7 +261,7 @@ def recompute_gap_schedule(
         )
 
     loading_path = np.linspace(measured_loading_mg_cm2, required_loading, n)
-    gaps, t_plan, d_plan, l_plan = {}, {}, {}, {}
+    gaps, fronts, t_plan, d_plan, l_plan = {}, {}, {}, {}, {}
     for k, stage in enumerate(remaining):
         tk = measured_thickness_um * (per_stage_ratio ** (k + 1))
         if k == n - 1:
@@ -263,12 +272,16 @@ def recompute_gap_schedule(
         if stage.startswith("M"):  # Milling 갭 10 μm 분해능 (설정값만 양자화)
             gap = _quantize_milling_gap(gap, tk)
         gaps[stage] = round(gap, 1)
+        if stage.startswith("M"):
+            ratio = (capability.stage_profile.get(stage) or {}).get("front_ratio") or 1.0
+            fronts[stage] = max(round(gap * ratio / 10.0) * 10.0, gaps[stage])
         t_plan[stage] = round(tk, 2)
         d_plan[stage] = round(dk, 4)
         l_plan[stage] = round(lk, 3)
 
     return GapSchedule(
         gaps_um=gaps,
+        gaps_front_um=fronts,
         planned_thickness_um=t_plan,
         planned_density_gcc=d_plan,
         planned_loading_mg_cm2=l_plan,

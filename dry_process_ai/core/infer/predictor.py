@@ -107,6 +107,7 @@ class Predictor:
         features: pd.Series,
         active_material_fraction: float,
         gaps_um: dict[str, float] | None = None,
+        gaps_front_um: dict[str, float] | None = None,
         density_ceiling_gcc: float | None = None,
         n_samples: int = MC_DROPOUT_SAMPLES,
         seed: int | None = None,
@@ -148,6 +149,7 @@ class Predictor:
                 "composite_density_gcc": d,
                 "loading_mg_cm2": loading,
                 "gap_um": gaps_um.get(stage) if gaps_um else None,
+                "gap_front_um": gaps_front_um.get(stage) if gaps_front_um else None,
             })
             stage_values[stage] = {
                 "areal_capacity_mah_cm2": q,

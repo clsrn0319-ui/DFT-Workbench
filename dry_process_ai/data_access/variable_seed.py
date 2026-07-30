@@ -44,7 +44,10 @@ _SEED: list[tuple] = [
     ("cutting_time", "min", 0.0, 300.0, "input", "cutting", True, False, None, None),
     ("cutting_repeat", "count", 0.0, 20.0, "input", "cutting", True, False, None, None),
     # --- Milling / Rolling / Laminating 공통 (단계별, long) ---
-    ("gap_um", "μm", 0.0, 2000.0, "input", "stage", True, False, None, "단계별 롤 갭"),
+    ("gap_um", "μm", 0.0, 2000.0, "input", "stage", True, False, None,
+     "단계별 롤 갭 — Milling 은 후단 갭(M23, 출구 기준), R/L 은 단일 갭"),
+    ("gap_front_um", "μm", 0.0, 2000.0, "input", "stage", True, False, None,
+     "3-roll mill 전단 갭(M12) — Milling 전용, 10 μm 분해능"),
     ("stage_speed", "m/min", 0.0, 50.0, "input", "stage", True, False, None, None),
     ("stage_temp", "°C", 0.0, 200.0, "input", "stage", True, False, None, None),
     ("rolling_line_pressure", "kN", 0.0, 500.0, "input", "rolling", True, False, None, None),

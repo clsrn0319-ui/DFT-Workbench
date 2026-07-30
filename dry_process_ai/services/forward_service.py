@@ -144,6 +144,8 @@ def run_forward(
     if schedule:
         for stage, gap in schedule.gaps_um.items():
             conditions[f"gap_{stage}"] = gap
+        for stage, front in schedule.gaps_front_um.items():
+            conditions[f"gap_front_{stage}"] = front
 
     # ⑤ 피브릴화 보상 — Kneading 시간을 조성에 맞춰 조정
     if "kneader_time" in conditions and capability.lot_count > 0 and "kneader_time" in auto_filled:
@@ -162,6 +164,7 @@ def run_forward(
             features,
             active_material_fraction=comp.active_material_fraction,
             gaps_um=schedule.gaps_um,
+            gaps_front_um=schedule.gaps_front_um,
             density_ceiling_gcc=density_ceiling_from_history(capability.max_density_gcc),
             n_samples=request.mc_samples,
         )
@@ -195,6 +198,7 @@ def run_forward(
         "cutting": {k: conditions.get(k) for k in
                     ("cutting_mass", "cutting_speed", "cutting_temp", "cutting_time", "cutting_repeat")},
         "milling_rolling_laminating_gaps_um": schedule.gaps_um if schedule else None,
+        "milling_front_gaps_um": schedule.gaps_front_um if schedule else None,  # 3-roll M12
         "rolling": {"rolling_line_pressure": conditions.get("rolling_line_pressure")},
         "laminating": {"laminating_pressure": conditions.get("laminating_pressure")},
     }

@@ -31,11 +31,16 @@ def test_composition_sums_to_100(payloads):
 def test_experiment1_matches_source(payloads):
     p = payloads[0]
     assert p["lot_id"] == "건식 실험 1"
-    # M1: 갭 180/180 → 180, 두께 289, 밀도 2.8, L/L 75.37 (원본 그대로)
+    # M1: 3-roll mill 전단(M12) 180 / 후단(M23) 180 — 분리 기록
     m1 = p["stages"]["M1"]
+    assert m1["gap_front_um"] == 180.0
     assert m1["gap_um"] == 180.0
     assert m1["composite_thickness_um"] == 289.0
     assert m1["composite_density_gcc"] == 2.8
+    # M2: 사용자 확인 사례 — 전단 140 / 후단 120 설정
+    m2 = p["stages"]["M2"]
+    assert m2["gap_front_um"] == 140.0
+    assert m2["gap_um"] == 120.0
     # L2: 77 μm / 3.24 g/cc — 원본이 합제층 기준이므로 재차감 없음
     l2 = p["stages"]["L2"]
     assert l2["composite_thickness_um"] == 77.0

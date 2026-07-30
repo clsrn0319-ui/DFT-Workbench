@@ -163,6 +163,8 @@ class BackwardDesigner:
         features["kneader_time"] = kneader_time
         for stage, gap in schedule.gaps_um.items():
             features[f"gap_{stage}"] = gap
+        for stage, front in schedule.gaps_front_um.items():
+            features[f"gap_front_{stage}"] = front
 
         pred_row = self.predictor.predict_frame(features.to_frame().T).iloc[0]
         predictions = {c: float(v) for c, v in pred_row.items()}

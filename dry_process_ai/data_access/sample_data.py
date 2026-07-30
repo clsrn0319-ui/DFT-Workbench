@@ -73,6 +73,7 @@ def generate_lot_payloads(
             gap = tk / (1.0 + springback)
             row = {
                 "gap_um": round(gap, 1),
+                **({"gap_front_um": round(gap, 1)} if stage.startswith("M") else {}),
                 "composite_thickness_um": round(tk, 2),
                 "composite_density_gcc": round(dk, 4),
                 "loading_mg_cm2": round(lk, 3),

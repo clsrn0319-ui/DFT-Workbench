@@ -98,7 +98,8 @@ if response is not None:
             st.markdown("### 공정 캐스케이드 (M1 → L2)")
             table = response.stage_table.copy()
             pretty = table.rename(columns={
-                "stage_index": "단계", "gap_um": "추천 갭 (μm)",
+                "stage_index": "단계",
+                "gap_front_um": "전단 갭 M12 (μm)", "gap_um": "후단 갭 M23·롤 갭 (μm)",
                 "areal_capacity_mah_cm2": "면적당 용량 (mAh/cm²)",
                 "composite_density_gcc": "합제밀도 (g/cc)",
                 "loading_mg_cm2": "L/L (mg/cm²)",

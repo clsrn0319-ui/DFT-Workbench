@@ -39,9 +39,12 @@ PROCESS_FEATURES = (
 COMPOSITION_FEATURES = ("active_material_content", "binder_content", "conductive_content")
 COLLECTOR_FEATURES = ("foil_thickness_um", "coating_side_flag")
 GAP_FEATURES = tuple(f"gap_{s}" for s in STAGES)
+# 3-roll mill 전단 갭(M12) — Milling 단계 전용 입력
+FRONT_GAP_FEATURES = tuple(f"gap_front_{s}" for s in STAGES if s.startswith("M"))
 
 # 전극 면적은 여기 포함되지 않는다 (규칙 R4)
-INPUT_FEATURES = COMPOSITION_FEATURES + PROCESS_FEATURES + GAP_FEATURES + COLLECTOR_FEATURES
+INPUT_FEATURES = (COMPOSITION_FEATURES + PROCESS_FEATURES + GAP_FEATURES
+                  + FRONT_GAP_FEATURES + COLLECTOR_FEATURES)
 
 STAGE_TARGET_COLUMNS = tuple(
     f"{s}_{t}" for s in STAGES
@@ -144,6 +147,7 @@ def register_lot(session: Session, payload: dict[str, Any]) -> str:
             existing = StageMeasure(lot_id=lot_id, stage_index=stage)
             session.add(existing)
         existing.gap_um = row.get("gap_um")
+        existing.gap_front_um = row.get("gap_front_um")
         existing.areal_capacity_mah_cm2 = row.get("areal_capacity_mah_cm2")
         existing.composite_thickness_um = composite
         existing.composite_density_gcc = density
@@ -210,6 +214,7 @@ def fetch_dataset(session: Session, source_flag: str | None = None) -> pd.DataFr
 
     stage_rows = [
         {"lot_id": r.lot_id, "stage_index": r.stage_index, "gap_um": r.gap_um,
+         "gap_front_um": r.gap_front_um,
          "areal_capacity_mah_cm2": r.areal_capacity_mah_cm2,
          "composite_thickness_um": r.composite_thickness_um,
          "composite_density_gcc": r.composite_density_gcc}
@@ -220,7 +225,9 @@ def fetch_dataset(session: Session, source_flag: str | None = None) -> pd.DataFr
         sdf = pd.DataFrame(stage_rows)
         gaps = sdf.pivot_table(index="lot_id", columns="stage_index", values="gap_um", aggfunc="first")
         gaps.columns = [f"gap_{c}" for c in gaps.columns]
-        parts = [gaps]
+        fronts = sdf.pivot_table(index="lot_id", columns="stage_index", values="gap_front_um", aggfunc="first")
+        fronts.columns = [f"gap_front_{c}" for c in fronts.columns]
+        parts = [gaps, fronts]
         for target in ("areal_capacity_mah_cm2", "composite_thickness_um", "composite_density_gcc"):
             p = sdf.pivot_table(index="lot_id", columns="stage_index", values=target, aggfunc="first")
             p.columns = [f"{c}_{target}" for c in p.columns]
@@ -267,6 +274,7 @@ def fetch_stage_long(session: Session, source_flag: str | None = None) -> pd.Dat
             continue
         rows.append({
             "lot_id": r.lot_id, "stage_index": r.stage_index, "gap_um": r.gap_um,
+            "gap_front_um": r.gap_front_um,
             "areal_capacity_mah_cm2": r.areal_capacity_mah_cm2,
             "composite_thickness_um": r.composite_thickness_um,
             "composite_density_gcc": r.composite_density_gcc,

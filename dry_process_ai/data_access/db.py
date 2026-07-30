@@ -82,7 +82,11 @@ class StageMeasure(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     lot_id = Column(String, ForeignKey("lot.lot_id"), nullable=False, index=True)
     stage_index = Column(String, nullable=False)  # M1..M4, R1..R2, L1..L2
+    # 3-roll mill: Milling 단계는 1회 구동에 롤갭 2개를 설정한다.
+    #   gap_front_um = 전단 갭(M12, 롤1-롤2), gap_um = 후단 갭(M23, 롤2-롤3 — 출구 두께 기준)
+    # Rolling/Laminating 은 단일 갭 → gap_um 만 사용.
     gap_um = Column(Float)
+    gap_front_um = Column(Float)
     areal_capacity_mah_cm2 = Column(Float)
     composite_thickness_um = Column(Float)   # 합제층 기준 (집전체 차감 완료)
     composite_density_gcc = Column(Float)
