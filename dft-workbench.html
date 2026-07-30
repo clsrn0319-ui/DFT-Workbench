@@ -478,7 +478,7 @@ window.__RB_BANNER='<div class="rb-banner-copy"><div class="rb-eyebrow">RHOBENCH
   <div class="ml-main">
     <div class="ml-stage" id="ml-stage">
       <canvas id="ml-canvas"></canvas>
-      <div class="ml-hint">이온 드래그: 위치 이동 · Shift+드래그: 깊이 이동<br>빈 공간 드래그: 회전 · 휠: 확대/축소</div>
+      <div class="ml-hint">이온·분자 드래그: 위치 이동 · Shift+드래그: 깊이 이동<br>빈 공간 드래그: 회전 · 휠: 확대/축소</div>
     </div>
     <aside class="ml-side">
       <div class="ml-group"><label for="ml-molA">분자 A</label>
@@ -539,20 +539,34 @@ var COLORS={C:['#8b909c','#464b55','#22252c'],O:['#ff8a7d','#dd3a2c','#8c1a10'],
 var overlay=document.getElementById('ml-overlay'),cv=document.getElementById('ml-canvas'),ctx=cv.getContext('2d');
 var spark=document.getElementById('ml-spark'),sctx=spark.getContext('2d');
 var yaw=-.5,pitch=.3,zoom=46,persp=30;
-var atoms=[],bonds=[],ion={x:0,y:1.2,z:0,t:IONS.Li};
+var atoms=[],bonds=[],mols=[],ion={x:0,y:4.2,z:0,t:IONS.Li};
 var hist=[],running=false,raf=0;
+function ident(){return[[1,0,0],[0,1,0],[0,0,1]];}
+function matMul(A,B){var C=[[0,0,0],[0,0,0],[0,0,0]];for(var i=0;i<3;i++)for(var j=0;j<3;j++)C[i][j]=A[i][0]*B[0][j]+A[i][1]*B[1][j]+A[i][2]*B[2][j];return C;}
+function axisAngle(w){var th=Math.sqrt(w[0]*w[0]+w[1]*w[1]+w[2]*w[2]);if(th<1e-8)return ident();
+  var x=w[0]/th,y=w[1]/th,z=w[2]/th,c=Math.cos(th),si=Math.sin(th),t=1-c;
+  return[[t*x*x+c,t*x*y-si*z,t*x*z+si*y],[t*x*y+si*z,t*y*y+c,t*y*z-si*x],[t*x*z-si*y,t*y*z+si*x,t*z*z+c]];}
 function buildScene(){
-  atoms=[];bonds=[];
+  atoms=[];bonds=[];mols=[];
   var a=LIB[document.getElementById('ml-molA').value].d,b=LIB[document.getElementById('ml-molB').value].d;
   [[a,-5.2],[b,5.2]].forEach(function(pair){
     var m=pair[0],dx=pair[1],base=atoms.length;
+    var mol={cx:dx,cy:0,cz:0,T:[0,0,0],V:[0,0,0],W:[0,0,0],R:ident()};
     var qm=0;m.A.forEach(function(at){qm+=at.q;});qm/=m.A.length;
-    m.A.forEach(function(at){atoms.push({ex:at.x+dx,ey:at.y,ez:at.z,ox:0,oy:0,oz:0,el:at.el,q:at.q-qm});});
+    m.A.forEach(function(at){atoms.push({lx:at.x,ly:at.y,lz:at.z,ox:0,oy:0,oz:0,el:at.el,q:at.q-qm,mol:mol});});
     m.B.forEach(function(bd){bonds.push([bd[0]+base,bd[1]+base]);});
+    mols.push(mol);
   });
   ion.t=IONS[document.getElementById('ml-ion').value];
 }
-function resetView(){yaw=-.5;pitch=.3;zoom=46;ion.x=0;ion.y=4.2;ion.z=0;atoms.forEach(function(a){a.ox=a.oy=a.oz=0;});hist=[];}
+function worldPos(a){var m=a.mol,R=m.R;
+  return{x:m.cx+m.T[0]+R[0][0]*a.lx+R[0][1]*a.ly+R[0][2]*a.lz+a.ox,
+         y:m.cy+m.T[1]+R[1][0]*a.lx+R[1][1]*a.ly+R[1][2]*a.lz+a.oy,
+         z:m.cz+m.T[2]+R[2][0]*a.lx+R[2][1]*a.ly+R[2][2]*a.lz+a.oz};}
+function resetView(){yaw=-.5;pitch=.3;zoom=46;ion.x=0;ion.y=4.2;ion.z=0;hist=[];
+  var i=0;
+  mols.forEach(function(m){m.cx=(i++===0?-5.2:5.2);m.cy=0;m.cz=0;m.T=[0,0,0];m.V=[0,0,0];m.W=[0,0,0];m.R=ident();});
+  atoms.forEach(function(at){at.ox=at.oy=at.oz=0;});}
 // ---------- math ----------
 function rot(p){var cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
   var x=p.x*cy+p.z*sy,z=-p.x*sy+p.z*cy,y=p.y*cp-z*sp;z=p.y*sp+z*cp;return{x:x,y:y,z:z};}
@@ -564,21 +578,45 @@ function DPR(){return window.devicePixelRatio||1;}
 var E={tot:0,c:0,v:0,near:null,nearD:0,coord:0};
 function physics(){
   var qI=ion.t.q,ec=0,ev=0,nearD=1e9,near=null,coord=0;
+  mols.forEach(function(m){m._F=[0,0,0];m._TQ=[0,0,0];
+    var dcx=m.cx+m.T[0]-ion.x,dcy=m.cy+m.T[1]-ion.y,dcz=m.cz+m.T[2]-ion.z;
+    var rc=Math.sqrt(dcx*dcx+dcy*dcy+dcz*dcz);
+    m._fall=1/(1+Math.pow(rc/4.5,6));});
   atoms.forEach(function(a){
-    var px=a.ex+a.ox,py=a.ey+a.oy,pz=a.ez+a.oz;
-    var dx=px-ion.x,dy=py-ion.y,dz=pz-ion.z;
+    var w=worldPos(a);a._w=w;
+    var dx=w.x-ion.x,dy=w.y-ion.y,dz=w.z-ion.z;
     var r=Math.sqrt(dx*dx+dy*dy+dz*dz);if(r<1.05)r=1.05;
     var eC=332*qI*a.q/(2*r);
     var rm=.86*(RVDW[a.el]+ion.t.rv)/2+.9;
     var s6=Math.pow(rm/r,6),eV=Math.min(60,.18*(s6*s6-2*s6));
     ec+=eC;ev+=eV;
     if(a.q<0){if(r<nearD){nearD=r;near=a;}if(r<2.6)coord++;}
-    // polarization force → displacement target
     var fC=332*qI*a.q/(2*r*r),fV=12*.18/rm*(Math.pow(rm/r,13)-Math.pow(rm/r,7));
-    var f=(fC+fV)*.016,m=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;
-    var tx=dx/m*f,ty=dy/m*f,tz=dz/m*f,L=Math.sqrt(tx*tx+ty*ty+tz*tz);
-    if(L>.5){tx*=.5/L;ty*=.5/L;tz*=.5/L;}
+    var f=fC+fV,mm=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;
+    var Fx=dx/mm*f,Fy=dy/mm*f,Fz=dz/mm*f;
+    // per-atom polarization (elastic cloud)
+    var tx=Fx*.014,ty=Fy*.014,tz=Fz*.014,L=Math.sqrt(tx*tx+ty*ty+tz*tz);
+    if(L>.4){tx*=.4/L;ty*=.4/L;tz*=.4/L;}
     a.ox+=(tx-a.ox)*.12;a.oy+=(ty-a.oy)*.12;a.oz+=(tz-a.oz)*.12;
+    // accumulate rigid-body force & torque about molecule center
+    var M=a.mol,ax=w.x-(M.cx+M.T[0]),ay=w.y-(M.cy+M.T[1]),az=w.z-(M.cz+M.T[2]);
+    var Gx=Fx*M._fall,Gy=Fy*M._fall,Gz=Fz*M._fall;
+    M._F[0]+=Gx;M._F[1]+=Gy;M._F[2]+=Gz;
+    M._TQ[0]+=ay*Gz-az*Gy;M._TQ[1]+=az*Gx-ax*Gz;M._TQ[2]+=ax*Gy-ay*Gx;
+  });
+  // integrate rigid-body motion: lean toward ion + reorient (damped, soft spring home)
+  mols.forEach(function(m){
+    if(m._drag)return;
+    for(var k=0;k<3;k++){
+      m.V[k]=m.V[k]*.86+m._F[k]*.0022-m.T[k]*.02;
+      if(m.V[k]>.08)m.V[k]=.08;if(m.V[k]<-.08)m.V[k]=-.08;
+      m.T[k]+=m.V[k];if(m.T[k]>2.2)m.T[k]=2.2;if(m.T[k]<-2.2)m.T[k]=-2.2;
+      m.W[k]=m.W[k]*.86+m._TQ[k]*.00028;
+      if(m.W[k]>.035)m.W[k]=.035;if(m.W[k]<-.035)m.W[k]=-.035;
+    }
+    var rx=(m.R[2][1]-m.R[1][2])/2,ry=(m.R[0][2]-m.R[2][0])/2,rz=(m.R[1][0]-m.R[0][1])/2;
+    m.W[0]-=rx*.0022;m.W[1]-=ry*.0022;m.W[2]-=rz*.0022;
+    m.R=matMul(axisAngle(m.W),m.R);
   });
   E.tot=ec+ev;E.c=ec;E.v=ev;E.near=near;E.nearD=nearD;E.coord=coord;
   hist.push(E.tot);if(hist.length>132)hist.shift();
@@ -594,7 +632,8 @@ function render(){
   ctx.clearRect(0,0,W,H);
   var items=[];
   atoms.forEach(function(a){
-    var p=proj({x:a.ex+a.ox,y:a.ey+a.oy,z:a.ez+a.oz});
+    var w=a._w||worldPos(a);
+    var p=proj(w);
     a._p=p;items.push({z:p.z,k:'a',a:a,p:p});
   });
   bonds.forEach(function(b){
@@ -657,29 +696,41 @@ function hud(){
 }
 function loop(){if(!running)return;frame++;physics();render();hud();raf=requestAnimationFrame(loop);}
 // ---------- interaction ----------
-var mode=null,lx=0,ly=0;
+var mode=null,lx=0,ly=0,dragMol=null;
 function resize(){var st=document.getElementById('ml-stage'),d=DPR();cv.width=st.clientWidth*d;cv.height=st.clientHeight*d;}
 cv.addEventListener('pointerdown',function(ev){
   cv.setPointerCapture(ev.pointerId);lx=ev.clientX;ly=ev.clientY;
   var rect=cv.getBoundingClientRect(),d=DPR();
   var mx=(ev.clientX-rect.left)*d,my=(ev.clientY-rect.top)*d;
   var pi=ion._p,rr=ion.t.rd*zoom*(pi?pi.f:1)*d+8*d;
-  mode=(pi&&(mx-pi.x)*(mx-pi.x)+(my-pi.y)*(my-pi.y)<rr*rr)?'ion':'orbit';
-  cv.style.cursor=mode==='ion'?'grabbing':'grabbing';
+  if(pi&&(mx-pi.x)*(mx-pi.x)+(my-pi.y)*(my-pi.y)<rr*rr){mode='ion';}
+  else{
+    mode='orbit';dragMol=null;
+    for(var i=0;i<atoms.length;i++){var p=atoms[i]._p;if(!p)continue;
+      var ra=RDISP[atoms[i].el]*zoom*p.f*d+6*d;
+      if((mx-p.x)*(mx-p.x)+(my-p.y)*(my-p.y)<ra*ra){mode='mol';dragMol=atoms[i].mol;dragMol._drag=true;break;}}
+  }
+  cv.style.cursor='grabbing';
 });
 cv.addEventListener('pointermove',function(ev){
   if(!mode)return;
   var dx=ev.clientX-lx,dy=ev.clientY-ly;lx=ev.clientX;ly=ev.clientY;
   if(mode==='orbit'){yaw+=dx*.008;pitch=Math.max(-1.4,Math.min(1.4,pitch+dy*.008));}
-  else{
+  else if(mode==='ion'){
     var f=ion._p?ion._p.f:1,k=1/(zoom*f);
     var v=ev.shiftKey?{x:0,y:0,z:-dy*k*1.4}:{x:dx*k,y:-dy*k,z:0};
     var w=invRot(v);ion.x+=w.x;ion.y+=w.y;ion.z+=w.z;
     var L=Math.sqrt(ion.x*ion.x+ion.y*ion.y+ion.z*ion.z);
     if(L>9){ion.x*=9/L;ion.y*=9/L;ion.z*=9/L;}
+  }else if(mode==='mol'&&dragMol){
+    var f2=1,k2=1/(zoom*f2);
+    var v2=ev.shiftKey?{x:0,y:0,z:-dy*k2*1.4}:{x:dx*k2,y:-dy*k2,z:0};
+    var w2=invRot(v2);dragMol.cx+=w2.x;dragMol.cy+=w2.y;dragMol.cz+=w2.z;
+    var L2=Math.sqrt(dragMol.cx*dragMol.cx+dragMol.cy*dragMol.cy+dragMol.cz*dragMol.cz);
+    if(L2>10){dragMol.cx*=10/L2;dragMol.cy*=10/L2;dragMol.cz*=10/L2;}
   }
 });
-function endDrag(){mode=null;cv.style.cursor='grab';}
+function endDrag(){mode=null;if(dragMol){dragMol._drag=false;dragMol=null;}cv.style.cursor='grab';}
 cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
 cv.addEventListener('wheel',function(ev){ev.preventDefault();zoom=Math.max(22,Math.min(120,zoom*(ev.deltaY<0?1.08:0.93)));},{passive:false});
 // ---------- open/close/wire ----------
@@ -691,6 +742,6 @@ document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&!overlay.
 window.addEventListener('resize',function(){if(running)resize();});
 ['ml-molA','ml-molB','ml-ion'].forEach(function(id){document.getElementById(id).addEventListener('change',function(){buildScene();});});
 document.getElementById('ml-reset').addEventListener('click',resetView);
-window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y=y;ion.z=z;}};
+window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y=y;ion.z=z;},mol:function(i){var m=mols[i];return{c:[m.cx,m.cy,m.cz],T:m.T.slice(),R:m.R.map(function(r){return r.slice();})};}};
 })();
 </script>
