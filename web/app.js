@@ -91,6 +91,8 @@ async function submit() {
         functional: $("functional").value,
         basis: $("basis").value || null,
         optimizeGeometry: $("optimize").value === "" ? null : $("optimize").value === "true",
+        thermochemistry: $("thermo").value === "" ? null : $("thermo").value === "true",
+        redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
       },
     },
   };
@@ -164,12 +166,21 @@ const DESC_LABELS = {
   total_energy_hartree: ["전자 에너지", "Ha"],
   homo_ev: ["HOMO", "eV"], lumo_ev: ["LUMO", "eV"], gap_ev: ["HOMO–LUMO 갭", "eV"],
   dipole_debye: ["쌍극자 모멘트", "D"],
+  zpe_kcal: ["영점 진동 에너지 (ZPE)", "kcal/mol"],
+  gibbs_correction_kcal: ["깁스 보정 (G − E, 기체상)", "kcal/mol"],
+  gibbs_energy_hartree: ["깁스 자유에너지 (E+G보정)", "Ha"],
+  entropy_cal_mol_k: ["엔트로피 S", "cal/(mol·K)"],
+  n_imaginary_freqs: ["허수 진동수 개수", ""],
   solvation_energy_kcal: ["용매화 에너지 ΔE(solv−gas)", "kcal/mol"],
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],
   ea_vertical_ev: ["수직 전자 친화도 (EA)", "eV"],
+  ip_adiabatic_ev: ["단열 이온화 에너지 (IP)", "eV"],
+  ea_adiabatic_ev: ["단열 전자 친화도 (EA)", "eV"],
   oxidation_potential_v: ["산화 전위", "V"],
   reduction_potential_v: ["환원 전위", "V"],
+  oxidation_potential_gibbs_v: ["산화 전위 (ΔG 기반)", "V"],
+  reduction_potential_gibbs_v: ["환원 전위 (ΔG 기반)", "V"],
 };
 
 function showResult(job) {
@@ -180,7 +191,7 @@ function showResult(job) {
   for (const [key, val] of Object.entries(r.descriptors)) {
     if (key === "potential_reference" || val == null) continue;
     const [label, unit] = DESC_LABELS[key] || [key, ""];
-    const suffix = key.endsWith("potential_v") && ref ? ` vs ${ref}` : "";
+    const suffix = key.includes("potential") && ref ? ` vs ${ref}` : "";
     rows += `<tr><th>${esc(label)}</th><td>${typeof val === "number" ? val : esc(val)} ${unit}${suffix}</td></tr>`;
   }
   let condRows = "";

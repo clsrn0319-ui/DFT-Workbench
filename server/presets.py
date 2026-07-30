@@ -130,16 +130,21 @@ ENV_TYPES = [
 ]
 
 # 정확도 프리셋 → 실제 계산 파라미터.
-#  - n_conf: RDKit ETKDG conformer 수 (MMFF 최저 에너지 선택)
+#  - n_conf: RDKit ETKDG conformer 수 (역장 최적화 후 후보 선별)
+#  - n_dft_rank: 상위 conformer 몇 개를 DFT 단일점으로 재순위화할지
 #  - do_opt: DFT 구조 최적화 여부 (기체상, geomeTRIC/pyberny)
-#  - basis_opt / basis_sp: 최적화 / 최종 단일점 basis
+#  - do_thermo: 진동수 계산 기반 열역학 보정 (ZPE·엔탈피·깁스, 설정 온도 반영)
+#  - basis_opt / basis_sp: 최적화·진동수 / 최종 단일점 basis
 ACCURACY = {
-    "빠름": {"n_conf": 5, "do_opt": False, "basis_opt": "def2-svp", "basis_sp": "def2-svp",
+    "빠름": {"n_conf": 5, "n_dft_rank": 1, "do_opt": False, "do_thermo": False,
+             "basis_opt": "def2-svp", "basis_sp": "def2-svp",
              "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) — 사전 스크리닝"},
-    "표준": {"n_conf": 15, "do_opt": True, "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
-             "desc": "conformer 15 · DFT 최적화(def2-SVP) + 단일점(def2-TZVP) — 권장"},
-    "정밀": {"n_conf": 30, "do_opt": True, "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
-             "desc": "conformer 30 · DFT 최적화·단일점 모두 def2-TZVP"},
+    "표준": {"n_conf": 15, "n_dft_rank": 3, "do_opt": True, "do_thermo": True,
+             "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
+             "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·열보정 + 단일점(def2-TZVP)"},
+    "정밀": {"n_conf": 30, "n_dft_rank": 5, "do_opt": True, "do_thermo": True,
+             "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
+             "desc": "conformer 30 · DFT 재순위 5 · 최적화·진동수·단일점 모두 def2-TZVP"},
 }
 
 # 범함수 표기 → (PySCF xc, 분산 보정)
@@ -174,6 +179,8 @@ DEFAULT_SETTINGS = {
         "functional": "PBE0-D3(BJ)",
         "basis": None,           # None → 정확도 프리셋 값
         "optimizeGeometry": None,  # None → 정확도 프리셋 값
+        "thermochemistry": None,   # None → 정확도 프리셋 값
+        "redoxAdiabatic": None,    # None → 구조 최적화 여부 따름 (단열 전위)
         "scfTol": 1e-8,
     },
 }

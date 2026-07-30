@@ -88,6 +88,18 @@
               <option value="true">수행</option>
               <option value="false">생략 (역장 구조 단일점)</option>
             </select></div>
+          <div class="field"><label class="field-label">열역학 보정 (진동수 계산)</label>
+            <select class="input" id="thermo">
+              <option value="">(정확도 프리셋)</option>
+              <option value="true">수행 — 온도 반영 ZPE·깁스</option>
+              <option value="false">생략</option>
+            </select></div>
+          <div class="field"><label class="field-label">전위 계산 방식</label>
+            <select class="input" id="redox-mode">
+              <option value="">(자동 — 최적화 시 단열)</option>
+              <option value="true">단열 (이온 구조 재최적화)</option>
+              <option value="false">수직 (중성 구조 고정)</option>
+            </select></div>
         </div>
       </details>
       <div class="form-error" id="form-error"></div>

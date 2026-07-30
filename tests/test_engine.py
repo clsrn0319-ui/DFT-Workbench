@@ -50,11 +50,17 @@ def test_custom_solvents_registered():
 def test_resolve_params_accuracy_presets():
     p = _resolve_params(_settings(accuracy="빠름"))
     assert p["do_opt"] is False and p["basis_sp"] == "def2-svp"
+    assert p["do_thermo"] is False and p["redox_adiabatic"] is False
     p = _resolve_params(_settings(accuracy="표준"))
     assert p["do_opt"] is True and p["basis_sp"] == "def2-tzvp"
+    assert p["do_thermo"] is True and p["redox_adiabatic"] is True
     # expert 오버라이드가 프리셋보다 우선
     p = _resolve_params(_settings(accuracy="표준", expert={"basis": "sto-3g", "optimizeGeometry": False}))
     assert p["do_opt"] is False and p["basis_sp"] == "sto-3g"
+    # 단열 전위는 기본적으로 구조 최적화 여부를 따르되 명시 오버라이드 가능
+    assert p["redox_adiabatic"] is False
+    p = _resolve_params(_settings(accuracy="빠름", expert={"redoxAdiabatic": True, "thermochemistry": True}))
+    assert p["redox_adiabatic"] is True and p["do_thermo"] is True
 
 
 def test_run_job_real_scf_minimal():

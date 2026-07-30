@@ -8,11 +8,11 @@ class GeometryError(Exception):
     pass
 
 
-def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
-    """SMILES에서 최저 에너지 conformer의 원자 좌표를 생성한다.
+def smiles_to_conformers(smiles: str, n_conformers: int = 15, top_k: int = 1, seed: int = 42):
+    """SMILES에서 역장 에너지 오름차순 상위 top_k개 conformer를 생성한다.
 
     Returns:
-        atoms: [(symbol, x, y, z), ...] (Å)
+        candidates: [(atoms, ff_energy), ...]  — atoms = [(symbol, x, y, z), ...] (Å)
         info: {"n_conformers": int, "forcefield": str, "ff_energy": float}
     """
     mol = Chem.MolFromSmiles(smiles)
@@ -40,21 +40,25 @@ def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
     energies = [(e, cid) for (code, e), cid in zip(results, conf_ids) if code == 0]
     if not energies:
         # 최적화가 모두 실패해도 임베딩 좌표는 사용 가능
-        best_id = conf_ids[0]
-        best_e = float("nan")
-    else:
-        best_e, best_id = min(energies)
+        energies = [(float("nan"), conf_ids[0])]
+    energies.sort(key=lambda t: t[0])
 
-    conf = mol.GetConformer(best_id)
-    atoms = []
-    for atom in mol.GetAtoms():
-        pos = conf.GetAtomPosition(atom.GetIdx())
-        atoms.append((atom.GetSymbol(), pos.x, pos.y, pos.z))
-    return atoms, {
+    def _extract(conf_id):
+        conf = mol.GetConformer(conf_id)
+        return [(a.GetSymbol(), *conf.GetAtomPosition(a.GetIdx())) for a in mol.GetAtoms()]
+
+    candidates = [(_extract(cid), e) for e, cid in energies[:max(1, top_k)]]
+    return candidates, {
         "n_conformers": len(conf_ids),
         "forcefield": forcefield,
-        "ff_energy": best_e,
+        "ff_energy": energies[0][0],
     }
+
+
+def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
+    """최저 에너지 conformer 하나만 반환하는 편의 함수."""
+    candidates, info = smiles_to_conformers(smiles, n_conformers, top_k=1, seed=seed)
+    return candidates[0][0], info
 
 
 def atoms_to_xyz_block(atoms, comment=""):

@@ -25,6 +25,8 @@ class ExpertSettings(BaseModel):
     functional: str = "PBE0-D3(BJ)"
     basis: Optional[str] = None
     optimizeGeometry: Optional[bool] = None
+    thermochemistry: Optional[bool] = None
+    redoxAdiabatic: Optional[bool] = None
     scfTol: float = 1e-8
 
 
