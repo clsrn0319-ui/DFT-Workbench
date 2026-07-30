@@ -19,6 +19,31 @@ server/
 
 ## 설치 및 실행
 
+### Windows (WSL2)
+
+PySCF는 Windows 네이티브를 지원하지 않으므로 WSL2에서 백엔드를 실행합니다.
+설치 후에는 Windows 브라우저에서 그대로 `http://localhost:8000`으로 접속됩니다.
+
+```powershell
+# PowerShell (관리자 권한) — WSL2 + Ubuntu 설치 후 재부팅
+wsl --install -d Ubuntu
+```
+
+```bash
+# 재부팅 후 시작 메뉴 → "Ubuntu" 실행, 이하 우분투 터미널
+sudo apt update && sudo apt install -y python3-pip python3-venv git
+git clone https://github.com/clsrn0319-ui/DFT-Workbench
+cd DFT-Workbench
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn server.main:app --host 0.0.0.0 --port 8000
+```
+
+메모리가 부족해 계산이 느리면 `C:\Users\<이름>\.wslconfig`에 `[wsl2]` /
+`memory=12GB` 식으로 상향한 뒤 `wsl --shutdown`으로 재시작합니다.
+
+### 리눅스 · 맥
+
 ```bash
 pip install -r requirements.txt
 uvicorn server.main:app --host 0.0.0.0 --port 8000
