@@ -1,124 +1,23 @@
 let PRESETS = null;
-let JOBS = [];
 const selected = new Set();
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-/* ---------- 화면 전환 ---------- */
-const VIEWS = ["dashboard", "materials", "submit", "jobs"];
-
-function showView(name) {
-  if (!VIEWS.includes(name)) name = "dashboard";
-  for (const v of VIEWS) {
-    $(`view-${v}`).classList.toggle("active", v === name);
-  }
-  document.querySelectorAll(".nav-item").forEach(btn =>
-    btn.classList.toggle("active", btn.dataset.view === name));
-  if (location.hash !== `#/${name}`) history.replaceState(null, "", `#/${name}`);
-  if (name === "dashboard") renderDashboard();
-  if (name === "materials") renderMaterialLib();
-}
-
-function currentView() {
-  return (location.hash.match(/^#\/(\w+)/) || [])[1] || "dashboard";
-}
-
-/* ---------- 초기화 ---------- */
 async function init() {
   PRESETS = await (await fetch("/api/presets")).json();
 
-  document.querySelectorAll(".nav-item").forEach(btn =>
-    btn.addEventListener("click", () => showView(btn.dataset.view)));
-  document.querySelectorAll("[data-goto]").forEach(el =>
-    el.addEventListener("click", () => showView(el.dataset.goto)));
-  window.addEventListener("hashchange", () => showView(currentView()));
-
-  buildSubmitForm();
-  await refreshJobs();
-  showView(currentView());
-  setInterval(refreshJobs, 2000);
-}
-
-/* ---------- 대시보드 ---------- */
-function renderDashboard() {
-  const total = JOBS.length;
-  const pub = JOBS.filter(j => j.status === "PUBLISHED").length;
-  const act = JOBS.filter(j => ["QUEUED", "RUNNING"].includes(j.status)).length;
-  const fail = JOBS.filter(j => j.status === "FAILED").length;
-  $("dash-stats").innerHTML = [
-    ["전체 작업", total, "누적"],
-    ["PUBLISHED", pub, "검증 완료 결과"],
-    ["실행·대기", act, "현재 큐"],
-    ["실패", fail, "오류·취소 포함"],
-  ].map(([label, v, sub]) => `
-    <div class="stat-tile">
-      <div class="stat-label">${label}</div>
-      <div class="stat-value">${v}<span class="stat-unit"> 건</span></div>
-      <div class="stat-sub">${sub}</div>
-    </div>`).join("");
-
-  const recent = JOBS.filter(j => j.status === "PUBLISHED").slice(0, 5);
-  const box = $("dash-recent");
-  if (!recent.length) {
-    box.className = "empty small";
-    box.textContent = "아직 완료된 계산이 없습니다. '새 계산 제출'에서 시작하세요.";
-    return;
-  }
-  box.className = "scroll-x";
-  box.innerHTML = `<table class="table">
-    <tr><th>소재</th><th class="num">HOMO (eV)</th><th class="num">갭 (eV)</th><th>방법</th></tr>
-    ${recent.map(j => `
-      <tr>
-        <td><b>${esc(j.material.abbr ?? j.material.name)}</b>
-          <span class="mono small muted">${esc(j.id.slice(-6))}</span></td>
-        <td class="num">${j.result.descriptors.homo_ev ?? "—"}</td>
-        <td class="num">${j.result.descriptors.gap_ev ?? "—"}</td>
-        <td class="small muted">${esc(j.result.conditions.method)}</td>
-      </tr>`).join("")}
-  </table>`;
-}
-
-/* ---------- 물질 라이브러리 ---------- */
-function renderMaterialLib() {
-  $("material-lib").innerHTML = PRESETS.materials.map(m => {
-    const done = JOBS.filter(j => j.material.id === m.id && j.status === "PUBLISHED").length;
-    return `
-    <div class="mat-card">
-      <div class="mat-card-top">
-        <span class="initial-badge">${esc(m.abbr)}</span>
-        ${done ? `<span class="badge published">결과 ${done}건</span>`
-               : `<span class="badge queued">계산 전</span>`}
-      </div>
-      <div class="mat-name">${esc(m.name)}</div>
-      <div class="small muted">${esc(m.formula)} · ${esc(m.note)}</div>
-      <div class="mono small muted">${esc(m.smiles["모노머"])}</div>
-      <button class="btn" data-calc="${esc(m.id)}">이 소재로 계산</button>
-    </div>`;
-  }).join("");
-  document.querySelectorAll("[data-calc]").forEach(btn =>
-    btn.addEventListener("click", () => {
-      selected.clear();
-      selected.add(btn.dataset.calc);
-      syncMaterialCards();
-      showView("submit");
-    }));
-}
-
-/* ---------- 제출 폼 ---------- */
-function buildSubmitForm() {
   const grid = $("material-grid");
   grid.innerHTML = "";
   for (const m of PRESETS.materials) {
     const btn = document.createElement("button");
     btn.className = "mol-card";
-    btn.dataset.mid = m.id;
     btn.innerHTML = `<b>${esc(m.name)}</b>
       <span class="small muted">${esc(m.formula)} · ${esc(m.note)}</span>
       <span class="mono small muted">${esc(m.smiles["모노머"])}</span>`;
     btn.onclick = () => {
       selected.has(m.id) ? selected.delete(m.id) : selected.add(m.id);
-      syncMaterialCards();
+      btn.classList.toggle("selected", selected.has(m.id));
     };
     grid.appendChild(btn);
   }
@@ -149,11 +48,8 @@ function buildSubmitForm() {
   syncAccuracyDesc();
   syncEnvState();
   $("submit-btn").onclick = submit;
-}
-
-function syncMaterialCards() {
-  document.querySelectorAll("#material-grid .mol-card").forEach(btn =>
-    btn.classList.toggle("selected", selected.has(btn.dataset.mid)));
+  refreshJobs();
+  setInterval(refreshJobs, 2000);
 }
 
 function fillSelect(id, pairs, def) {
@@ -211,7 +107,6 @@ async function submit() {
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
     await refreshJobs();
-    showView("jobs");
   } catch (e) {
     $("form-error").textContent = e.message;
   } finally {
@@ -219,28 +114,20 @@ async function submit() {
   }
 }
 
-/* ---------- 작업 큐 ---------- */
 const badgeClass = {QUEUED: "queued", RUNNING: "running", PUBLISHED: "published", FAILED: "failed"};
 const badgeLabel = {QUEUED: "대기", RUNNING: "실행", PUBLISHED: "PUBLISHED", FAILED: "실패"};
 
 async function refreshJobs() {
-  try {
-    JOBS = (await (await fetch("/api/jobs")).json()).jobs;
-  } catch { return; }
-  renderJobList();
-  if ($("view-dashboard").classList.contains("active")) renderDashboard();
-}
-
-function renderJobList() {
+  const {jobs} = await (await fetch("/api/jobs")).json();
   const list = $("job-list");
-  if (!JOBS.length) {
+  if (!jobs.length) {
     list.className = "empty small";
     list.textContent = "작업이 없습니다.";
     return;
   }
   list.className = "";
   list.innerHTML = "";
-  for (const job of JOBS) {
+  for (const job of jobs) {
     const div = document.createElement("div");
     div.className = "job-row";
     const solvent = PRESETS.solvents.find(s => s.id === job.settings.solventId);
@@ -261,12 +148,12 @@ function renderJobList() {
       <div class="job-side">
         <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>
         ${job.status === "PUBLISHED"
-          ? `<button class="btn ghost" data-view-job="${esc(job.id)}">결과 보기</button>` : ""}
+          ? `<button class="btn ghost" data-view="${esc(job.id)}">결과 보기</button>` : ""}
         ${["QUEUED", "RUNNING"].includes(job.status)
           ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
           : `<button class="btn ghost danger" data-del="${esc(job.id)}">삭제</button>`}
       </div>`;
-    div.querySelector("[data-view-job]")?.addEventListener("click", () => showResult(job));
+    div.querySelector("[data-view]")?.addEventListener("click", () => showResult(job));
     div.querySelector("[data-cancel]")?.addEventListener("click", () =>
       fetch(`/api/jobs/${job.id}/cancel`, {method: "POST"}).then(refreshJobs));
     div.querySelector("[data-del]")?.addEventListener("click", () =>
@@ -275,7 +162,6 @@ function renderJobList() {
   }
 }
 
-/* ---------- 결과 상세 ---------- */
 const DESC_LABELS = {
   total_energy_hartree: ["전자 에너지", "Ha"],
   homo_ev: ["HOMO", "eV"], lumo_ev: ["LUMO", "eV"], gap_ev: ["HOMO–LUMO 갭", "eV"],
