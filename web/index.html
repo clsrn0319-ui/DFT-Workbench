@@ -16,107 +16,163 @@
         <div class="brand-sub">분자 물성 · DFT 워크벤치</div>
       </div>
     </div>
-    <div class="nav-group-label">계산</div>
-    <button class="nav-item active">새 계산 제출</button>
+    <div class="nav-group">
+      <div class="nav-group-label">워크스페이스</div>
+      <button class="nav-item" data-view="dashboard">대시보드</button>
+      <button class="nav-item" data-view="materials">물질 라이브러리</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-label">계산</div>
+      <button class="nav-item" data-view="submit">새 계산 제출</button>
+      <button class="nav-item" data-view="jobs">작업 큐 / 결과</button>
+    </div>
     <div class="sidebar-foot">
-      <span class="version" id="engine-info">PySCF · SMD · D3(BJ)</span>
+      <span class="version">PySCF · SMD · D3(BJ)</span>
       <span class="version">SERVER_CALCULATION (실계산)</span>
     </div>
   </aside>
 
   <main class="content">
-    <div class="page-head">
-      <h1>새 계산 제출</h1>
-      <p class="page-desc">소재와 환경을 선택하면 서버에서 <b>실제 DFT 계산</b>(PySCF)이 수행됩니다.
-        용매는 SMD implicit 용매화 모델로 해밀토니안에 반영되고, 분위기·온도는 조건 메타데이터로 기록됩니다.</p>
-    </div>
 
-    <div class="card">
-      <div class="card-head"><h2>1. 소재</h2></div>
-      <div class="mol-grid" id="material-grid"></div>
-      <div class="toolbar" style="margin-top:12px">
-        <input class="input grow" id="custom-smiles" placeholder="사용자 SMILES (예: C=CC(=O)OCC)">
-        <input class="input" id="custom-name" placeholder="이름 (선택)">
+    <!-- ===== 대시보드 ===== -->
+    <section id="view-dashboard" class="view">
+      <div class="page-head">
+        <h1>대시보드</h1>
+        <p class="page-desc">이 화면의 모든 수치는 서버에서 <b>실제 DFT 계산</b>(PySCF)으로 산출된 값입니다.</p>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>2. 환경</h2></div>
-      <div class="option-group">
-        <div class="option-title">환경 유형</div>
-        <div id="env-radios"></div>
+      <div class="server-row">
+        <span class="server-chip"><span class="dot ok"></span>PySCF 엔진</span>
+        <span class="server-chip"><span class="dot ok"></span>SMD 용매화</span>
+        <span class="server-chip"><span class="dot ok"></span>D3(BJ) 분산</span>
+        <span class="server-chip"><span class="dot ok"></span>진동수·열보정</span>
       </div>
-      <div class="form-grid">
-        <div class="field"><label class="field-label">용매 프리셋 (SMD)</label>
-          <select class="input" id="solvent"></select></div>
-        <div class="field"><label class="field-label">온도 (K)</label>
-          <input class="input" type="number" id="temperature" value="298.15" step="0.01"></div>
-        <div class="field"><label class="field-label">분위기 <span class="muted small">(기록용)</span></label>
-          <select class="input" id="atmosphere"></select></div>
-        <div class="field"><label class="field-label">기준 전극</label>
-          <select class="input" id="ref-electrode"></select></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>3. 계산 설정</h2></div>
-      <div class="form-grid">
-        <div class="field"><label class="field-label">구조</label>
-          <select class="input" id="structure"></select></div>
-        <div class="field"><label class="field-label">정확도</label>
-          <select class="input" id="accuracy"></select></div>
-        <div class="field"><label class="field-label">목적</label>
-          <select class="input" id="purpose"></select></div>
-      </div>
-      <p class="muted small" id="accuracy-desc" style="margin:8px 0 0"></p>
-      <details class="expert">
-        <summary>전문가 설정</summary>
-        <div class="form-grid" style="margin-top:10px">
-          <div class="field"><label class="field-label">범함수</label>
-            <select class="input" id="functional"></select></div>
-          <div class="field"><label class="field-label">Basis (단일점, 비우면 프리셋)</label>
-            <select class="input" id="basis"><option value="">(정확도 프리셋)</option></select></div>
-          <div class="field"><label class="field-label">전하</label>
-            <input class="input" type="number" id="charge" value="0" step="1"></div>
-          <div class="field"><label class="field-label">스핀 다중도</label>
-            <input class="input" type="number" id="multiplicity" value="1" min="1" max="4"></div>
-          <div class="field"><label class="field-label">Conformer 수 (비우면 프리셋)</label>
-            <input class="input" type="number" id="n-conformers" placeholder="자동"></div>
-          <div class="field"><label class="field-label">DFT 구조 최적화</label>
-            <select class="input" id="optimize">
-              <option value="">(정확도 프리셋)</option>
-              <option value="true">수행</option>
-              <option value="false">생략 (역장 구조 단일점)</option>
-            </select></div>
-          <div class="field"><label class="field-label">열역학 보정 (진동수 계산)</label>
-            <select class="input" id="thermo">
-              <option value="">(정확도 프리셋)</option>
-              <option value="true">수행 — 온도 반영 ZPE·깁스</option>
-              <option value="false">생략</option>
-            </select></div>
-          <div class="field"><label class="field-label">전위 계산 방식</label>
-            <select class="input" id="redox-mode">
-              <option value="">(자동 — 최적화 시 단열)</option>
-              <option value="true">단열 (이온 구조 재최적화)</option>
-              <option value="false">수직 (중성 구조 고정)</option>
-            </select></div>
+      <div class="stat-row" id="dash-stats"></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>최근 결과</h2>
+            <button class="btn ghost" data-goto="jobs">전체 보기</button></div>
+          <div id="dash-recent" class="empty small">아직 완료된 계산이 없습니다.</div>
         </div>
-      </details>
-      <div class="form-error" id="form-error"></div>
-      <button class="btn primary big" id="submit-btn">계산 제출 (실제 DFT 실행)</button>
-    </div>
+        <div class="card">
+          <div class="card-head"><h2>빠른 작업</h2></div>
+          <ul class="workflow">
+            <li data-goto="submit"><b>새 계산 제출</b><span>소재·환경·정확도를 골라 실계산 실행</span></li>
+            <li data-goto="materials"><b>물질 라이브러리</b><span>내장 소재와 계산 이력 확인</span></li>
+            <li data-goto="jobs"><b>작업 큐</b><span>진행 중 계산과 결과 상세</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
 
-    <div class="card">
-      <div class="card-head"><h2>작업 큐 / 결과</h2>
-        <span class="muted small">2초마다 자동 갱신 · 결과 클릭 시 상세</span></div>
-      <div id="job-list" class="empty small">작업이 없습니다.</div>
-    </div>
+    <!-- ===== 물질 라이브러리 ===== -->
+    <section id="view-materials" class="view">
+      <div class="page-head">
+        <h1>물질 라이브러리</h1>
+        <p class="page-desc">내장 소재 프리셋입니다. 카드의 버튼을 누르면 해당 소재가 선택된 채 제출 화면으로 이동합니다.</p>
+      </div>
+      <div class="mat-grid" id="material-lib"></div>
+    </section>
 
-    <div class="card" id="result-card" style="display:none">
-      <div class="card-head"><h2 id="result-title">결과 상세</h2>
-        <button class="btn ghost" onclick="document.getElementById('result-card').style.display='none'">닫기</button></div>
-      <div id="result-body"></div>
-    </div>
+    <!-- ===== 새 계산 제출 ===== -->
+    <section id="view-submit" class="view">
+      <div class="page-head">
+        <h1>새 계산 제출</h1>
+        <p class="page-desc">소재와 환경을 선택하면 서버에서 <b>실제 DFT 계산</b>이 수행됩니다.
+          용매는 SMD 모델로 해밀토니안에 반영되고, 분위기·온도는 조건으로 기록됩니다.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>1. 소재</h2></div>
+        <div class="mol-grid" id="material-grid"></div>
+        <div class="toolbar" style="margin-top:12px">
+          <input class="input grow" id="custom-smiles" placeholder="사용자 SMILES (예: C=CC(=O)OCC)">
+          <input class="input" id="custom-name" placeholder="이름 (선택)">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>2. 환경</h2></div>
+        <div class="option-group">
+          <div class="option-title">환경 유형</div>
+          <div id="env-radios"></div>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label class="field-label">용매 프리셋 (SMD)</label>
+            <select class="input" id="solvent"></select></div>
+          <div class="field"><label class="field-label">온도 (K)</label>
+            <input class="input" type="number" id="temperature" value="298.15" step="0.01"></div>
+          <div class="field"><label class="field-label">분위기 <span class="muted small">(기록용)</span></label>
+            <select class="input" id="atmosphere"></select></div>
+          <div class="field"><label class="field-label">기준 전극</label>
+            <select class="input" id="ref-electrode"></select></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>3. 계산 설정</h2></div>
+        <div class="form-grid">
+          <div class="field"><label class="field-label">구조</label>
+            <select class="input" id="structure"></select></div>
+          <div class="field"><label class="field-label">정확도</label>
+            <select class="input" id="accuracy"></select></div>
+          <div class="field"><label class="field-label">목적</label>
+            <select class="input" id="purpose"></select></div>
+        </div>
+        <p class="muted small" id="accuracy-desc" style="margin:8px 0 0"></p>
+        <details class="expert">
+          <summary>전문가 설정</summary>
+          <div class="form-grid" style="margin-top:10px">
+            <div class="field"><label class="field-label">범함수</label>
+              <select class="input" id="functional"></select></div>
+            <div class="field"><label class="field-label">Basis (단일점, 비우면 프리셋)</label>
+              <select class="input" id="basis"><option value="">(정확도 프리셋)</option></select></div>
+            <div class="field"><label class="field-label">전하</label>
+              <input class="input" type="number" id="charge" value="0" step="1"></div>
+            <div class="field"><label class="field-label">스핀 다중도</label>
+              <input class="input" type="number" id="multiplicity" value="1" min="1" max="4"></div>
+            <div class="field"><label class="field-label">Conformer 수 (비우면 프리셋)</label>
+              <input class="input" type="number" id="n-conformers" placeholder="자동"></div>
+            <div class="field"><label class="field-label">DFT 구조 최적화</label>
+              <select class="input" id="optimize">
+                <option value="">(정확도 프리셋)</option>
+                <option value="true">수행</option>
+                <option value="false">생략 (역장 구조 단일점)</option>
+              </select></div>
+            <div class="field"><label class="field-label">열역학 보정 (진동수 계산)</label>
+              <select class="input" id="thermo">
+                <option value="">(정확도 프리셋)</option>
+                <option value="true">수행 — 온도 반영 ZPE·깁스</option>
+                <option value="false">생략</option>
+              </select></div>
+            <div class="field"><label class="field-label">전위 계산 방식</label>
+              <select class="input" id="redox-mode">
+                <option value="">(자동 — 최적화 시 단열)</option>
+                <option value="true">단열 (이온 구조 재최적화)</option>
+                <option value="false">수직 (중성 구조 고정)</option>
+              </select></div>
+          </div>
+        </details>
+        <div class="form-error" id="form-error"></div>
+        <button class="btn primary big" id="submit-btn">계산 제출 (실제 DFT 실행)</button>
+      </div>
+    </section>
+
+    <!-- ===== 작업 큐 / 결과 ===== -->
+    <section id="view-jobs" class="view">
+      <div class="page-head">
+        <h1>작업 큐 / 결과</h1>
+        <p class="page-desc">2초마다 자동 갱신됩니다. PUBLISHED 배지의 "결과 보기"를 누르면 상세가 열립니다.</p>
+      </div>
+      <div class="card">
+        <div id="job-list" class="empty small">작업이 없습니다.</div>
+      </div>
+      <div class="card" id="result-card" style="display:none">
+        <div class="card-head"><h2 id="result-title">결과 상세</h2>
+          <button class="btn ghost" onclick="document.getElementById('result-card').style.display='none'">닫기</button></div>
+        <div id="result-body"></div>
+      </div>
+    </section>
+
   </main>
 </div>
 <script src="/static/app.js"></script>
