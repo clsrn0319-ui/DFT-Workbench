@@ -88,8 +88,8 @@ def test_profile_anchored_schedule():
     assert all(a <= b + 1e-9 for a, b in zip(densities, densities[1:]))
 
 
-def test_milling_gaps_quantized_to_10um():
-    """Milling 갭은 설비 분해능(10 μm) 배수로만 계획된다 (운용 제약)."""
+def test_all_gaps_quantized_to_10um():
+    """전 압연 단계(M·R·L) 갭은 설비 분해능(10 μm) 배수로만 계획된다 (운용 제약)."""
     cap = _capability()
     cap.stage_profile = {
         "M1": {"loading_ratio": 2.75, "density_ratio": 0.851, "springback": 0.51},
@@ -102,12 +102,13 @@ def test_milling_gaps_quantized_to_10um():
         "L2": {"loading_ratio": 1.00, "density_ratio": 1.000, "springback": 0.25},
     }
     schedule = search_gap_schedule(0.96, 5.0, 3.2, cap)
-    for s in ("M1", "M2", "M3", "M4"):
+    for s in ACTIVE_STAGES:
+        # 전 단계 10 μm 배수 (R·L 포함)
         assert schedule.gaps_um[s] % 10.0 == pytest.approx(0.0, abs=1e-9), s
         # 설정값만 양자화 — 원 계획 갭에서 최대 반스텝(5 μm) 이내
         sb = cap.stage_profile[s]["springback"]
         raw_gap = schedule.planned_thickness_um[s] / (1 + sb)
-        assert abs(schedule.gaps_um[s] - raw_gap) <= 5.0 + 1e-6
+        assert abs(schedule.gaps_um[s] - raw_gap) <= 5.0 + 1e-6, s
         # 스프링백 제약 유지: 계획 두께 > 갭
         assert schedule.planned_thickness_um[s] > schedule.gaps_um[s]
         # 질량 보존 경로 유지: 로딩 = 두께 × 밀도 × 0.1
@@ -118,9 +119,9 @@ def test_milling_gaps_quantized_to_10um():
     densities = [schedule.planned_density_gcc[s] for s in ACTIVE_STAGES]
     assert all(a >= b - 1e-9 for a, b in zip(thicknesses, thicknesses[1:]))
     assert all(a <= b + 1e-9 for a, b in zip(densities, densities[1:]))
-    # 기하 대체 경로도 동일 제약
+    # 기하 대체 경로도 동일 제약 (전 단계)
     fallback = search_gap_schedule(0.96, 5.0, 3.2, _capability())
-    for s in ("M1", "M2", "M3", "M4"):
+    for s in ACTIVE_STAGES:
         assert fallback.gaps_um[s] % 10.0 == pytest.approx(0.0, abs=1e-9), s
 
 

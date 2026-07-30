@@ -23,17 +23,17 @@ class ScheduleInfeasible(ValueError):
     """압하율 제약을 만족하는 스케줄이 없음 — FV-01 압하율 한계 위반으로 처리."""
 
 
-def _quantize_milling_gap(gap: float, thickness_um: float, step: float | None = None) -> float:
-    """Milling 갭 설정값을 설비 분해능(10 μm) 배수로 반올림한다.
+def _quantize_gap(gap: float, thickness_um: float, step: float | None = None) -> float:
+    """갭 설정값을 설비 분해능(10 μm) 배수로 반올림한다 — 전 압연 단계 공통.
 
     계획 두께·밀도(질량 보존 경로)는 유지한다 — 최대 ±반스텝(5 μm)의 갭 편차는
     스프링백 관계의 근사 오차·예측 불확실성 이내이며, 실제 단계 거동은 양자화된
     갭을 입력으로 받는 모델 예측(FF-04)이 담당한다. 반올림이 스프링백 제약
     (두께 > 갭)을 깨면 한 단계 좁힌다.
     """
-    from dry_process_ai.config import MILLING_GAP_STEP_UM
+    from dry_process_ai.config import GAP_STEP_UM
 
-    step = step or MILLING_GAP_STEP_UM
+    step = step or GAP_STEP_UM
     gap_q = max(round(gap / step) * step, step)
     while gap_q >= thickness_um and gap_q > step:
         gap_q -= step
@@ -116,9 +116,7 @@ def search_gap_schedule(
             tk = final_thickness
         lk = float(loading_path[k])
         dk = physics.composite_density_gcc(lk, tk)
-        gap = tk / (1.0 + capability.springback_ratio)
-        if stage.startswith("M"):  # Milling 갭 10 μm 분해능 (설정값만 양자화)
-            gap = _quantize_milling_gap(gap, tk)
+        gap = _quantize_gap(tk / (1.0 + capability.springback_ratio), tk)  # 10 μm 분해능
         if capability.min_gap_um is not None and gap < capability.min_gap_um:
             raise ScheduleInfeasible(
                 f"{stage} 필요 갭 {gap:.1f} μm < 설비 최소 갭 {capability.min_gap_um:.1f} μm (스프링백 여유 위반)"
@@ -181,10 +179,7 @@ def _profile_schedule(
         if springback is None:
             springback = capability.springback_ratio
         springback = max(springback, 0.0)
-        gap = tk / (1.0 + springback)
-
-        if stage.startswith("M"):  # Milling 갭 10 μm 분해능 (설정값만 양자화)
-            gap = _quantize_milling_gap(gap, tk)
+        gap = _quantize_gap(tk / (1.0 + springback), tk)  # 전 단계 10 μm 분해능 (설정값만 양자화)
 
         if capability.min_gap_um is not None and gap < capability.min_gap_um * (1.0 - 1e-9):
             raise ScheduleInfeasible(
@@ -268,9 +263,7 @@ def recompute_gap_schedule(
             tk = final_thickness
         lk = float(loading_path[k])
         dk = physics.composite_density_gcc(lk, tk)
-        gap = tk / (1.0 + capability.springback_ratio)
-        if stage.startswith("M"):  # Milling 갭 10 μm 분해능 (설정값만 양자화)
-            gap = _quantize_milling_gap(gap, tk)
+        gap = _quantize_gap(tk / (1.0 + capability.springback_ratio), tk)  # 10 μm 분해능
         gaps[stage] = round(gap, 1)
         if stage.startswith("M"):
             ratio = (capability.stage_profile.get(stage) or {}).get("front_ratio") or 1.0

@@ -104,10 +104,10 @@ DEFAULT_SPRINGBACK_RATIO = 0.05
 # 단계별 최대 압하율(두께 감소율) 초기값 — 실측 이력 축적 시 동적 갱신 대상
 DEFAULT_MAX_REDUCTION_RATIO = 0.55
 
-# 설비 갭 조절 분해능 — Milling 롤 갭은 10 μm 단위로만 설정 가능 (운용 제약).
-# 갭 스케줄(FF-03)은 M 단계 갭을 이 배수로 양자화하고, 계획 두께·밀도를
-# 양자화된 갭 기준으로 재산출한다 (질량 보존·단조성 유지).
-MILLING_GAP_STEP_UM = 10.0
+# 설비 갭 조절 분해능 — Milling·Rolling·Laminating 전 압연 단계의 롤 갭은
+# 10 μm 단위로만 설정 가능 (운용 제약). 갭 스케줄(FF-03)은 갭 설정값을
+# 이 배수로 양자화한다 (계획 두께·밀도의 질량 보존 경로는 유지).
+GAP_STEP_UM = 10.0
 
 # 합제밀도 상한 여유폭 (조성별 실측 최대 밀도 + 여유폭, g/cc)
 DENSITY_HEADROOM_GCC = 0.15
