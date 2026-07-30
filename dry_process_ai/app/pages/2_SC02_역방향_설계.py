@@ -20,6 +20,31 @@ st.title("SC-02 역방향 설계 — 목표 성능 → 조성·공정 역추천"
 predictor, train_lot_count = require_model()
 train_df = load_train_df()
 
+# ---- 자연어 목표 입력 (FB-01 확장, 오프라인 규칙 해석 — R7) ----
+st.subheader("자연어 목표 입력")
+nl_text = st.text_input(
+    "예: 전기전도도가 개선된 전극. 면적당 용량 5 mAh/cm², 합제밀도 3.2 g/cc",
+    key="nl_goal_text",
+)
+if st.button("해석 후 탐색 실행") and nl_text.strip():
+    from dry_process_ai.services.nl_goal import parse_natural_goal
+
+    parsed = parse_natural_goal(nl_text)
+    for note in parsed.interpretation:
+        st.caption(f"· {note}")
+    if parsed.unrecognized:
+        st.warning("해석 가능한 목표 키워드가 없습니다 — 아래에서 직접 지정하세요.")
+    else:
+        request = BackwardRequest(
+            objectives=parsed.objectives,
+            target_areal_capacity_mah_cm2=parsed.target_areal_capacity_mah_cm2 or 5.0,
+        )
+        with st.spinner("해석된 목표로 조성-공정 공간 탐색 중..."):
+            with db_session() as session:
+                st.session_state["backward_response"] = run_backward(
+                    session, predictor, train_df, request, train_lot_count)
+st.divider()
+
 TARGETS = [
     "sheet_resistance_ohm_sq", "initial_discharge_capacity_mah_g",
     "initial_coulombic_efficiency_pct", "interface_resistance_ohm",
