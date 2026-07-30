@@ -58,7 +58,13 @@ COMPOSITION_TOTAL_WT = 100.0
 PROCESS_ORDER = ("mixing", "kneading", "cutting", "milling", "rolling", "laminating")
 
 # 압연 단계 인덱스 — stage_measure의 stage_index 값. 순서가 곧 공정 진행 순서다.
+# 스키마·모델 출력은 이 전체 집합을 유지한다 (long 구조 — 단수 변경에 무변경).
 STAGES = ("M1", "M2", "M3", "M4", "R1", "R2", "L1", "L2")
+
+# 현재 운용 단계 — 갭 스케줄 계획(FF-03)·조건표·단계별 예측표(FF-04)의 대상.
+# 2026-07 운용 결정: Rolling 은 1회만 진행 (R2 제외). R2 실측 이력은 학습에
+# 계속 사용되며, 다단 압연으로 복귀 시 이 튜플만 되돌리면 된다.
+ACTIVE_STAGES = ("M1", "M2", "M3", "M4", "R1", "L1", "L2")
 
 # 집전체가 부착되는 단계 (Laminating 구간). 이 단계의 측정 두께는
 # 적재 시점(FD-05)에 집전체 두께를 차감하여 합제층 기준으로 환산한다 (규칙 R1).

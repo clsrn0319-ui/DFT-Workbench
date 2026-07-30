@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from dry_process_ai.config import STAGES
+from dry_process_ai.config import ACTIVE_STAGES, STAGES
 from dry_process_ai.rules import physics
 from dry_process_ai.rules.spec_validation import ProcessCapability
 
@@ -43,7 +43,7 @@ def search_gap_schedule(
     target_thickness_um: float | None = None,
     initial_density_gcc: float | None = None,
     trimming_loss_ratio: float = 0.08,
-    stages: tuple = STAGES,
+    stages: tuple = ACTIVE_STAGES,
 ) -> GapSchedule:
     """압하율 제약 하의 M1~L2 갭 스케줄 계획.
 
@@ -197,7 +197,7 @@ def recompute_gap_schedule(
     target_density_gcc: float,
     active_material_fraction: float,
     capability: ProcessCapability,
-    stages: tuple = STAGES,
+    stages: tuple = ACTIVE_STAGES,
 ) -> GapSchedule:
     """FF-09 — 공정 중 갭 재계산.
 

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from dry_process_ai.config import MC_DROPOUT_SAMPLES, STAGES
+from dry_process_ai.config import ACTIVE_STAGES, MC_DROPOUT_SAMPLES, STAGES
 from dry_process_ai.core.model.builder import (
     AUX_OUTPUT_COLUMNS,
     FINAL_OUTPUT_COLUMNS,
@@ -110,6 +110,7 @@ class Predictor:
         density_ceiling_gcc: float | None = None,
         n_samples: int = MC_DROPOUT_SAMPLES,
         seed: int | None = None,
+        stages: tuple = ACTIVE_STAGES,
     ) -> PredictionResult:
         """단일 레시피에 대한 전체 예측 + 정합성 검사 + 신뢰 구간 (FF-04/05/07/08)."""
         frame = features.to_frame().T
@@ -131,9 +132,11 @@ class Predictor:
         # 면적당 용량은 정합성 제약상 로딩·조성에 종속이므로 (세 값 중 둘이
         # 정해지면 나머지는 종속) 물리식으로 정합화하여 표기한다 — 규칙 R5:
         # 물리적으로 불가능한(자기모순인) 값은 화면에 나오지 않는다.
+        # 단계별 표·정합성 검사는 운용 단계(ACTIVE_STAGES)만 대상 — 모델 출력
+        # 스키마(8단계)는 유지되어 R2 이력 학습·다단 복귀에 무변경 대응한다.
         rows = []
         stage_values = {}
-        for stage in STAGES:
+        for stage in stages:
             t = float(mean_row[f"{stage}_composite_thickness_um"])
             d = float(mean_row[f"{stage}_composite_density_gcc"])
             loading = physics.loading_mg_cm2(t, d)

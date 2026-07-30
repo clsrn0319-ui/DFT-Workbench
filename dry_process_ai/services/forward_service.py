@@ -142,8 +142,8 @@ def run_forward(
     conditions["foil_thickness_um"] = request.collector.foil_thickness_um
     conditions["coating_side_flag"] = 1.0 if request.collector.coating_side == "double" else 0.0
     if schedule:
-        for stage in STAGES:
-            conditions[f"gap_{stage}"] = schedule.gaps_um[stage]
+        for stage, gap in schedule.gaps_um.items():
+            conditions[f"gap_{stage}"] = gap
 
     # ⑤ 피브릴화 보상 — Kneading 시간을 조성에 맞춰 조정
     if "kneader_time" in conditions and capability.lot_count > 0 and "kneader_time" in auto_filled:

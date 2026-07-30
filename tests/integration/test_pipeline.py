@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("tensorflow")
 
-from dry_process_ai.config import STAGES  # noqa: E402
+from dry_process_ai.config import ACTIVE_STAGES, STAGES  # noqa: E402
 from dry_process_ai.core.analyze.evaluation import evaluate_model  # noqa: E402
 from dry_process_ai.core.analyze.importance import permutation_importance  # noqa: E402
 from dry_process_ai.core.infer.predictor import Predictor  # noqa: E402
@@ -78,7 +78,9 @@ def test_forward_service_end_to_end(trained):
     response = run_forward(session, predictor, df, request, train_lot_count=len(df))
     assert response.validation.grade in ("info", "caution", "warning")
     assert response.schedule is not None
-    assert response.stage_table is not None and len(response.stage_table) == 8
+    # Rolling 1회 운용 — 계획·표는 운용 단계(R2 제외)만
+    assert response.stage_table is not None and len(response.stage_table) == len(ACTIVE_STAGES)
+    assert "R2" not in set(response.stage_table["stage_index"])
 
     # 물리 제약 위반 출력 0건 (NFR-04): 예측 단계열 단조성 확인
     t = response.stage_table["composite_thickness_um"].to_numpy()

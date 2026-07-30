@@ -161,8 +161,8 @@ class BackwardDesigner:
         features["binder_content"] = binder
         features["conductive_content"] = conductive
         features["kneader_time"] = kneader_time
-        for stage in STAGES:
-            features[f"gap_{stage}"] = schedule.gaps_um[stage]
+        for stage, gap in schedule.gaps_um.items():
+            features[f"gap_{stage}"] = gap
 
         pred_row = self.predictor.predict_frame(features.to_frame().T).iloc[0]
         predictions = {c: float(v) for c, v in pred_row.items()}

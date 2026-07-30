@@ -2,7 +2,7 @@
 
 import pytest
 
-from dry_process_ai.config import STAGES
+from dry_process_ai.config import ACTIVE_STAGES, STAGES
 from dry_process_ai.core.infer.gap_schedule import (
     ScheduleInfeasible,
     adjust_kneading_time,
@@ -21,16 +21,17 @@ def _capability():
 
 def test_schedule_reaches_target():
     schedule = search_gap_schedule(0.96, 5.0, 3.2, _capability())
-    assert set(schedule.gaps_um) == set(STAGES)
+    # 운용 단계만 계획 대상 — Rolling 1회 운용 (R2 제외)
+    assert set(schedule.gaps_um) == set(ACTIVE_STAGES)
     # 최종 두께 = 필요 로딩 ÷ 목표 밀도 ÷ 0.1
     assert schedule.planned_thickness_um["L2"] == pytest.approx(schedule.final_thickness_um, abs=0.01)
     # 두께 단조 감소, 밀도 단조 증가
-    thicknesses = [schedule.planned_thickness_um[s] for s in STAGES]
-    densities = [schedule.planned_density_gcc[s] for s in STAGES]
+    thicknesses = [schedule.planned_thickness_um[s] for s in ACTIVE_STAGES]
+    densities = [schedule.planned_density_gcc[s] for s in ACTIVE_STAGES]
     assert all(a >= b for a, b in zip(thicknesses, thicknesses[1:]))
     assert all(a <= b + 1e-9 for a, b in zip(densities, densities[1:]))
     # 스프링백: 계획 두께 > 갭
-    for s in STAGES:
+    for s in ACTIVE_STAGES:
         assert schedule.planned_thickness_um[s] > schedule.gaps_um[s]
 
 
@@ -48,7 +49,7 @@ def test_recompute_after_deviation():
         target_areal_capacity=5.0, target_density_gcc=3.2,
         active_material_fraction=0.96, capability=_capability(),
     )
-    assert set(schedule.gaps_um) == set(STAGES[2:])  # M3 이후만
+    assert set(schedule.gaps_um) == set(ACTIVE_STAGES[2:])  # M3 이후 운용 단계만
     assert schedule.planned_thickness_um["L2"] == pytest.approx(schedule.final_thickness_um, abs=0.01)
 
 
@@ -80,9 +81,9 @@ def test_profile_anchored_schedule():
     # 최종 단계는 목표 두께·로딩을 정확히 달성
     assert schedule.planned_thickness_um["L2"] == pytest.approx(schedule.final_thickness_um, abs=0.01)
     assert schedule.planned_loading_mg_cm2["L2"] == pytest.approx(schedule.required_loading_mg_cm2, abs=0.01)
-    # 단조성 유지
-    thicknesses = [schedule.planned_thickness_um[s] for s in STAGES]
-    densities = [schedule.planned_density_gcc[s] for s in STAGES]
+    # 단조성 유지 (운용 단계열)
+    thicknesses = [schedule.planned_thickness_um[s] for s in ACTIVE_STAGES]
+    densities = [schedule.planned_density_gcc[s] for s in ACTIVE_STAGES]
     assert all(a >= b for a, b in zip(thicknesses, thicknesses[1:]))
     assert all(a <= b + 1e-9 for a, b in zip(densities, densities[1:]))
 
