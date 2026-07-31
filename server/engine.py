@@ -26,7 +26,10 @@ from pyscf.hessian import thermo as pyscf_thermo
 from pyscf.solvent import smd
 
 from . import presets
-from .geometry import smiles_to_conformers, atoms_to_xyz_block
+from .geometry import smiles_to_conformers, build_cluster, atoms_to_xyz_block
+
+MAX_CLUSTER_OPT_ATOMS = 35  # 이보다 큰 클러스터는 DFT 최적화를 자동 생략 (MMFF 구조 사용)
+MAX_INTERACTION_FRAGMENTS = 6  # 상호작용 에너지 분해를 수행할 최대 분자 수
 
 HARTREE2EV = presets.HARTREE2EV
 HARTREE2KCAL = presets.HARTREE2KCAL
@@ -214,28 +217,56 @@ def run_job(job, update, is_cancelled=lambda: False):
         temperature = float(settings.get("temperature") or 298.15)
         want_redox = "전위" in settings.get("purpose", "")
         closed_shell = params["multiplicity"] == 1
+        explicit = [(m["smiles"], m["count"]) for m in (settings.get("explicitMolecules") or [])]
+        explicit_label = " + ".join(
+            f"{m['count']}× {m.get('name') or m['smiles']}"
+            for m in (settings.get("explicitMolecules") or []))
+        fragments = None
 
-        # 1) conformer 탐색 (+ DFT 재순위화)
-        stage("구조 생성 (conformer 탐색)", 3)
-        candidates, geom_info = smiles_to_conformers(
-            smiles, n_conformers=params["n_conf"], top_k=params["n_dft_rank"])
-        log(f"conformer {geom_info['n_conformers']}개 생성, {geom_info['forcefield']} "
-            f"상위 {len(candidates)}개 후보 선택")
-        if len(candidates) > 1:
-            stage("conformer DFT 재순위화", 8)
-            ranked = []
-            for i, (cand_atoms, ff_e) in enumerate(candidates):
-                mol_c = _build_mol(cand_atoms, params["basis_opt"],
-                                   params["charge"], params["multiplicity"])
-                mf_c = _make_mf(mol_c, params["xc"], params["disp"], None, params["scf_tol"])
-                e_c = _run_scf(mf_c, f"conformer {i + 1}/{len(candidates)}", log)
-                ranked.append((e_c, cand_atoms))
-            ranked.sort(key=lambda t: t[0])
-            atoms = ranked[0][1]
-            spread = (ranked[-1][0] - ranked[0][0]) * HARTREE2KCAL
-            log(f"DFT 재순위화 완료 — 후보 간 에너지 폭 {spread:.2f} kcal/mol")
+        if explicit:
+            # 1') 명시적 주변 분자 클러스터 생성 (cluster-continuum)
+            stage("클러스터 생성 (명시적 주변 분자 배치)", 5)
+            atoms, fragments, cl_info = build_cluster(
+                smiles, explicit, n_conformers=params["n_conf"])
+            geom_info = {"n_conformers": params["n_conf"],
+                         "forcefield": cl_info["forcefield"],
+                         "n_molecules": cl_info["n_molecules"]}
+            log(f"클러스터 구성: 용질 + {explicit_label} — 총 {len(atoms)}원자, "
+                f"{cl_info['forcefield']} 이완 완료")
+            # 클러스터에서는 열보정(거대 Hessian)·단열 전위(이온 클러스터 재최적화) 미지원
+            if params["do_thermo"]:
+                params["do_thermo"] = False
+                log("클러스터 계산에서는 열역학 보정을 생략합니다")
+            if params["redox_adiabatic"]:
+                params["redox_adiabatic"] = False
+                if want_redox:
+                    log("클러스터 전위는 수직 ΔSCF로 계산합니다 (단열 미지원)")
+            if params["do_opt"] and len(atoms) > MAX_CLUSTER_OPT_ATOMS:
+                params["do_opt"] = False
+                log(f"클러스터 {len(atoms)}원자 > {MAX_CLUSTER_OPT_ATOMS} — "
+                    f"DFT 최적화 생략, {cl_info['forcefield']} 구조 단일점 수행")
         else:
-            atoms = candidates[0][0]
+            # 1) conformer 탐색 (+ DFT 재순위화)
+            stage("구조 생성 (conformer 탐색)", 3)
+            candidates, geom_info = smiles_to_conformers(
+                smiles, n_conformers=params["n_conf"], top_k=params["n_dft_rank"])
+            log(f"conformer {geom_info['n_conformers']}개 생성, {geom_info['forcefield']} "
+                f"상위 {len(candidates)}개 후보 선택")
+            if len(candidates) > 1:
+                stage("conformer DFT 재순위화", 8)
+                ranked = []
+                for i, (cand_atoms, ff_e) in enumerate(candidates):
+                    mol_c = _build_mol(cand_atoms, params["basis_opt"],
+                                       params["charge"], params["multiplicity"])
+                    mf_c = _make_mf(mol_c, params["xc"], params["disp"], None, params["scf_tol"])
+                    e_c = _run_scf(mf_c, f"conformer {i + 1}/{len(candidates)}", log)
+                    ranked.append((e_c, cand_atoms))
+                ranked.sort(key=lambda t: t[0])
+                atoms = ranked[0][1]
+                spread = (ranked[-1][0] - ranked[0][0]) * HARTREE2KCAL
+                log(f"DFT 재순위화 완료 — 후보 간 에너지 폭 {spread:.2f} kcal/mol")
+            else:
+                atoms = candidates[0][0]
 
         # 2) DFT 구조 최적화 (기체상)
         if params["do_opt"]:
@@ -305,6 +336,30 @@ def run_job(job, update, is_cancelled=lambda: False):
             e_cds = getattr(mf.with_solvent, "e_cds", None)
             if e_cds is not None:
                 descriptors["smd_cds_kcal"] = round(float(e_cds) * HARTREE2KCAL, 2)
+
+        # 6.5) 클러스터 상호작용 에너지 (조각 분해, 클러스터 구조 고정)
+        if fragments and len(fragments) <= MAX_INTERACTION_FRAGMENTS:
+            stage("상호작용 에너지 (조각 분해)", 62)
+            e_frag_sum = 0.0
+            for fi, frag in enumerate(fragments):
+                frag_atoms = atoms[frag["start"]:frag["end"]]
+                fq = params["charge"] if fi == 0 else 0
+                fm = params["multiplicity"] if fi == 0 else 1
+                mol_f = _build_mol(frag_atoms, params["basis_sp"], fq, fm)
+                mf_f = _make_mf(mol_f, params["xc"], params["disp"], solvent_key,
+                                params["scf_tol"])
+                e_frag_sum += _run_scf(mf_f, f"조각 {fi + 1}/{len(fragments)} ({frag['label']})", log)
+            e_int = (e_total - e_frag_sum) * HARTREE2KCAL
+            descriptors["interaction_energy_kcal"] = round(e_int, 2)
+            notes.append(
+                "상호작용 에너지: 클러스터 구조 고정 조각 분해(변형·BSSE 보정 미포함) — "
+                "음수일수록 주변 분자와의 결합이 안정함")
+        elif fragments:
+            log(f"분자 수 {len(fragments)} > {MAX_INTERACTION_FRAGMENTS} — 상호작용 에너지 분해 생략")
+
+        if fragments:
+            notes.insert(0, "명시적 주변 분자 포함 클러스터 계산 (cluster-continuum): "
+                            "모든 기술자는 클러스터 전체에 대한 값")
 
         # 7) 산화/환원 전위
         if want_redox and not closed_shell:
@@ -385,6 +440,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             "descriptors": descriptors,
             "conditions": {
                 "environment": settings["envType"],
+                "explicit_molecules": explicit_label or "없음",
                 "solvent_model": f"SMD({solvent_key})" if solvent_key else "vacuum",
                 "temperature_k": temperature,
                 "atmosphere": settings["atmosphere"],

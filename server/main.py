@@ -30,8 +30,15 @@ class ExpertSettings(BaseModel):
     scfTol: float = 1e-8
 
 
+class ExplicitMolecule(BaseModel):
+    smiles: str = Field(min_length=1, max_length=200)
+    name: Optional[str] = None
+    count: int = Field(1, ge=1, le=10)
+
+
 class JobSettings(BaseModel):
     envType: str = "배터리 전해액"
+    explicitMolecules: list[ExplicitMolecule] = []
     solventId: Optional[str] = "sol-ecdmc"
     temperature: float = 298.15
     atmosphere: str = "불활성"
@@ -77,6 +84,9 @@ def submit_jobs(req: JobRequest):
         raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
     if settings["accuracy"] not in presets.ACCURACY:
         raise HTTPException(400, f"알 수 없는 정확도 프리셋: {settings['accuracy']}")
+    total_explicit = sum(m["count"] for m in settings["explicitMolecules"])
+    if total_explicit > 10:
+        raise HTTPException(400, f"명시적 주변 분자는 총 10개까지 가능합니다 (현재 {total_explicit}개).")
 
     targets = []
     for mid in req.materialIds:

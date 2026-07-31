@@ -1,7 +1,13 @@
-"""RDKit 기반 3D 구조 생성: SMILES → conformer 앙상블 → 역장 최적화 → 최저 에너지 구조."""
+"""RDKit 기반 3D 구조 생성: SMILES → conformer 앙상블 → 역장 최적화 → 최저 에너지 구조.
 
+명시적 용매화(cluster-continuum)용 클러스터 빌더 포함: 용질 주위에 지정 분자들을
+겹치지 않게 배치한 뒤 전체를 역장으로 이완시킨다.
+"""
+
+import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from rdkit.Geometry import Point3D
 
 
 class GeometryError(Exception):
@@ -59,6 +65,121 @@ def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
     """최저 에너지 conformer 하나만 반환하는 편의 함수."""
     candidates, info = smiles_to_conformers(smiles, n_conformers, top_k=1, seed=seed)
     return candidates[0][0], info
+
+
+def _embed_single(smiles: str, seed: int):
+    """SMILES 하나를 3D 임베딩 + 역장 최적화한 RDKit mol로 반환."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = seed
+    if AllChem.EmbedMolecule(mol, params) != 0:
+        params.useRandomCoords = True
+        if AllChem.EmbedMolecule(mol, params) != 0:
+            raise GeometryError(f"3D 임베딩 실패: {smiles!r}")
+    if AllChem.MMFFOptimizeMolecule(mol, maxIters=2000) != 0:
+        AllChem.UFFOptimizeMolecule(mol, maxIters=2000)
+    return mol
+
+
+def _coords(mol):
+    conf = mol.GetConformer()
+    return np.array([[*conf.GetAtomPosition(i)] for i in range(mol.GetNumAtoms())])
+
+
+def _random_rotation(rng):
+    q = rng.normal(size=4)
+    q /= np.linalg.norm(q)
+    w, x, y, z = q
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ])
+
+
+def build_cluster(solute_smiles: str, explicit, n_conformers: int = 10, seed: int = 42):
+    """용질 + 명시적 주변 분자들의 클러스터 구조를 생성한다.
+
+    explicit: [(smiles, count), ...]
+    배치: 각 분자를 무작위 방향·자세로 용질 주위에 최소 접촉거리 2.0 Å 이상으로
+    놓은 뒤, 전체 클러스터를 MMFF(폴백 UFF)로 이완.
+
+    Returns:
+        atoms: [(symbol, x, y, z), ...]
+        fragments: [{"label", "start", "end", "smiles"}, ...] (원자 인덱스 구간, 용질이 첫 항목)
+        info: {"forcefield": str, "n_molecules": int}
+    """
+    rng = np.random.default_rng(seed)
+
+    solute_atoms, _ = smiles_to_xyz(solute_smiles, n_conformers=n_conformers, seed=seed)
+    solute = Chem.MolFromSmiles(solute_smiles)
+    solute = Chem.AddHs(solute)
+    conf = Chem.Conformer(solute.GetNumAtoms())
+    for i, (_, x, y, z) in enumerate(solute_atoms):
+        conf.SetAtomPosition(i, Point3D(x, y, z))
+    solute.RemoveAllConformers()
+    solute.AddConformer(conf)
+
+    placed_mols = [solute]
+    placed_xyz = _coords(solute) - _coords(solute).mean(axis=0)
+    center_shift = _coords(solute).mean(axis=0)
+
+    for smi, count in explicit:
+        template = _embed_single(smi, seed)
+        t_xyz = _coords(template) - _coords(template).mean(axis=0)
+        t_radius = np.linalg.norm(t_xyz, axis=1).max() + 1.0
+        for _ in range(int(count)):
+            ok = False
+            for _try in range(200):
+                direction = rng.normal(size=3)
+                direction /= np.linalg.norm(direction)
+                rot_xyz = t_xyz @ _random_rotation(rng).T
+                cluster_radius = np.linalg.norm(placed_xyz, axis=1).max()
+                for dist in np.arange(max(cluster_radius - 1.0, 1.0), cluster_radius + t_radius + 6.0, 0.4):
+                    cand = rot_xyz + direction * (dist + t_radius)
+                    dmin = np.min(np.linalg.norm(
+                        placed_xyz[:, None, :] - cand[None, :, :], axis=2))
+                    if dmin >= 2.0:
+                        placed_xyz = np.vstack([placed_xyz, cand])
+                        mol_copy = Chem.Mol(template)
+                        c = mol_copy.GetConformer()
+                        for i, p in enumerate(cand):
+                            c.SetAtomPosition(i, Point3D(*(p + center_shift)))
+                        placed_mols.append(mol_copy)
+                        ok = True
+                        break
+                if ok:
+                    break
+            if not ok:
+                raise GeometryError(f"클러스터 배치 실패: {smi} — 공간을 찾지 못함")
+
+    combined = placed_mols[0]
+    for m in placed_mols[1:]:
+        combined = Chem.CombineMols(combined, m)
+    combined = Chem.RWMol(combined)
+    Chem.SanitizeMol(combined)
+
+    forcefield = "MMFF94"
+    if AllChem.MMFFOptimizeMolecule(combined, maxIters=5000) != 0:
+        forcefield = "UFF"
+        AllChem.UFFOptimizeMolecule(combined, maxIters=5000)
+
+    conf = combined.GetConformer()
+    atoms = [(a.GetSymbol(), *conf.GetAtomPosition(a.GetIdx())) for a in combined.GetAtoms()]
+
+    fragments = [{"label": "용질", "start": 0, "end": solute.GetNumAtoms(),
+                  "smiles": solute_smiles}]
+    idx = solute.GetNumAtoms()
+    for smi, count in explicit:
+        n = Chem.AddHs(Chem.MolFromSmiles(smi)).GetNumAtoms()
+        for k in range(int(count)):
+            fragments.append({"label": f"{smi} #{k + 1}", "start": idx, "end": idx + n,
+                              "smiles": smi})
+            idx += n
+    return atoms, fragments, {"forcefield": forcefield, "n_molecules": len(fragments)}
 
 
 def atoms_to_xyz_block(atoms, comment=""):

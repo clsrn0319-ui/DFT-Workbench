@@ -47,9 +47,49 @@ async function init() {
   $("accuracy").onchange = syncAccuracyDesc;
   syncAccuracyDesc();
   syncEnvState();
+  $("add-explicit").onclick = () => addExplicitRow();
   $("submit-btn").onclick = submit;
   refreshJobs();
   setInterval(refreshJobs, 2000);
+}
+
+/* ---------- 명시적 주변 분자 ---------- */
+function addExplicitRow() {
+  const row = document.createElement("div");
+  row.className = "toolbar";
+  row.dataset.explicit = "1";
+  row.style.marginBottom = "6px";
+  const singles = PRESETS.solvents.filter(s => s.kind === "single");
+  row.innerHTML = `
+    <select class="input" data-role="species">
+      ${singles.map(s => `<option value="${esc(s.smiles)}">${esc(s.abbr)} — ${esc(s.name)}</option>`).join("")}
+      <option value="__custom__">사용자 SMILES…</option>
+    </select>
+    <input class="input" data-role="custom" placeholder="SMILES 입력" style="display:none;width:180px">
+    <input class="input" data-role="count" type="number" value="1" min="1" max="10" style="width:80px">
+    <span class="muted small">개</span>
+    <button class="btn ghost danger" type="button" data-role="remove">삭제</button>`;
+  row.querySelector('[data-role="species"]').addEventListener("change", (e) => {
+    row.querySelector('[data-role="custom"]').style.display =
+      e.target.value === "__custom__" ? "" : "none";
+  });
+  row.querySelector('[data-role="remove"]').addEventListener("click", () => row.remove());
+  $("explicit-rows").appendChild(row);
+}
+
+function collectExplicit() {
+  const out = [];
+  for (const row of document.querySelectorAll('[data-explicit="1"]')) {
+    const sel = row.querySelector('[data-role="species"]');
+    const smiles = sel.value === "__custom__"
+      ? row.querySelector('[data-role="custom"]').value.trim()
+      : sel.value;
+    if (!smiles) continue;
+    const name = sel.value === "__custom__" ? smiles : sel.options[sel.selectedIndex].text.split(" — ")[0];
+    const count = Math.max(1, parseInt(row.querySelector('[data-role="count"]').value) || 1);
+    out.push({smiles, name, count});
+  }
+  return out;
 }
 
 function fillSelect(id, pairs, def) {
@@ -77,6 +117,7 @@ async function submit() {
     customName: $("custom-name").value.trim() || null,
     settings: {
       envType: env,
+      explicitMolecules: collectExplicit(),
       solventId: env === "진공·기체" ? null : $("solvent").value,
       temperature: parseFloat($("temperature").value) || 298.15,
       atmosphere: $("atmosphere").value,
@@ -171,6 +212,7 @@ const DESC_LABELS = {
   gibbs_energy_hartree: ["깁스 자유에너지 (E+G보정)", "Ha"],
   entropy_cal_mol_k: ["엔트로피 S", "cal/(mol·K)"],
   n_imaginary_freqs: ["허수 진동수 개수", ""],
+  interaction_energy_kcal: ["클러스터 상호작용 에너지", "kcal/mol"],
   solvation_energy_kcal: ["용매화 에너지 ΔE(solv−gas)", "kcal/mol"],
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],

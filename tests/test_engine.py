@@ -63,6 +63,13 @@ def test_resolve_params_accuracy_presets():
     assert p["redox_adiabatic"] is True and p["do_thermo"] is True
 
 
+def test_build_cluster_geometry():
+    from server.geometry import build_cluster
+    atoms, frags, info = build_cluster("O", [("O", 2)], n_conformers=3)
+    assert len(atoms) == 9 and len(frags) == 3
+    assert frags[0]["label"] == "용질"
+
+
 def test_run_job_real_scf_minimal():
     """실제 SCF 포함 최소 계산 — 물 분자, STO-3G, 수 초 이내."""
     job = {

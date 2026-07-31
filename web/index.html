@@ -751,6 +751,11 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <!-- ===== 실계산 패널: 위 앱은 디자인 데모(모의), 여기서 제출하는 계산은 진짜 ===== -->
 <style>
+
+/* 원본 앱 CSS 보정: 비율 등 좁은 칸의 숫자 입력이 카드 밖으로 넘치는 문제 */
+.form-grid .field{min-width:0}
+.ratio-row{min-width:0;flex-wrap:nowrap}
+.ratio-row .input, .ratio-row input{flex:1 1 0;width:100%;min-width:0}
 #rb-real{border-top:3px solid var(--accent);background:var(--page);padding:30px 32px 64px}
 #rb-real .rb-inner{max-width:1080px;margin:0 auto}
 #rb-real h1{margin:0 0 4px;font-size:20px}
@@ -792,6 +797,13 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         <select class="input" id="atmosphere"></select></div>
       <div class="field"><span class="field-label">기준 전극</span>
         <select class="input" id="ref-electrode"></select></div>
+    </div>
+    <div class="option-group" style="margin-top:14px;margin-bottom:0">
+      <div class="option-title">명시적 주변 분자 (선택) — 용질 주위에 실제 분자를 배치 (cluster-continuum)</div>
+      <div id="explicit-rows"></div>
+      <button class="btn" id="add-explicit" type="button" style="margin-top:6px">＋ 분자 추가</button>
+      <p class="muted small" style="margin:8px 0 0">예: EC 3개 + H₂O 2개 — 클러스터 전체를 DFT 계산하고 상호작용 에너지를 분해합니다.
+        총 10개까지. 클러스터에서는 열보정·단열 전위 대신 수직 전위가 사용되고, 35원자 초과 시 DFT 최적화는 자동 생략됩니다.</p>
     </div>
   </div>
 
