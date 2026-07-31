@@ -756,7 +756,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 .form-grid .field{min-width:0}
 .ratio-row{min-width:0;flex-wrap:nowrap}
 .ratio-row .input, .ratio-row input{flex:1 1 0;width:100%;min-width:0}
-#rb-real{border-top:3px solid var(--accent);background:var(--page);padding:30px 32px 64px}
+#rb-real{display:none;position:fixed;top:0;right:0;bottom:0;left:232px;overflow-y:auto;z-index:40;background:var(--page);padding:28px 32px 64px}
+#rb-real.open{display:block}
+@media (max-width:760px){#rb-real{left:0}}
 #rb-real .rb-inner{max-width:1080px;margin:0 auto}
 #rb-real h1{margin:0 0 4px;font-size:20px}
 #rb-real .job-row{border:1px solid var(--grid);border-radius:10px;padding:10px 14px;margin-bottom:8px}
@@ -765,13 +767,13 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 .rb-jump2{position:fixed;left:18px;bottom:18px;z-index:50;text-decoration:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:700;padding:9px 15px;border-radius:99px;box-shadow:0 3px 12px rgba(0,0,0,.18)}
 </style>
 
-<a class="rb-jump2" href="#rb-real">&#9889; 실계산 제출 (PySCF)</a>
+<a class="rb-jump2" href="#rb-real">&#9889; DFT 계산 (실계산)</a>
 
 <section id="rb-real">
 <div class="rb-inner">
-  <h1>실계산 제출 — PySCF 백엔드</h1>
-  <p class="rb-note"><b>위쪽 앱 화면은 디자인 데모(모의 데이터)입니다.</b>
-    이 패널에서 제출하는 계산은 이 컴퓨터의 PySCF가 <b>실제로 수행</b>하며, 결과도 아래 작업 큐에 표시됩니다.</p>
+  <h1>DFT 계산 (실계산)</h1>
+  <p class="rb-note">이 페이지의 제출·결과는 전부 이 컴퓨터의 PySCF가 <b>실제로 수행한 계산</b>입니다.
+    다른 메뉴(대시보드·분자 물성 등)의 수치는 디자인 데모용 모의 데이터입니다.</p>
 
   <div class="card">
     <div class="card-head"><h2>1. 소재</h2></div>
@@ -869,3 +871,59 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 </div>
 </section>
 <script src="/static/app.js"></script>
+<script>
+(function () {
+  var real = document.getElementById("rb-real");
+  var jump = document.querySelector(".rb-jump2");
+  var navBtn = null;
+
+  function sidebarRight() {
+    var sb = document.querySelector(".sidebar");
+    return sb ? Math.round(sb.getBoundingClientRect().right) : 232;
+  }
+  function openReal() {
+    real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
+    real.classList.add("open");
+    document.querySelectorAll(".sidebar .nav-item.active").forEach(function (b) {
+      if (b !== navBtn) b.classList.remove("active");
+    });
+    if (navBtn) navBtn.classList.add("active");
+  }
+  function closeReal() {
+    real.classList.remove("open");
+    if (navBtn) navBtn.classList.remove("active");
+  }
+
+  function ensureNav() {
+    var items = Array.prototype.slice.call(document.querySelectorAll(".sidebar .nav-item"));
+    var opt = null;
+    for (var i = 0; i < items.length; i++) {
+      var t = items[i].textContent.trim();
+      if (t.indexOf("구조 최적화") === 0) { opt = items[i]; break; }
+    }
+    if (!opt) return;
+    if (opt.textContent.indexOf("DFT") !== -1) opt.textContent = "구조 최적화";
+    if (!navBtn || !navBtn.isConnected) {
+      navBtn = document.createElement("button");
+      navBtn.className = "nav-item";
+      navBtn.id = "rb-nav-dft";
+      navBtn.textContent = "DFT 계산";
+      navBtn.addEventListener("click", openReal);
+      opt.insertAdjacentElement("afterend", navBtn);
+      if (real.classList.contains("open")) navBtn.classList.add("active");
+    }
+  }
+
+  ensureNav();
+  new MutationObserver(ensureNav).observe(document.getElementById("root"), {childList: true, subtree: true});
+  document.addEventListener("click", function (e) {
+    var item = e.target.closest ? e.target.closest(".nav-item") : null;
+    if (item && item !== navBtn) closeReal();
+  }, true);
+  jump.addEventListener("click", function (e) { e.preventDefault(); openReal(); });
+  window.addEventListener("resize", function () {
+    if (real.classList.contains("open")) real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
+  });
+})();
+</script>
+
