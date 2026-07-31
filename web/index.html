@@ -899,7 +899,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     var opt = null;
     for (var i = 0; i < items.length; i++) {
       var t = items[i].textContent.trim();
-      if (t.indexOf("구조 최적화") === 0) { opt = items[i]; break; }
+      if (t === "DFT 계산 결과") items[i].style.display = "none";  // 모의 결과 페이지 숨김
+      if (t.indexOf("구조 최적화") === 0 && !opt) opt = items[i];
     }
     if (!opt) return;
     if (opt.textContent.indexOf("DFT") !== -1) opt.textContent = "구조 최적화";
