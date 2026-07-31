@@ -233,6 +233,7 @@ async function submit() {
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
         nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
+        freqScale: $("freq-scale").value ? parseFloat($("freq-scale").value) : null,
       },
     },
   };
@@ -321,6 +322,7 @@ const DESC_LABELS = {
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],
   ea_vertical_ev: ["수직 전자 친화도 (EA)", "eV"],
+  freq_scale_factor: ["진동수 스케일 인자", ""],
   standard_state_corr_kcal: ["1 atm→1 M 표준 상태 보정", "kcal/mol"],
   gibbs_energy_solution_hartree: ["용액상 깁스 자유에너지 (1 M)", "Ha"],
   ip_gibbs_ev: ["ΔG 기반 이온화 에너지", "eV"],

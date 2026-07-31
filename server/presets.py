@@ -149,6 +149,15 @@ ACCURACY = {
              "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수·단일점 def2-TZVP"},
 }
 
+# 범함수별 진동수 스케일 인자 (문헌 대표값 — 조화근사 과대평가 보정, basis 의존성 있음)
+FREQ_SCALE = {
+    "PBE0-D3(BJ)": 0.957,
+    "B3LYP-D3(BJ)": 0.961,
+    "PBE-D3(BJ)": 0.986,
+    "M06-2X": 0.947,
+    "HF": 0.899,
+}
+
 # 범함수 표기 → (PySCF xc, 분산 보정)
 FUNCTIONALS = {
     "PBE0-D3(BJ)": ("pbe0", "d3bj"),
@@ -185,6 +194,7 @@ DEFAULT_SETTINGS = {
         "redoxAdiabatic": None,    # None → 구조 최적화 여부 따름 (단열 전위)
         "nonequilibriumSolvation": None,  # None → 용매 있는 수직 전위에 자동 적용
         "boltzmannEnsemble": None,        # None → 정확도 프리셋 값 (정밀에서 활성)
+        "freqScale": None,                # None → 범함수별 문헌 스케일 인자
         "scfTol": 1e-8,
     },
 }

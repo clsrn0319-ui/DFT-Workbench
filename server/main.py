@@ -31,6 +31,7 @@ class ExpertSettings(BaseModel):
     redoxAdiabatic: Optional[bool] = None
     nonequilibriumSolvation: Optional[bool] = None
     boltzmannEnsemble: Optional[bool] = None
+    freqScale: Optional[float] = Field(None, gt=0.5, lt=1.5)
     scfTol: float = 1e-8
 
 

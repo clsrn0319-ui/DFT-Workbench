@@ -105,6 +105,8 @@ def _resolve_params(settings):
                  else bool(exp["nonequilibriumSolvation"]),
         "ensemble": acc.get("ensemble", False) if exp.get("boltzmannEnsemble") is None
                     else bool(exp["boltzmannEnsemble"]),
+        "freq_scale": (float(exp["freqScale"]) if exp.get("freqScale")
+                       else presets.FREQ_SCALE.get(functional, 1.0)),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
         "functional": functional,
@@ -203,7 +205,8 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
     else:
         n_imag = int(np.sum(freqs < 0))
         freqs_real = freqs
-    th = pyscf_thermo.thermo(mf, freq_info["freq_au"],
+    scale = params.get("freq_scale", 1.0)
+    th = pyscf_thermo.thermo(mf, freq_info["freq_au"] * scale,
                              temperature=temperature, pressure=101325)
     g_corr = float(th["G_tot"][0]) - float(e_elec)
     result = {
@@ -410,9 +413,11 @@ def run_job(job, update, is_cancelled=lambda: False):
                     thermo_neutral["entropy_hartree_per_k"] * HARTREE2KCAL * 1000, 2),
                 "n_imaginary_freqs": thermo_neutral["n_imaginary"],
             })
+            descriptors["freq_scale_factor"] = params["freq_scale"]
             notes.append(
                 f"열역학 보정: 기체상 조화진동자·강체회전·이상기체 근사, {temperature} K 반영 "
-                f"(진동수 수준 {params['functional']}/{params['basis_opt']})")
+                f"(진동수 수준 {params['functional']}/{params['basis_opt']}, "
+                f"스케일 인자 {params['freq_scale']} 적용)")
             if thermo_neutral["n_imaginary"] > 0:
                 notes.append(
                     f"경고: 허수 진동수 {thermo_neutral['n_imaginary']}개 — 안정점이 아닐 수 있어 "
