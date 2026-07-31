@@ -1,26 +1,73 @@
 let PRESETS = null;
-const selected = new Set();
+const selected = new Map();  // key → {key, name, smiles, dictId}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-async function init() {
-  PRESETS = await (await fetch("/api/presets")).json();
+/* ---------- 물질 보관함(localStorage) 연동 ---------- */
+function loadLibraryMaterials() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k.startsWith("dft-workbench")) continue;
+      const v = JSON.parse(localStorage.getItem(k));
+      if (v && Array.isArray(v.materials) && v.materials.length) {
+        return v.materials.filter(m => m && m.smiles);
+      }
+    }
+  } catch (e) { /* 보관함 파싱 실패 시 서버 프리셋으로 폴백 */ }
+  return null;
+}
 
+function buildMaterialGrid() {
   const grid = $("material-grid");
   grid.innerHTML = "";
-  for (const m of PRESETS.materials) {
+  const lib = loadLibraryMaterials();
+  const presetIds = new Set(PRESETS.materials.map(m => m.id));
+  const items = lib
+    ? lib.map(m => ({
+        key: m.id, name: m.name, smiles: m.smiles, formula: m.formula || "",
+        note: (m.type || "") + (m.builtin ? "" : " · 사용자 등록"),
+        dictId: presetIds.has(m.dictId) ? m.dictId : null,
+      }))
+    : PRESETS.materials.map(m => ({
+        key: m.id, name: m.name, smiles: m.smiles["모노머"],
+        formula: m.formula, note: m.note, dictId: m.id,
+      }));
+  for (const key of [...selected.keys()]) {
+    if (!items.some(it => it.key === key)) selected.delete(key);
+  }
+  for (const it of items) {
     const btn = document.createElement("button");
-    btn.className = "mol-card";
-    btn.innerHTML = `<b>${esc(m.name)}</b>
-      <span class="small muted">${esc(m.formula)} · ${esc(m.note)}</span>
-      <span class="mono small muted">${esc(m.smiles["모노머"])}</span>`;
+    btn.className = "mol-card" + (selected.has(it.key) ? " selected" : "");
+    btn.innerHTML = `<b>${esc(it.name)}</b>
+      <span class="small muted">${esc(it.formula)}${it.note ? " · " + esc(it.note) : ""}</span>
+      <span class="mono small muted">${esc(it.smiles)}</span>`;
     btn.onclick = () => {
-      selected.has(m.id) ? selected.delete(m.id) : selected.add(m.id);
-      btn.classList.toggle("selected", selected.has(m.id));
+      selected.has(it.key) ? selected.delete(it.key) : selected.set(it.key, it);
+      btn.classList.toggle("selected", selected.has(it.key));
     };
     grid.appendChild(btn);
   }
+  let src = document.getElementById("material-src-note");
+  if (!src) {
+    src = document.createElement("p");
+    src.id = "material-src-note";
+    src.className = "muted small";
+    src.style.margin = "10px 0 0";
+    grid.after(src);
+  }
+  src.textContent = lib
+    ? `물질 보관함과 연동됨 (${items.length}종) — 보관함에서 추가·수정한 소재는 이 페이지를 다시 열면 반영됩니다. `
+      + "사전 등록 소재는 2량체/3량체 구조를 지원하고, 사용자 등록 소재는 입력한 SMILES 구조 그대로 계산합니다."
+    : "물질 보관함을 읽지 못해 기본 소재 프리셋을 표시합니다.";
+}
+window.rbReloadMaterials = buildMaterialGrid;
+
+async function init() {
+  PRESETS = await (await fetch("/api/presets")).json();
+
+  buildMaterialGrid();
 
   const envDiv = $("env-radios");
   envDiv.innerHTML = "";
@@ -111,8 +158,10 @@ function syncEnvState() {
 async function submit() {
   $("form-error").textContent = "";
   const env = document.querySelector('input[name="env"]:checked')?.value;
+  const chosen = [...selected.values()];
   const body = {
-    materialIds: [...selected],
+    materialIds: chosen.filter(c => c.dictId).map(c => c.dictId),
+    customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name})),
     customSmiles: $("custom-smiles").value.trim() || null,
     customName: $("custom-name").value.trim() || null,
     settings: {

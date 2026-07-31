@@ -888,34 +888,44 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       if (b !== navBtn) b.classList.remove("active");
     });
     if (navBtn) navBtn.classList.add("active");
+    if (window.rbReloadMaterials) try { window.rbReloadMaterials(); } catch (e) {}
   }
   function closeReal() {
     real.classList.remove("open");
     if (navBtn) navBtn.classList.remove("active");
   }
 
+  // 모의 데이터 열람 페이지 숨김 목록 (물질 보관함·용매 라이브러리·물성 사전 등 관리/참고 페이지는 유지)
+  var HIDDEN = ["대시보드", "분자 물성", "구조 최적화", "물질 비교", "DFT 계산 결과"];
   function ensureNav() {
     var items = Array.prototype.slice.call(document.querySelectorAll(".sidebar .nav-item"));
-    var opt = null;
+    var anchor = null;
     for (var i = 0; i < items.length; i++) {
       var t = items[i].textContent.trim();
-      if (t === "DFT 계산 결과") items[i].style.display = "none";  // 모의 결과 페이지 숨김
-      if (t.indexOf("구조 최적화") === 0 && !opt) opt = items[i];
+      if (t.indexOf("구조 최적화") === 0) { items[i].style.display = "none"; continue; }
+      if (HIDDEN.indexOf(t) !== -1) { items[i].style.display = "none"; continue; }
+      if (t === "물질 보관함") anchor = items[i];
     }
-    if (!opt) return;
-    if (opt.textContent.indexOf("DFT") !== -1) opt.textContent = "구조 최적화";
+    if (!anchor) return;
     if (!navBtn || !navBtn.isConnected) {
       navBtn = document.createElement("button");
       navBtn.className = "nav-item";
       navBtn.id = "rb-nav-dft";
       navBtn.textContent = "DFT 계산";
       navBtn.addEventListener("click", openReal);
-      opt.insertAdjacentElement("afterend", navBtn);
+      anchor.insertAdjacentElement("afterend", navBtn);
       if (real.classList.contains("open")) navBtn.classList.add("active");
     }
   }
 
   ensureNav();
+  // 대시보드(모의)를 숨겼으므로 시작 화면은 실계산 페이지
+  var opened = false;
+  var bootTimer = setInterval(function () {
+    ensureNav();
+    if (!opened && navBtn && navBtn.isConnected) { opened = true; openReal(); clearInterval(bootTimer); }
+  }, 300);
+  setTimeout(function () { clearInterval(bootTimer); }, 15000);
   new MutationObserver(ensureNav).observe(document.getElementById("root"), {childList: true, subtree: true});
   document.addEventListener("click", function (e) {
     var item = e.target.closest ? e.target.closest(".nav-item") : null;

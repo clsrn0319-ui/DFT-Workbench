@@ -49,8 +49,14 @@ class JobSettings(BaseModel):
     expert: ExpertSettings = ExpertSettings()
 
 
+class CustomMaterial(BaseModel):
+    smiles: str = Field(min_length=1, max_length=300)
+    name: Optional[str] = None
+
+
 class JobRequest(BaseModel):
     materialIds: list[str] = []
+    customMaterials: list[CustomMaterial] = []  # 물질 보관함 등 외부 등록 소재
     customSmiles: Optional[str] = None
     customName: Optional[str] = None
     settings: JobSettings = JobSettings()
@@ -97,6 +103,9 @@ def submit_jobs(req: JobRequest):
         if not smiles:
             raise HTTPException(400, f"{mat['name']}: '{settings['structure']}' 구조가 정의되지 않았습니다.")
         targets.append({"id": mid, "name": mat["name"], "abbr": mat["abbr"], "smiles": smiles})
+    for cm in req.customMaterials:
+        targets.append({"id": None, "name": cm.name or cm.smiles,
+                        "abbr": "보관함", "smiles": cm.smiles})
     if req.customSmiles:
         targets.append({"id": None, "name": req.customName or req.customSmiles,
                         "abbr": "사용자", "smiles": req.customSmiles})
