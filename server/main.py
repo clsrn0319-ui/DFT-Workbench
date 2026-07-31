@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import lookup as lookup_mod
 from . import presets, store, worker
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -77,6 +78,15 @@ def get_presets():
         "referenceElectrodes": list(presets.ABSOLUTE_POTENTIALS.keys()),
         "defaults": presets.DEFAULT_SETTINGS,
     }
+
+
+class LookupRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=300)
+
+
+@app.post("/api/lookup")
+def lookup_compound(req: LookupRequest):
+    return lookup_mod.lookup(req.query)
 
 
 @app.post("/api/jobs")

@@ -758,8 +758,16 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 .ratio-row .input, .ratio-row input{flex:1 1 0;width:100%;min-width:0}
 #rb-real{display:none;position:fixed;top:0;right:0;bottom:0;left:232px;overflow-y:auto;z-index:40;background:var(--page);padding:28px 32px 64px}
 #rb-real.open{display:block}
-#rb-real.mode-calc #rbv-results{display:none}
-#rb-real.mode-results #rbv-calc{display:none}
+#rb-real .rbv{display:none}
+#rb-real.mode-calc #rbv-calc{display:block}
+#rb-real.mode-results #rbv-results{display:block}
+#rb-real.mode-lookup #rbv-lookup{display:block}
+#rb-real.mode-esw #rbv-esw{display:block}
+#rb-real.mode-compare #rbv-compare{display:block}
+#rb-real .esw-chart{width:100%;max-width:860px}
+#rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
+#rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
+#rb-real .verdict-mid{color:var(--pin,#d97706);font-weight:700}
 @media (max-width:760px){#rb-real{left:0}}
 #rb-real .rb-inner{max-width:1080px;margin:0 auto}
 #rb-real h1{margin:0 0 4px;font-size:20px}
@@ -773,7 +781,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <section id="rb-real">
 <div class="rb-inner">
-<div id="rbv-calc">
+<div id="rbv-calc" class="rbv">
   <h1>DFT 계산 (실계산)</h1>
   <p class="rb-note">이 페이지의 제출·결과는 전부 이 컴퓨터의 PySCF가 <b>실제로 수행한 계산</b>입니다.
     다른 메뉴(대시보드·분자 물성 등)의 수치는 디자인 데모용 모의 데이터입니다.</p>
@@ -861,7 +869,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
 </div>
 
-<div id="rbv-results">
+<div id="rbv-results" class="rbv">
   <h1>DFT 계산 결과 (실계산)</h1>
   <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
   <div class="card">
@@ -876,6 +884,34 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div id="result-body"></div>
   </div>
 </div>
+
+<div id="rbv-lookup" class="rbv">
+  <h1>화학물질 조회</h1>
+  <p class="rb-note">영문 이름·CAS 번호·SMILES로 검색하면 RDKit(로컬)과 PubChem(무료 공개 DB)에서
+    분자 특성을 가져옵니다. <span class="mono">MP_API_KEY</span> 설정 시 Materials Project도 조회합니다.
+    확인 후 버튼 한 번으로 물질 보관함 등록·DFT 계산까지 이어집니다.</p>
+  <div class="card">
+    <div class="toolbar">
+      <input class="input grow" id="lookup-q" placeholder="예: acetonitrile · 108-88-3 · CCO">
+      <button class="btn primary" id="lookup-btn">조회</button>
+    </div>
+    <div class="form-error" id="lookup-error"></div>
+    <div id="lookup-result"></div>
+  </div>
+</div>
+
+<div id="rbv-esw" class="rbv">
+  <h1>전기화학 안정성 (ESW)</h1>
+  <p class="rb-note">DFT로 계산된 산화/환원 전위로 전기화학 안정 창(Electrochemical Stability Window)을
+    그리고, 배터리 활물질의 작동 전위와 비교합니다. 전위가 포함된 계산(목적: "전자구조 + 산화/환원 전위")만 표시됩니다.</p>
+  <div class="card" id="esw-body"></div>
+</div>
+
+<div id="rbv-compare" class="rbv">
+  <h1>물질 비교 (실계산)</h1>
+  <p class="rb-note">PUBLISHED 결과를 골라 나란히 비교합니다 — 바인더·전해액 후보 선별용.</p>
+  <div class="card" id="compare-body"></div>
+</div>
 </div>
 </section>
 <script src="/static/app.js"></script>
@@ -888,10 +924,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   // 사이드바 구성: 모의 데이터 열람 페이지는 제외, 관리·참고 페이지는 프록시로 유지
   var NAV = [
     {group: "분자 데이터", items: [
+      {label: "화학물질 조회", mode: "lookup"},
       {label: "물질 보관함", proxy: "물질 보관함"},
       {label: "용매 라이브러리", proxy: "용매 라이브러리"}]},
     {group: "계산", items: [{label: "DFT 계산", mode: "calc"}]},
-    {group: "결과", items: [{label: "DFT 계산 결과", mode: "results"}]},
+    {group: "결과", items: [
+      {label: "DFT 계산 결과", mode: "results"},
+      {label: "전기화학 안정성", mode: "esw"},
+      {label: "물질 비교", mode: "compare"}]},
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
@@ -913,12 +953,17 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
     real.scrollTop = 0;
     setActive(label);
+    real.classList.remove("mode-lookup", "mode-esw", "mode-compare");
+    real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
     }
+    if (mode === "esw" && window.rbRenderEsw) try { window.rbRenderEsw(); } catch (e) {}
+    if (mode === "compare" && window.rbRenderCompare) try { window.rbRenderCompare(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
+  window.rbOpenCalc = function () { openReal("calc", "DFT 계산"); };
 
   function mockItem(text) {
     var items = document.querySelectorAll(".sidebar .nav-item");

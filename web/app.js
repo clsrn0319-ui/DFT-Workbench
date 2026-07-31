@@ -1,4 +1,5 @@
 let PRESETS = null;
+let JOBS_CACHE = [];
 const selected = new Map();  // key → {key, name, smiles, dictId}
 
 const $ = (id) => document.getElementById(id);
@@ -96,6 +97,8 @@ async function init() {
   syncEnvState();
   $("add-explicit").onclick = () => addExplicitRow();
   $("submit-btn").onclick = submit;
+  $("lookup-btn").onclick = doLookup;
+  $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
 }
@@ -210,6 +213,10 @@ const badgeLabel = {QUEUED: "대기", RUNNING: "실행", PUBLISHED: "PUBLISHED",
 
 async function refreshJobs() {
   const {jobs} = await (await fetch("/api/jobs")).json();
+  JOBS_CACHE = jobs;
+  const real = document.getElementById("rb-real");
+  if (real?.classList.contains("mode-esw") && window.rbRenderEsw) window.rbRenderEsw();
+  if (real?.classList.contains("mode-compare") && window.rbRenderCompare) window.rbRenderCompare();
   const list = $("job-list");
   if (!jobs.length) {
     list.className = "empty small";
@@ -305,3 +312,253 @@ function showResult(job) {
 }
 
 init();
+
+
+/* ================= 화학물질 조회 ================= */
+let LAST_LOOKUP = null;
+
+const LOOKUP_LABELS = {
+  formula: "분자식", mw: "분자량 (g/mol)", canonical_smiles: "SMILES (정규화)",
+  logp_crippen: "LogP (Crippen, 소수성)", xlogp: "XLogP (PubChem)",
+  tpsa: "TPSA (극성 표면적, Å²)", hbd: "수소결합 주개 (HBD)", hba: "수소결합 받개 (HBA)",
+  rotatable_bonds: "회전 가능 결합", rings: "고리 수", heavy_atoms: "무거운 원자 수",
+  formal_charge: "형식 전하", charge: "전하", iupac_name: "IUPAC 이름", cas: "CAS 번호",
+  cid: "PubChem CID",
+};
+
+async function doLookup() {
+  const q = $("lookup-q").value.trim();
+  $("lookup-error").textContent = "";
+  if (!q) return;
+  $("lookup-result").innerHTML = '<p class="muted small">조회 중…</p>';
+  let r;
+  try {
+    const res = await fetch("/api/lookup", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: q}),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    r = await res.json();
+  } catch (e) {
+    $("lookup-result").innerHTML = "";
+    $("lookup-error").textContent = "조회 실패: " + e.message;
+    return;
+  }
+  LAST_LOOKUP = r;
+  renderLookup(r);
+}
+
+function kvRows(obj, keys) {
+  let rows = "";
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v === null || v === undefined || v === "") continue;
+    rows += `<tr><th>${esc(LOOKUP_LABELS[k] || k)}</th><td>${esc(v)}</td></tr>`;
+  }
+  return rows;
+}
+
+function renderLookup(r) {
+  const smiles = r.pubchem?.smiles || r.local?.canonical_smiles;
+  const name = r.pubchem?.title || r.pubchem?.iupac_name || r.query;
+  let html = "";
+  if (smiles) {
+    html += `<h3 style="font-size:14px;color:var(--accent);margin:6px 0">${esc(name)}</h3>`;
+    html += `<div class="toolbar" style="margin-bottom:10px">
+      <button class="btn primary" id="lk-add">물질 보관함에 추가</button>
+      <button class="btn" id="lk-calc">DFT 계산으로 보내기</button>
+      ${r.pubchem?.url ? `<a class="btn" href="${esc(r.pubchem.url)}" target="_blank" rel="noopener">PubChem에서 열기</a>` : ""}
+    </div>`;
+  }
+  if (r.local) {
+    html += `<h3 style="font-size:13px;color:var(--accent)">구조 기반 특성 (RDKit 로컬 계산)</h3>
+      <table class="kv-table">${kvRows(r.local,
+        ["formula","mw","canonical_smiles","logp_crippen","tpsa","hbd","hba",
+         "rotatable_bonds","rings","heavy_atoms","formal_charge"])}</table>`;
+  }
+  if (r.pubchem) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:14px">PubChem 등록 정보</h3>
+      <table class="kv-table">${kvRows(r.pubchem, ["iupac_name","cas","cid","xlogp","charge"])}</table>`;
+    if (r.pubchem.description) {
+      html += `<p class="small" style="max-width:76ch;color:var(--text-2)">${esc(r.pubchem.description)}</p>`;
+    }
+    if (r.pubchem.synonyms?.length) {
+      html += `<p class="muted small">동의어: ${r.pubchem.synonyms.slice(0, 6).map(esc).join(" · ")}</p>`;
+    }
+  }
+  if (r.mp) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:14px">Materials Project (분자)</h3>
+      <pre class="xyz">${esc(JSON.stringify(r.mp, null, 1))}</pre>`;
+  }
+  if (r.notes?.length) {
+    html += `<ul class="log-list">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>`;
+  }
+  $("lookup-result").innerHTML = html || '<p class="muted small">결과가 없습니다.</p>';
+  if (smiles) {
+    $("lk-add")?.addEventListener("click", () => {
+      addToLibrary(name, smiles, r.local);
+      $("lk-add").textContent = "보관함에 추가됨 ✓";
+    });
+    $("lk-calc")?.addEventListener("click", () => {
+      const key = addToLibrary(name, smiles, r.local);
+      if (window.rbOpenCalc) window.rbOpenCalc();
+      setTimeout(() => {
+        const it = [...document.querySelectorAll("#material-grid .mol-card")]
+          .find(c => c.textContent.includes(name));
+        if (it && !it.classList.contains("selected")) it.click();
+      }, 200);
+    });
+  }
+}
+
+function addToLibrary(name, smiles, local) {
+  const ts = Date.now();
+  const mat = {
+    id: "mat-lookup-" + ts, name, smiles,
+    formula: local?.formula || "", mw: local?.mw || null,
+    type: "조회 등록", originType: "사용자", tags: [], note: "화학물질 조회에서 추가",
+    precursorCas: [], structureVersion: 1, readyState: "Ready",
+    createdAt: ts, updatedAt: ts, builtin: false,
+  };
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k.startsWith("dft-workbench")) continue;
+    try {
+      const v = JSON.parse(localStorage.getItem(k));
+      if (v && Array.isArray(v.materials)) {
+        if (!v.materials.some(m => m.smiles === smiles)) {
+          v.materials.push(mat);
+          localStorage.setItem(k, JSON.stringify(v));
+        }
+        return mat.id;
+      }
+    } catch (e) { /* 다음 키 시도 */ }
+  }
+  return mat.id;
+}
+
+/* ================= 전기화학 안정성 (ESW) ================= */
+// 배터리 활물질 작동 전위 (V vs Li/Li+, 대표값)
+const ELECTRODES = [
+  {label: "Graphite", v: 0.1, side: "anode"},
+  {label: "Si", v: 0.4, side: "anode"},
+  {label: "LFP", v: 3.45, side: "cathode"},
+  {label: "NCM811 (4.3 V 충전)", v: 4.3, side: "cathode"},
+];
+
+function eswJobs() {
+  return JOBS_CACHE.filter(j => j.status === "PUBLISHED"
+    && j.result?.descriptors?.oxidation_potential_v != null
+    && j.result?.descriptors?.reduction_potential_v != null);
+}
+
+window.rbRenderEsw = function () {
+  const jobs = eswJobs();
+  const box = $("esw-body");
+  if (!jobs.length) {
+    box.innerHTML = '<div class="empty small">전위가 포함된 PUBLISHED 결과가 없습니다.<br>' +
+      'DFT 계산에서 목적을 "전자구조 + 산화/환원 전위"로 선택해 제출하세요.</div>';
+    return;
+  }
+  const V0 = -0.5, V1 = 5.5, W = 820, H = 46 * jobs.length + 70, L = 170;
+  const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 16);
+  let svg = `<svg class="esw-chart" viewBox="0 0 ${W} ${H}" role="img">`;
+  for (let v = 0; v <= 5; v++) {
+    svg += `<line x1="${x(v)}" y1="26" x2="${x(v)}" y2="${H - 34}" stroke="var(--grid)" />
+      <text x="${x(v)}" y="${H - 20}" font-size="11" text-anchor="middle" fill="var(--muted)">${v}</text>`;
+  }
+  svg += `<text x="${(L + W) / 2}" y="${H - 4}" font-size="11" text-anchor="middle" fill="var(--muted)">전위 (V vs Li/Li⁺)</text>`;
+  for (const el of ELECTRODES) {
+    svg += `<line x1="${x(el.v)}" y1="18" x2="${x(el.v)}" y2="${H - 34}"
+        stroke="var(--pin)" stroke-dasharray="4 3" />
+      <text x="${x(el.v)}" y="12" font-size="10.5" text-anchor="middle" fill="var(--pin)">${esc(el.label)}</text>`;
+  }
+  jobs.forEach((j, i) => {
+    const d = j.result.descriptors;
+    const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
+    const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
+    const y = 40 + i * 46;
+    svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end" fill="var(--text-1)">${esc(j.material.name.split(" (")[0])}</text>
+      <rect x="${x(red)}" y="${y - 8}" width="${Math.max(2, x(ox) - x(red))}" height="16" rx="4"
+        fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)" />
+      <text x="${x(red) - 4}" y="${y + 4}" font-size="10" text-anchor="end" fill="var(--text-2)">${red.toFixed(2)}</text>
+      <text x="${x(ox) + 4}" y="${y + 4}" font-size="10" fill="var(--text-2)">${ox.toFixed(2)}</text>`;
+  });
+  svg += "</svg>";
+
+  let rows = "";
+  for (const j of jobs) {
+    const d = j.result.descriptors;
+    const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
+    const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
+    const anodeOK = red < 0.1, anodeMid = red < 0.8;
+    const ncmOK = ox > 4.3, lfpOK = ox > 3.45;
+    rows += `<tr><td><b>${esc(j.material.name)}</b><br><span class="mono small muted">${esc(j.id)}</span></td>
+      <td>${red.toFixed(2)} ~ ${ox.toFixed(2)} V</td>
+      <td class="${anodeOK ? "verdict-ok" : anodeMid ? "verdict-mid" : "verdict-no"}">${anodeOK ? "안정" : anodeMid ? "경계" : "환원 분해 우려"}</td>
+      <td class="${lfpOK ? "verdict-ok" : "verdict-no"}">${lfpOK ? "안정" : "산화 우려"}</td>
+      <td class="${ncmOK ? "verdict-ok" : "verdict-no"}">${ncmOK ? "안정" : "산화 우려"}</td></tr>`;
+  }
+  box.innerHTML = svg + `
+    <div class="scroll-x" style="margin-top:14px"><table class="kv-table" style="min-width:640px">
+      <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.1 V)</th><th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th></tr>
+      ${rows}</table></div>
+    <ul class="log-list" style="margin-top:10px">
+      <li>판정 기준: 환원 전위 &lt; 음극 전위 → 음극에서 환원 안정, 산화 전위 &gt; 양극 전위 → 양극에서 산화 안정 (열역학적 기준)</li>
+      <li>ΔG 기반 전위가 있으면 우선 사용, 없으면 단열/수직 전위 사용</li>
+      <li>주의: 실제 전지에서는 SEI/CEI 피막의 동역학적 보호가 크게 작용합니다 — 예: EC는 환원 분해되지만 안정적 SEI를 형성해 사용됩니다. 이 판정은 스크리닝용 열역학 지표입니다.</li>
+    </ul>`;
+};
+
+/* ================= 물질 비교 ================= */
+const COMPARE_SEL = new Set();
+
+window.rbRenderCompare = function () {
+  const jobs = JOBS_CACHE.filter(j => j.status === "PUBLISHED" && j.result);
+  const box = $("compare-body");
+  if (!jobs.length) {
+    box.innerHTML = '<div class="empty small">PUBLISHED 결과가 없습니다.</div>';
+    return;
+  }
+  for (const id of [...COMPARE_SEL]) if (!jobs.some(j => j.id === id)) COMPARE_SEL.delete(id);
+  let picker = '<div class="mol-grid" style="margin-bottom:14px">';
+  for (const j of jobs) {
+    picker += `<button class="mol-card ${COMPARE_SEL.has(j.id) ? "selected" : ""}" data-cmp="${esc(j.id)}">
+      <b>${esc(j.material.name)}</b>
+      <span class="small muted">${esc(j.result.conditions.method)} · ${esc(j.result.conditions.solvent_model)}</span>
+      <span class="mono small muted">${esc(j.id)}</span></button>`;
+  }
+  picker += "</div>";
+
+  const chosen = jobs.filter(j => COMPARE_SEL.has(j.id));
+  let table = "";
+  if (chosen.length >= 2) {
+    const keys = [];
+    for (const j of chosen) {
+      for (const k of Object.keys(j.result.descriptors)) {
+        if (k !== "potential_reference" && !keys.includes(k)) keys.push(k);
+      }
+    }
+    table = '<div class="scroll-x"><table class="kv-table" style="min-width:560px"><tr><th>지표</th>' +
+      chosen.map(j => `<th>${esc(j.material.name.split(" (")[0])}</th>`).join("") + "</tr>";
+    for (const k of keys) {
+      const [label, unit] = DESC_LABELS[k] || [k, ""];
+      table += `<tr><th>${esc(label)}${unit ? ` (${unit})` : ""}</th>` +
+        chosen.map(j => `<td>${j.result.descriptors[k] ?? "—"}</td>`).join("") + "</tr>";
+    }
+    table += "</table></div>" + `
+      <ul class="log-list" style="margin-top:10px">
+        <li>바인더 후보: HOMO가 낮고(산화 저항) 갭이 크며 산화 전위가 양극 전위보다 높을수록 유리</li>
+        <li>전해액 첨가제/용매 후보: 목적에 따라 다름 — SEI 형성 첨가제는 오히려 환원 전위가 약간 높은(먼저 분해되는) 물질을 선택</li>
+        <li>용매화 에너지가 클수록(더 음수) 극성 환경 친화적 — 수계/유기계 공정 적합성 참고</li>
+      </ul>`;
+  } else {
+    table = '<p class="muted small">두 개 이상 선택하면 비교 표가 나타납니다.</p>';
+  }
+  box.innerHTML = picker + table;
+  box.querySelectorAll("[data-cmp]").forEach(b => b.addEventListener("click", () => {
+    const id = b.dataset.cmp;
+    COMPARE_SEL.has(id) ? COMPARE_SEL.delete(id) : COMPARE_SEL.add(id);
+    window.rbRenderCompare();
+  }));
+};
