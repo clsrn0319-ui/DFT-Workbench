@@ -67,6 +67,44 @@ def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
     return candidates[0][0], info
 
 
+def oligomerize(smiles: str, n_units: int) -> str:
+    """비닐 모노머(C=C 보유)를 head-to-tail 부가 중합 방식으로 n량체 SMILES로 변환.
+
+    비고리·비방향족 C=C 하나를 골라 단일결합으로 바꾸고 사슬로 연결한다
+    (양 끝은 수소 캡핑). 이중결합이 여러 개면 첫 번째를 사용한다.
+    """
+    if n_units <= 1:
+        return smiles
+    base = Chem.MolFromSmiles(smiles)
+    if base is None:
+        raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    target = None
+    for bond in base.GetBonds():
+        if (bond.GetBondType() == Chem.BondType.DOUBLE and not bond.GetIsAromatic()
+                and not bond.IsInRing()
+                and bond.GetBeginAtom().GetSymbol() == "C"
+                and bond.GetEndAtom().GetSymbol() == "C"):
+            target = bond
+            break
+    if target is None:
+        raise GeometryError(
+            "중합 가능한 C=C 이중결합이 없어 2량체/3량체를 만들 수 없습니다 — 모노머로 계산하세요")
+    a_idx, b_idx = target.GetBeginAtomIdx(), target.GetEndAtomIdx()
+    n_atoms = base.GetNumAtoms()
+    combo = base
+    for _ in range(n_units - 1):
+        combo = Chem.CombineMols(combo, base)
+    rw = Chem.RWMol(combo)
+    for u in range(n_units):
+        off = u * n_atoms
+        rw.GetBondBetweenAtoms(a_idx + off, b_idx + off).SetBondType(Chem.BondType.SINGLE)
+        if u < n_units - 1:
+            rw.AddBond(b_idx + off, a_idx + (u + 1) * n_atoms, Chem.BondType.SINGLE)
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+    return Chem.MolToSmiles(mol)
+
+
 def _embed_single(smiles: str, seed: int):
     """SMILES 하나를 3D 임베딩 + 역장 최적화한 RDKit mol로 반환."""
     mol = Chem.MolFromSmiles(smiles)

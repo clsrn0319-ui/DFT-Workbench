@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import geometry
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -37,16 +38,27 @@ class ExplicitMolecule(BaseModel):
     count: int = Field(1, ge=1, le=10)
 
 
+class MixedSolventComponent(BaseModel):
+    abbr: str = Field(min_length=1, max_length=20)
+    ratio: float = Field(gt=0)
+
+
+class MixedSolvent(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    components: list[MixedSolventComponent] = Field(min_length=2, max_length=5)
+
+
 class JobSettings(BaseModel):
-    envType: str = "배터리 전해액"
+    envType: str = "사용자 정의"
     explicitMolecules: list[ExplicitMolecule] = []
     solventId: Optional[str] = "sol-ecdmc"
+    customMixedSolvent: Optional[MixedSolvent] = None  # 용매 라이브러리의 사용자 혼합 용매
     temperature: float = 298.15
     atmosphere: str = "불활성"
     structure: str = "모노머"
     accuracy: str = "표준"
     purpose: str = "전자구조(구조 최적화)"
-    referenceElectrode: str = "Li/Li+"
+    referenceElectrode: Optional[str] = "Li/Li+"  # "없음"/None이면 IP·EA만 보고
     expert: ExpertSettings = ExpertSettings()
 
 
@@ -94,10 +106,15 @@ def submit_jobs(req: JobRequest):
     settings = req.settings.model_dump()
     if settings["envType"] == "진공·기체":
         settings["solventId"] = None
-    elif settings["envType"] == "배터리 전해액" and not settings["solventId"]:
-        raise HTTPException(400, "배터리 전해액 환경에는 용매 프리셋 선택이 필요합니다.")
+        settings["customMixedSolvent"] = None
     if settings["solventId"] and settings["solventId"] not in presets.SOLVENTS_BY_ID:
         raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
+    if settings["customMixedSolvent"]:
+        known = {s["abbr"] for s in presets.SOLVENTS if s["kind"] == "single"}
+        for comp in settings["customMixedSolvent"]["components"]:
+            if comp["abbr"] not in known:
+                raise HTTPException(
+                    400, f"혼합 용매 성분 '{comp['abbr']}'의 SMD 파라미터가 없어 계산할 수 없습니다.")
     if settings["accuracy"] not in presets.ACCURACY:
         raise HTTPException(400, f"알 수 없는 정확도 프리셋: {settings['accuracy']}")
     total_explicit = sum(m["count"] for m in settings["explicitMolecules"])
@@ -113,12 +130,24 @@ def submit_jobs(req: JobRequest):
         if not smiles:
             raise HTTPException(400, f"{mat['name']}: '{settings['structure']}' 구조가 정의되지 않았습니다.")
         targets.append({"id": mid, "name": mat["name"], "abbr": mat["abbr"], "smiles": smiles})
+    n_units = {"모노머": 1, "2량체": 2, "3량체": 3}.get(settings["structure"], 1)
+
+    def resolve_custom(smiles, name):
+        if n_units > 1:
+            try:
+                smiles = geometry.oligomerize(smiles, n_units)
+            except geometry.GeometryError as exc:
+                raise HTTPException(400, f"{name}: {exc}")
+        return smiles
+
     for cm in req.customMaterials:
-        targets.append({"id": None, "name": cm.name or cm.smiles,
-                        "abbr": "보관함", "smiles": cm.smiles})
+        name = cm.name or cm.smiles
+        targets.append({"id": None, "name": name, "abbr": "보관함",
+                        "smiles": resolve_custom(cm.smiles, name)})
     if req.customSmiles:
-        targets.append({"id": None, "name": req.customName or req.customSmiles,
-                        "abbr": "사용자", "smiles": req.customSmiles})
+        name = req.customName or req.customSmiles
+        targets.append({"id": None, "name": name, "abbr": "사용자",
+                        "smiles": resolve_custom(req.customSmiles, name)})
     if not targets:
         raise HTTPException(400, "계산할 소재를 선택하거나 SMILES를 입력하세요.")
 

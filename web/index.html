@@ -777,12 +777,12 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 .rb-jump2{position:fixed;left:18px;bottom:18px;z-index:50;text-decoration:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:700;padding:9px 15px;border-radius:99px;box-shadow:0 3px 12px rgba(0,0,0,.18)}
 </style>
 
-<a class="rb-jump2" href="#rb-real">&#9889; DFT 계산 (실계산)</a>
+<a class="rb-jump2" href="#rb-real">&#9889; DFT 계산</a>
 
 <section id="rb-real">
 <div class="rb-inner">
 <div id="rbv-calc" class="rbv">
-  <h1>DFT 계산 (실계산)</h1>
+  <h1>DFT 계산</h1>
   <p class="rb-note">이 페이지의 제출·결과는 전부 이 컴퓨터의 PySCF가 <b>실제로 수행한 계산</b>입니다.
     다른 메뉴(대시보드·분자 물성 등)의 수치는 디자인 데모용 모의 데이터입니다.</p>
 
@@ -870,7 +870,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 </div>
 
 <div id="rbv-results" class="rbv">
-  <h1>DFT 계산 결과 (실계산)</h1>
+  <h1>DFT 계산 결과</h1>
   <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
   <div class="card">
     <div class="card-head"><h2>작업 큐 / 결과 (실계산)</h2>
@@ -908,7 +908,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 </div>
 
 <div id="rbv-compare" class="rbv">
-  <h1>물질 비교 (실계산)</h1>
+  <h1>물질 비교</h1>
   <p class="rb-note">PUBLISHED 결과를 골라 나란히 비교합니다 — 바인더·전해액 후보 선별용.</p>
   <div class="card" id="compare-body"></div>
 </div>
@@ -999,6 +999,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         b.addEventListener("click", function () {
           if (it.mode) { openReal(it.mode, it.label); }
           else {
+            // 조회/계산 페이지에서 보관함·용매를 수정했으면 모의 앱이 localStorage를
+            // 다시 읽도록 새로고침 후 해당 페이지로 이동
+            if (sessionStorage.getItem("rb-lib-dirty")) {
+              sessionStorage.removeItem("rb-lib-dirty");
+              sessionStorage.setItem("rb-open-mock", it.proxy);
+              location.reload();
+              return;
+            }
             closeReal();
             setActive(it.label);
             var target = mockItem(it.proxy);
@@ -1020,11 +1028,46 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   window.addEventListener("resize", function () {
     if (real.classList.contains("open")) real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
   });
-  // 시작 화면 = DFT 계산 페이지
+  // 모의 물질 보관함의 "계산 →" 버튼 → 실계산 DFT 페이지로 연결
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest("button") : null;
+    if (!btn || btn.dataset.rb) return;
+    if (btn.textContent.trim().indexOf("계산") === 0 && btn.closest(".mat-card")) {
+      e.preventDefault();
+      e.stopPropagation();
+      var name = btn.closest(".mat-card").querySelector(".mat-name");
+      var matName = name ? name.textContent.trim() : null;
+      openReal("calc", "DFT 계산");
+      setTimeout(function () {
+        if (matName && window.rbSelectMaterialByName) window.rbSelectMaterialByName(matName);
+      }, 250);
+    }
+  }, true);
+
+  // 시작 화면: 기본은 DFT 계산 페이지, 보관함 갱신 리로드 후에는 예약된 모의 페이지
+  var pendingMock = sessionStorage.getItem("rb-open-mock");
   var opened = false;
   var bootTimer = setInterval(function () {
     ensureNav();
-    if (!opened && myNav && myNav.isConnected) { opened = true; openReal("calc", "DFT 계산"); clearInterval(bootTimer); }
+    // 인트로 오버레이(ENTER)는 리로드 이동 시 자동 통과
+    if (pendingMock) {
+      var lp = document.querySelector("#lp button");
+      if (lp) { lp.click(); return; }
+    }
+    if (opened || !myNav || !myNav.isConnected) return;
+    if (pendingMock) {
+      var target = mockItem(pendingMock);
+      if (!target) return;
+      sessionStorage.removeItem("rb-open-mock");
+      setActive(pendingMock);
+      target.click();
+      opened = true;
+      clearInterval(bootTimer);
+    } else {
+      opened = true;
+      openReal("calc", "DFT 계산");
+      clearInterval(bootTimer);
+    }
   }, 300);
   setTimeout(function () { clearInterval(bootTimer); }, 15000);
 })();

@@ -50,20 +50,61 @@ function buildMaterialGrid() {
     };
     grid.appendChild(btn);
   }
-  let src = document.getElementById("material-src-note");
-  if (!src) {
-    src = document.createElement("p");
-    src.id = "material-src-note";
-    src.className = "muted small";
-    src.style.margin = "10px 0 0";
-    grid.after(src);
-  }
-  src.textContent = lib
-    ? `물질 보관함과 연동됨 (${items.length}종) — 보관함에서 추가·수정한 소재는 이 페이지를 다시 열면 반영됩니다. `
-      + "사전 등록 소재는 2량체/3량체 구조를 지원하고, 사용자 등록 소재는 입력한 SMILES 구조 그대로 계산합니다."
-    : "물질 보관함을 읽지 못해 기본 소재 프리셋을 표시합니다.";
 }
-window.rbReloadMaterials = buildMaterialGrid;
+
+function rbSelectMaterialByName(name) {
+  buildMaterialGrid();
+  const card = [...document.querySelectorAll("#material-grid .mol-card")]
+    .find(c => c.textContent.includes(name));
+  if (card && !card.classList.contains("selected")) card.click();
+}
+window.rbSelectMaterialByName = rbSelectMaterialByName;
+
+/* ---------- 용매 라이브러리(localStorage) 연동 ---------- */
+function loadLibrarySolvents() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k.startsWith("dft-workbench")) continue;
+      const v = JSON.parse(localStorage.getItem(k));
+      if (v && Array.isArray(v.solvents) && v.solvents.length) return v.solvents;
+    }
+  } catch (e) { /* 폴백: 서버 프리셋 */ }
+  return null;
+}
+
+function buildSolventOptions() {
+  const sel = $("solvent");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  sel.add(new Option("(용매 없음 — 기체상)", ""));
+  const serverIds = new Set(PRESETS.solvents.map(s => s.id));
+  const knownAbbrs = new Set(PRESETS.solvents.filter(s => s.kind === "single").map(s => s.abbr));
+  const lib = loadLibrarySolvents();
+  const list = lib || PRESETS.solvents;
+  for (const s of list) {
+    const label = `${s.abbr}${s.kind === "mixed" ? " (혼합)" : ""} — ${s.name}`;
+    if (serverIds.has(s.id)) {
+      sel.add(new Option(label, s.id));
+    } else if (s.kind === "mixed" && (s.components || []).length >= 2
+               && s.components.every(c => knownAbbrs.has(c.abbr))) {
+      // 사용자 혼합 용매: 성분 SMD 파라미터의 부피 가중 평균으로 서버에서 계산
+      const payload = {name: s.abbr || s.name,
+                       components: s.components.map(c => ({abbr: c.abbr, ratio: c.ratio}))};
+      sel.add(new Option(label + " · 라이브러리", "mix:" + JSON.stringify(payload)));
+    } else {
+      const opt = new Option(label + " (SMD 파라미터 없음 — 계산 불가)", "");
+      opt.disabled = true;
+      sel.add(opt);
+    }
+  }
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else if ([...sel.options].some(o => o.value === PRESETS.defaults.solventId)) {
+    sel.value = PRESETS.defaults.solventId;
+  }
+}
+
+window.rbReloadMaterials = () => { buildMaterialGrid(); buildSolventOptions(); };
 
 async function init() {
   PRESETS = await (await fetch("/api/presets")).json();
@@ -82,10 +123,11 @@ async function init() {
     envDiv.appendChild(label);
   }
 
-  fillSelect("solvent", PRESETS.solvents.map(s =>
-    [s.id, `${s.abbr}${s.kind === "mixed" ? " (혼합)" : ""} — ${s.note}`]), PRESETS.defaults.solventId);
+  buildSolventOptions();
   fillSelect("atmosphere", PRESETS.atmospheres.map(a => [a, a]), PRESETS.defaults.atmosphere);
-  fillSelect("ref-electrode", PRESETS.referenceElectrodes.map(r => [r, r]), PRESETS.defaults.referenceElectrode);
+  fillSelect("ref-electrode",
+    [["없음", "없음 (IP·EA만 보고)"], ...PRESETS.referenceElectrodes.map(r => [r, r + " 기준 전위"])],
+    PRESETS.defaults.referenceElectrode);
   fillSelect("structure", PRESETS.structures.map(s => [s, s]), PRESETS.defaults.structure);
   fillSelect("accuracy", Object.keys(PRESETS.accuracy).map(k => [k, k]), PRESETS.defaults.accuracy);
   fillSelect("purpose", PRESETS.purposes.map(p => [p, p]), PRESETS.defaults.purpose);
@@ -170,7 +212,10 @@ async function submit() {
     settings: {
       envType: env,
       explicitMolecules: collectExplicit(),
-      solventId: env === "진공·기체" ? null : $("solvent").value,
+      solventId: (env === "진공·기체" || $("solvent").value.startsWith("mix:"))
+        ? null : ($("solvent").value || null),
+      customMixedSolvent: (env !== "진공·기체" && $("solvent").value.startsWith("mix:"))
+        ? JSON.parse($("solvent").value.slice(4)) : null,
       temperature: parseFloat($("temperature").value) || 298.15,
       atmosphere: $("atmosphere").value,
       structure: $("structure").value,
@@ -238,7 +283,7 @@ async function refreshJobs() {
           ${esc(job.settings.structure)} · ${esc(method)} · ${esc(job.settings.accuracy)}</div>
         ${["RUNNING", "QUEUED"].includes(job.status)
           ? `<div class="progress-track"><div class="progress-fill" style="width:${job.progress}%"></div></div>
-             <div class="small muted">${esc(job.stage)}</div>` : ""}
+             <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
         ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
         <details><summary class="small muted">로그 (${job.logs.length})</summary>
           <ul class="log-list">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul></details>
@@ -274,6 +319,8 @@ const DESC_LABELS = {
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],
   ea_vertical_ev: ["수직 전자 친화도 (EA)", "eV"],
+  ip_gibbs_ev: ["ΔG 기반 이온화 에너지", "eV"],
+  ea_gibbs_ev: ["ΔG 기반 전자 친화도", "eV"],
   ip_adiabatic_ev: ["단열 이온화 에너지 (IP)", "eV"],
   ea_adiabatic_ev: ["단열 전자 친화도 (EA)", "eV"],
   oxidation_potential_v: ["산화 전위", "V"],
@@ -305,10 +352,125 @@ function showResult(job) {
       <tr><th>wall time</th><td>${r.wall_time_s} s</td></tr></table>
     <h3 style="font-size:13px;color:var(--accent);margin-top:16px">주의사항</h3>
     <ul class="log-list">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">최종 구조 (XYZ)</h3>
-    <pre class="xyz">${esc(r.structure_xyz)}</pre>`;
+    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">최종 구조 (3D)</h3>
+    <div id="viewer3d" style="width:100%;max-width:680px;height:340px;position:relative;
+      border:1px solid var(--grid);border-radius:10px;overflow:hidden"></div>
+    <p class="muted small" id="viewer3d-note" style="margin:6px 0 0"></p>
+    <details style="margin-top:8px"><summary class="small muted">XYZ 좌표 보기</summary>
+    <pre class="xyz">${esc(r.structure_xyz)}</pre></details>`;
   $("result-card").style.display = "";
+  render3D(r);
   $("result-card").scrollIntoView({behavior: "smooth"});
+}
+
+function render3D(r) {
+  const box = $("viewer3d");
+  const note = $("viewer3d-note");
+  const atoms = [];
+  const lines = r.structure_xyz.trim().split("\n");
+  for (let i = 2; i < lines.length; i++) {
+    const t = lines[i].trim().split(/\s+/);
+    if (t.length >= 4) atoms.push({el: t[0], x: +t[1], y: +t[2], z: +t[3]});
+  }
+  if (!atoms.length) { box.style.display = "none"; return; }
+
+  // 조각 정보: 첫 조각(용질)=진하게, 나머지(명시적 주변 분자)=흐리게
+  const solventIdx = new Set();
+  if (r.fragments && r.fragments.length > 1) {
+    for (const f of r.fragments.slice(1)) {
+      for (let i = f.start; i < f.end; i++) solventIdx.add(i);
+    }
+    note.textContent = "선명한 분자 = 용질 · 흐린 분자 = 배치된 명시적 주변 분자 · 드래그 회전 / 휠 확대";
+  } else {
+    note.textContent = "드래그로 회전, 휠로 확대할 수 있습니다.";
+  }
+
+  const COLOR = {H:"#cfcfcf",C:"#3a3a3a",N:"#2f5bd8",O:"#d62828",F:"#4fb944",
+                 S:"#c9a227",P:"#e08020",Cl:"#3fae49",Br:"#8a4b26",I:"#7a3fa0",Li:"#b04fd8"};
+  const RCOV = {H:.31,C:.76,N:.71,O:.66,F:.57,S:1.05,P:1.07,Cl:1.02,Br:1.2,I:1.39,Li:1.28};
+  const rad = el => RCOV[el] ?? .8;
+
+  // 결합 탐지 (공유 반지름 합 × 1.25)
+  const bonds = [];
+  for (let i = 0; i < atoms.length; i++) {
+    for (let j = i + 1; j < atoms.length; j++) {
+      const a = atoms[i], b = atoms[j];
+      const d = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      if (d < (rad(a.el) + rad(b.el)) * 1.25 && d > 0.4) bonds.push([i, j]);
+    }
+  }
+  const cx = atoms.reduce((s, a) => s + a.x, 0) / atoms.length;
+  const cy = atoms.reduce((s, a) => s + a.y, 0) / atoms.length;
+  const cz = atoms.reduce((s, a) => s + a.z, 0) / atoms.length;
+  const span = Math.max(...atoms.map(a => Math.hypot(a.x - cx, a.y - cy, a.z - cz)), 1.5);
+
+  box.innerHTML = "";
+  const canvas = document.createElement("canvas");
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  canvas.style.cursor = "grab";
+  box.appendChild(canvas);
+  const ctx = canvas.getContext("2d");
+  let yaw = 0.6, pitch = -0.4, zoom = 1;
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const W = box.clientWidth, H = box.clientHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const scale = Math.min(W, H) / (span * 2.6) * zoom;
+    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const proj = atoms.map((a, i) => {
+      const x0 = a.x - cx, y0 = a.y - cy, z0 = a.z - cz;
+      const x1 = x0 * cyaw + z0 * syaw, z1 = -x0 * syaw + z0 * cyaw;
+      const y2 = y0 * cp - z1 * sp, z2 = y0 * sp + z1 * cp;
+      return {i, el: a.el, sx: W / 2 + x1 * scale, sy: H / 2 - y2 * scale, z: z2};
+    });
+    // 결합 (깊이 평균으로 정렬해 원자와 섞어 그리기 대신 먼저 결합, 뒤 원자 — 소형 분자에 충분)
+    for (const [i, j] of bonds) {
+      const p = proj[i], q = proj[j];
+      const faded = solventIdx.has(i) || solventIdx.has(j);
+      ctx.strokeStyle = faded ? "rgba(140,140,140,.45)" : "rgba(90,90,90,.9)";
+      ctx.lineWidth = faded ? 1.4 : 2.6;
+      ctx.beginPath(); ctx.moveTo(p.sx, p.sy); ctx.lineTo(q.sx, q.sy); ctx.stroke();
+    }
+    proj.sort((a, b) => a.z - b.z);
+    for (const p of proj) {
+      const faded = solventIdx.has(p.i);
+      const rr = (rad(p.el) * 0.45 + 0.18) * scale * (faded ? 0.7 : 1);
+      const depth = 0.75 + 0.25 * (p.z / (span + 0.01) + 1) / 2;
+      ctx.globalAlpha = faded ? 0.45 : 1;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, Math.max(rr, 2), 0, Math.PI * 2);
+      ctx.fillStyle = COLOR[p.el] ?? "#888";
+      ctx.fill();
+      ctx.globalAlpha = faded ? 0.45 : depth;
+      ctx.strokeStyle = "rgba(255,255,255,.6)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  let dragging = false, px = 0, py = 0;
+  canvas.addEventListener("mousedown", e => { dragging = true; px = e.clientX; py = e.clientY; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    yaw += (e.clientX - px) * 0.01;
+    pitch += (e.clientY - py) * 0.01;
+    pitch = Math.max(-1.5, Math.min(1.5, pitch));
+    px = e.clientX; py = e.clientY;
+    draw();
+  });
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    zoom = Math.max(0.3, Math.min(5, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    draw();
+  }, {passive: false});
+  draw();
 }
 
 init();
@@ -429,6 +591,7 @@ function addToLibrary(name, smiles, local) {
         if (!v.materials.some(m => m.smiles === smiles)) {
           v.materials.push(mat);
           localStorage.setItem(k, JSON.stringify(v));
+          sessionStorage.setItem("rb-lib-dirty", "1");
         }
         return mat.id;
       }

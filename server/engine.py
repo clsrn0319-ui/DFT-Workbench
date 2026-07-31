@@ -50,12 +50,36 @@ class CancelledError(Exception):
 
 
 def _solvent_key(settings):
-    if settings["envType"] == "진공·기체" or not settings.get("solventId"):
+    if settings["envType"] == "진공·기체":
+        return None
+    custom = settings.get("customMixedSolvent")
+    if custom:
+        # 용매 라이브러리의 사용자 혼합 용매: 성분 SMD 파라미터의 부피 가중 평균으로 등록
+        by_abbr = {s["abbr"]: s for s in presets.SOLVENTS if s["kind"] == "single"}
+        total = sum(c["ratio"] for c in custom["components"])
+        vec = [0.0] * 8
+        for c in custom["components"]:
+            sol = by_abbr.get(c["abbr"])
+            if sol is None:
+                raise ValueError(f"혼합 성분 {c['abbr']}의 SMD 파라미터가 없습니다")
+            params = sol["smd"] if sol.get("smd") else presets.WATER_SMD_FOR_MIX
+            w = c["ratio"] / total
+            vec = [v + w * p for v, p in zip(vec, params)]
+        key = "smd:mix-" + "-".join(
+            f"{c['abbr']}{c['ratio']:g}" for c in custom["components"]).lower()
+        smd.solvent_db[key] = vec
+        return key
+    if not settings.get("solventId"):
         return None
     sol = presets.SOLVENTS_BY_ID.get(settings["solventId"])
     if sol is None:
         raise ValueError(f"알 수 없는 용매 id: {settings['solventId']}")
     return sol.get("builtin_key") or sol["modelKey"]
+
+
+def _no_reference(settings):
+    ref = settings.get("referenceElectrode")
+    return ref in (None, "", "없음")
 
 
 def _resolve_params(settings):
@@ -365,9 +389,13 @@ def run_job(job, update, is_cancelled=lambda: False):
         if want_redox and not closed_shell:
             log("중성 상태가 열린 껍질이라 자동 전위 계산 생략")
         elif want_redox:
-            ref = settings.get("referenceElectrode", "Li/Li+")
-            e_abs = presets.ABSOLUTE_POTENTIALS.get(ref, 1.44)
-            descriptors["potential_reference"] = ref
+            no_ref = _no_reference(settings)
+            ref = None if no_ref else settings.get("referenceElectrode", "Li/Li+")
+            e_abs = None if no_ref else presets.ABSOLUTE_POTENTIALS.get(ref, 1.44)
+            if not no_ref:
+                descriptors["potential_reference"] = ref
+            else:
+                notes.append("기준 전극 '없음' — 전위 환산 없이 IP/EA만 보고합니다")
 
             def ion_energy_vertical(dq, label, prog):
                 stage(f"{label} (수직 ΔSCF)", prog)
@@ -411,22 +439,30 @@ def run_job(job, update, is_cancelled=lambda: False):
                 descriptors.update({
                     "ip_adiabatic_ev": round(ip_a, 3),
                     "ea_adiabatic_ev": round(ea_a, 3),
-                    "oxidation_potential_v": round(ip_a - e_abs, 3),
-                    "reduction_potential_v": round(ea_a - e_abs, 3),
                 })
-                notes.append(
-                    f"전위는 단열(adiabatic) IP/EA 기반 — 이온 상태 구조 재최적화 포함, "
-                    f"{ref} 절대 전위 {e_abs} V 가정")
+                if e_abs is not None:
+                    descriptors.update({
+                        "oxidation_potential_v": round(ip_a - e_abs, 3),
+                        "reduction_potential_v": round(ea_a - e_abs, 3),
+                    })
+                    notes.append(
+                        f"전위는 단열(adiabatic) IP/EA 기반 — 이온 상태 구조 재최적화 포함, "
+                        f"{ref} 절대 전위 {e_abs} V 가정")
                 if g_cat is not None and g_an is not None:
                     g0 = thermo_neutral["g_corr_hartree"]
                     dg_ox = (e_cat_a + g_cat - e_total - g0) * HARTREE2EV
                     dg_red = (e_total + g0 - e_an_a - g_an) * HARTREE2EV
                     descriptors.update({
-                        "oxidation_potential_gibbs_v": round(dg_ox - e_abs, 3),
-                        "reduction_potential_gibbs_v": round(dg_red - e_abs, 3),
+                        "ip_gibbs_ev": round(dg_ox, 3),
+                        "ea_gibbs_ev": round(dg_red, 3),
                     })
-                    notes.append("ΔG 기반 전위: 기체상 열보정(298 K 조화근사)을 단열 전자에너지에 합산")
-            else:
+                    if e_abs is not None:
+                        descriptors.update({
+                            "oxidation_potential_gibbs_v": round(dg_ox - e_abs, 3),
+                            "reduction_potential_gibbs_v": round(dg_red - e_abs, 3),
+                        })
+                    notes.append("ΔG 기반 IP/EA: 기체상 열보정(298 K 조화근사)을 단열 전자에너지에 합산")
+            elif e_abs is not None:
                 descriptors.update({
                     "oxidation_potential_v": round(ip_v - e_abs, 3),
                     "reduction_potential_v": round(ea_v - e_abs, 3),
@@ -438,10 +474,15 @@ def run_job(job, update, is_cancelled=lambda: False):
         elapsed = time.time() - t_start
         result = {
             "descriptors": descriptors,
+            "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
+                           for f in fragments] if fragments else None),
             "conditions": {
                 "environment": settings["envType"],
                 "explicit_molecules": explicit_label or "없음",
-                "solvent_model": f"SMD({solvent_key})" if solvent_key else "vacuum",
+                "solvent_model": (
+                    f"SMD(혼합: {settings['customMixedSolvent']['name']})"
+                    if settings.get("customMixedSolvent") else
+                    f"SMD({solvent_key})" if solvent_key else "vacuum"),
                 "temperature_k": temperature,
                 "atmosphere": settings["atmosphere"],
                 "reference_electrode": settings.get("referenceElectrode"),

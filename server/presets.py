@@ -124,10 +124,12 @@ MATERIALS = [
 MATERIALS_BY_ID = {m["id"]: m for m in MATERIALS}
 
 ENV_TYPES = [
-    {"id": "배터리 전해액", "desc": "SMD implicit 용매 · 298.15 K · Li/Li⁺ 기준"},
+    {"id": "사용자 정의", "desc": "용매(용매 라이브러리 연동)·온도·기준 전극 직접 선택"},
     {"id": "진공·기체", "desc": "vacuum · isolated molecule · 분자 자체 전자구조"},
-    {"id": "사용자 정의", "desc": "용매·방법·기준 전극 직접 선택"},
 ]
+
+# 혼합 용매 부피 가중 평균 시 물의 SMD 파라미터 (DB의 -1 센티널을 실측값으로 대체)
+WATER_SMD_FOR_MIX = [1.3328, 1.3323, 0.82, 0.35, 103.6, 78.355, 0.0, 0.0]
 
 # 정확도 프리셋 → 실제 계산 파라미터.
 #  - n_conf: RDKit ETKDG conformer 수 (역장 최적화 후 후보 선별)
@@ -164,7 +166,7 @@ PURPOSES = [
 ]
 
 DEFAULT_SETTINGS = {
-    "envType": "배터리 전해액",
+    "envType": "사용자 정의",
     "solventId": "sol-ecdmc",
     "temperature": 298.15,
     "atmosphere": "불활성",  # 기록용 메타데이터 (분자 DFT 해밀토니안에는 미반영)
