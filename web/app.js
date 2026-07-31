@@ -335,49 +335,183 @@ const DESC_LABELS = {
   reduction_potential_gibbs_v: ["환원 전위 (ΔG 기반)", "V"],
 };
 
+let CURRENT_RESULT = null;
+let VIEW_MODE = "element";
+
+/* ---------- 2D 시각화 (모의 앱 차트 문법 재사용) ---------- */
+function svgLevels(homo, lumo, gap) {
+  const lo = Math.min(homo, lumo) - 1.2, hi = Math.max(homo, lumo) + 1.2;
+  const W = 320, H = 230, T = 14, B = 16, L = 44;
+  const y = e => T + (hi - e) / (hi - lo) * (H - T - B);
+  const step = (hi - lo) > 9 ? 2 : 1;
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:330px" role="img">`;
+  sv += `<line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" class="baseline"/>`;
+  for (let e = Math.ceil(lo); e <= hi; e += step) {
+    sv += `<line x1="${L - 4}" y1="${y(e)}" x2="${L}" y2="${y(e)}" class="baseline"/>
+      <text x="${L - 7}" y="${y(e) + 3.5}" text-anchor="end" class="axis-label">${e}</text>`;
+  }
+  sv += `<text x="10" y="${T + 3}" class="axis-label">eV</text>`;
+  const bx = L + 22, bw = 116, gx = bx + bw / 2;
+  sv += `<rect x="${bx}" y="${y(lumo) - 4}" width="${bw}" height="8" rx="2"
+      fill="none" stroke="var(--pin)" stroke-width="2"/>
+    <text x="${bx + bw + 7}" y="${y(lumo) + 4}" class="value-label">LUMO ${lumo} eV</text>`;
+  sv += `<line x1="${gx}" y1="${y(lumo) + 7}" x2="${gx}" y2="${y(homo) - 7}"
+      stroke="var(--text-2)" stroke-dasharray="3 3"/>
+    <text x="${gx + 7}" y="${(y(homo) + y(lumo)) / 2 + 4}" class="value-label">갭 ${gap} eV</text>`;
+  sv += `<rect x="${bx}" y="${y(homo) - 4}" width="${bw}" height="8" rx="2" fill="var(--accent)"/>
+    <text x="${bx + bw + 7}" y="${y(homo) + 4}" class="value-label">HOMO ${homo} eV</text>`;
+  return sv + "</svg>";
+}
+
+function svgEswBar(red, ox, ref) {
+  const V0 = -0.5, V1 = 5.5, W = 640, H = 96, L = 10;
+  const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 14);
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:680px" role="img">`;
+  for (let v = 0; v <= 5; v++) {
+    sv += `<line x1="${x(v)}" y1="24" x2="${x(v)}" y2="${H - 26}" class="gridline"/>
+      <text x="${x(v)}" y="${H - 13}" text-anchor="middle" class="axis-label">${v}</text>`;
+  }
+  for (const el of ELECTRODES) {
+    sv += `<line x1="${x(el.v)}" y1="16" x2="${x(el.v)}" y2="${H - 26}"
+        stroke="var(--pin)" stroke-dasharray="4 3"/>
+      <text x="${x(el.v)}" y="11" text-anchor="middle" class="axis-label"
+        fill="var(--pin)">${esc(el.label.split(" (")[0])}</text>`;
+  }
+  sv += `<rect x="${x(red)}" y="38" width="${Math.max(2, x(ox) - x(red))}" height="18" rx="4"
+      fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)"/>
+    <text x="${x(red) - 4}" y="51" text-anchor="end" class="value-label">${red.toFixed(2)}</text>
+    <text x="${x(ox) + 4}" y="51" class="value-label">${ox.toFixed(2)}</text>
+    <text x="${(x(red) + x(ox)) / 2}" y="${H - 13}" text-anchor="middle"
+      class="axis-label">전위 (V vs ${esc(ref)})</text>`;
+  return sv + "</svg>";
+}
+
+function svgPops(pops) {
+  const W = 340, rowH = 24, H = pops.length * rowH + 6;
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:360px" role="img">`;
+  pops.forEach((c, i) => {
+    const y = i * rowH + 4, w = Math.max(2, c.population_pct / 100 * (W - 160));
+    sv += `<text x="0" y="${y + 12}" class="axis-label">#${i + 1} (+${c.rel_e_kcal})</text>
+      <rect x="78" y="${y}" width="${w}" height="15" rx="3" fill="var(--series-${(i % 8) + 1})"/>
+      <text x="${84 + w}" y="${y + 12}" class="value-label">${c.population_pct}%</text>`;
+  });
+  return sv + "</svg>";
+}
+
+/* ---------- 결과 상세 ---------- */
+const KV_GROUPS = [
+  ["에너지 · 열역학", ["total_energy_hartree", "zpe_kcal", "gibbs_correction_kcal",
+    "gibbs_energy_hartree", "entropy_cal_mol_k", "n_imaginary_freqs", "freq_scale_factor",
+    "standard_state_corr_kcal", "gibbs_energy_solution_hartree"]],
+  ["용매화 · 상호작용 · 전위", ["solvation_energy_kcal", "smd_cds_kcal", "interaction_energy_kcal",
+    "ip_vertical_ev", "ea_vertical_ev", "ip_adiabatic_ev", "ea_adiabatic_ev",
+    "ip_gibbs_ev", "ea_gibbs_ev", "oxidation_potential_v", "reduction_potential_v",
+    "oxidation_potential_gibbs_v", "reduction_potential_gibbs_v"]],
+];
+
 function showResult(job) {
   const r = job.result;
-  $("result-title").textContent = `결과 상세 — ${job.material.name} (${job.id})`;
-  const ref = r.descriptors.potential_reference;
-  let rows = "";
-  for (const [key, val] of Object.entries(r.descriptors)) {
-    if (key === "potential_reference" || val == null) continue;
-    if (key === "conformer_populations") {
-      const txt = val.map((c, i) =>
-        `#${i + 1}: +${c.rel_e_kcal} kcal/mol · ${c.population_pct}%`).join("  |  ");
-      rows += `<tr><th>Conformer 분포 (Boltzmann)</th><td>${esc(txt)}</td></tr>`;
-      continue;
-    }
-    const [label, unit] = DESC_LABELS[key] || [key, ""];
-    const suffix = key.includes("potential") && ref ? ` vs ${ref}` : "";
-    rows += `<tr><th>${esc(label)}</th><td>${typeof val === "number" ? val : esc(val)} ${unit}${suffix}</td></tr>`;
+  CURRENT_RESULT = r;
+  VIEW_MODE = "element";
+  const d = r.descriptors;
+  const ref = d.potential_reference;
+  $("result-title").textContent = `결과 상세 — ${job.material.name}`;
+
+  const tiles = [
+    ["HOMO", d.homo_ev, "eV", "최고 점유 궤도"],
+    ["LUMO", d.lumo_ev, "eV", "최저 비점유 궤도"],
+    ["HOMO–LUMO 갭", d.gap_ev, "eV", "클수록 전자적 안정"],
+    ["쌍극자 모멘트", d.dipole_debye, "D", "분자 극성"],
+  ].filter(t => t[1] != null).map(([l, v, u, sub]) => `
+    <div class="stat-tile"><div class="stat-label">${l}</div>
+      <div class="stat-value">${v}<span class="stat-unit"> ${u}</span></div>
+      <div class="stat-sub">${sub}</div></div>`).join("");
+
+  let html = `
+    <div class="small muted mono" style="margin-bottom:8px">${esc(job.id)} ·
+      ${esc(r.conditions.method)} · ${esc(r.conditions.solvent_model)} ·
+      ${esc(String(r.conditions.temperature_k))} K · wall ${r.wall_time_s}s</div>
+    <div class="stat-row">${tiles}</div>
+    <div class="grid-2">
+      <div>
+        <h3 style="font-size:13px;color:var(--accent)">전자 에너지 준위</h3>
+        ${d.homo_ev != null && d.lumo_ev != null
+          ? svgLevels(d.homo_ev, d.lumo_ev, d.gap_ev)
+          : '<p class="muted small">준위 데이터 없음</p>'}
+      </div>
+      <div>
+        <h3 style="font-size:13px;color:var(--accent)">3D 구조</h3>
+        <div class="toolbar" style="margin-bottom:6px">
+          <button class="btn" id="v3d-element" type="button">원소 색</button>
+          <button class="btn" id="v3d-charge" type="button">부분 전하 색</button>
+        </div>
+        <div id="viewer3d" style="width:100%;height:280px;position:relative;
+          border:1px solid var(--grid);border-radius:10px;overflow:hidden"></div>
+        <p class="muted small" id="viewer3d-note" style="margin:6px 0 0"></p>
+      </div>
+    </div>`;
+
+  const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
+  const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
+  if (red != null && ox != null) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        전기화학 안정 창 (활물질 작동 전위 대비)</h3>
+      ${svgEswBar(red, ox, ref || "Li/Li⁺")}`;
   }
+  if (Array.isArray(d.conformer_populations) && d.conformer_populations.length > 1) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        Conformer Boltzmann 분포 (상대 에너지 kcal/mol)</h3>
+      ${svgPops(d.conformer_populations)}`;
+  }
+
+  html += '<div class="grid-2" style="margin-top:16px">';
+  for (const [title, keys] of KV_GROUPS) {
+    let rows = "";
+    for (const k of keys) {
+      if (d[k] == null) continue;
+      const [label, unit] = DESC_LABELS[k] || [k, ""];
+      const suffix = k.includes("potential") && ref ? ` vs ${ref}` : "";
+      rows += `<tr><th>${esc(label)}</th><td>${d[k]} ${unit}${suffix}</td></tr>`;
+    }
+    if (rows) html += `<div><h3 style="font-size:13px;color:var(--accent)">${title}</h3>
+      <table class="kv-table">${rows}</table></div>`;
+  }
+  html += "</div>";
+
   let condRows = "";
   for (const [k, v] of Object.entries(r.conditions)) {
     condRows += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
   }
-  $("result-body").innerHTML = `
-    <h3 style="font-size:13px;color:var(--accent)">기술자 (실계산 값)</h3>
-    <table class="kv-table">${rows}</table>
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">계산 조건</h3>
-    <table class="kv-table">${condRows}
-      <tr><th>wall time</th><td>${r.wall_time_s} s</td></tr></table>
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">주의사항</h3>
+  html += `
+    <details style="margin-top:14px"><summary class="small muted">계산 조건 전체</summary>
+      <table class="kv-table" style="margin-top:6px">${condRows}</table></details>
+    <h3 style="font-size:13px;color:var(--accent);margin-top:14px">주의사항</h3>
     <ul class="log-list">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">최종 구조 (3D)</h3>
-    <div id="viewer3d" style="width:100%;max-width:680px;height:340px;position:relative;
-      border:1px solid var(--grid);border-radius:10px;overflow:hidden"></div>
-    <p class="muted small" id="viewer3d-note" style="margin:6px 0 0"></p>
     <details style="margin-top:8px"><summary class="small muted">XYZ 좌표 보기</summary>
-    <pre class="xyz">${esc(r.structure_xyz)}</pre></details>`;
+      <pre class="xyz">${esc(r.structure_xyz)}</pre></details>`;
+
+  $("result-body").innerHTML = html;
+  $("v3d-element").addEventListener("click", () => { VIEW_MODE = "element"; render3D(CURRENT_RESULT); });
+  $("v3d-charge").addEventListener("click", () => { VIEW_MODE = "charge"; render3D(CURRENT_RESULT); });
   $("result-card").style.display = "";
   render3D(r);
   $("result-card").scrollIntoView({behavior: "smooth"});
 }
 
+/* ---------- 3D 뷰어 (자체 캔버스, 원소/부분전하 색상) ---------- */
+function chargeColor(q, qmax) {
+  const t = Math.max(-1, Math.min(1, q / (qmax || 1)));
+  // 파랑(−) ↔ 흰색(0) ↔ 빨강(+)
+  const r = t > 0 ? 214 : Math.round(255 - (-t) * 180);
+  const g = Math.round(235 - Math.abs(t) * 190);
+  const b = t < 0 ? 216 : Math.round(255 - t * 190);
+  return `rgb(${t > 0 ? 214 : r},${g},${t < 0 ? 216 : b})`;
+}
+
 function render3D(r) {
   const box = $("viewer3d");
   const note = $("viewer3d-note");
+  if (!box) return;
   const atoms = [];
   const lines = r.structure_xyz.trim().split("\n");
   for (let i = 2; i < lines.length; i++) {
@@ -385,30 +519,35 @@ function render3D(r) {
     if (t.length >= 4) atoms.push({el: t[0], x: +t[1], y: +t[2], z: +t[3]});
   }
   if (!atoms.length) { box.style.display = "none"; return; }
+  const charges = r.mulliken_charges || [];
+  const qmax = Math.max(...charges.map(Math.abs), 0.01);
 
-  // 조각 정보: 첫 조각(용질)=진하게, 나머지(명시적 주변 분자)=흐리게
   const solventIdx = new Set();
   if (r.fragments && r.fragments.length > 1) {
     for (const f of r.fragments.slice(1)) {
       for (let i = f.start; i < f.end; i++) solventIdx.add(i);
     }
-    note.textContent = "선명한 분자 = 용질 · 흐린 분자 = 배치된 명시적 주변 분자 · 드래그 회전 / 휠 확대";
-  } else {
-    note.textContent = "드래그로 회전, 휠로 확대할 수 있습니다.";
   }
+  const baseNote = solventIdx.size
+    ? "선명한 분자 = 용질 · 흐린 분자 = 명시적 주변 분자 · 드래그 회전 / 휠 확대"
+    : "드래그로 회전, 휠로 확대할 수 있습니다.";
+  note.textContent = VIEW_MODE === "charge"
+    ? "부분 전하(Mulliken): 파랑 = 음전하(친핵 부위) · 빨강 = 양전하(친전자 부위) — " + baseNote
+    : baseNote;
+  $("v3d-element")?.classList.toggle("primary", VIEW_MODE === "element");
+  $("v3d-charge")?.classList.toggle("primary", VIEW_MODE === "charge");
 
   const COLOR = {H:"#cfcfcf",C:"#3a3a3a",N:"#2f5bd8",O:"#d62828",F:"#4fb944",
                  S:"#c9a227",P:"#e08020",Cl:"#3fae49",Br:"#8a4b26",I:"#7a3fa0",Li:"#b04fd8"};
   const RCOV = {H:.31,C:.76,N:.71,O:.66,F:.57,S:1.05,P:1.07,Cl:1.02,Br:1.2,I:1.39,Li:1.28};
   const rad = el => RCOV[el] ?? .8;
 
-  // 결합 탐지 (공유 반지름 합 × 1.25)
   const bonds = [];
   for (let i = 0; i < atoms.length; i++) {
     for (let j = i + 1; j < atoms.length; j++) {
       const a = atoms[i], b = atoms[j];
-      const d = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-      if (d < (rad(a.el) + rad(b.el)) * 1.25 && d > 0.4) bonds.push([i, j]);
+      const dd = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      if (dd < (rad(a.el) + rad(b.el)) * 1.25 && dd > 0.4) bonds.push([i, j]);
     }
   }
   const cx = atoms.reduce((s, a) => s + a.x, 0) / atoms.length;
@@ -440,7 +579,6 @@ function render3D(r) {
       const y2 = y0 * cp - z1 * sp, z2 = y0 * sp + z1 * cp;
       return {i, el: a.el, sx: W / 2 + x1 * scale, sy: H / 2 - y2 * scale, z: z2};
     });
-    // 결합 (깊이 평균으로 정렬해 원자와 섞어 그리기 대신 먼저 결합, 뒤 원자 — 소형 분자에 충분)
     for (const [i, j] of bonds) {
       const p = proj[i], q = proj[j];
       const faded = solventIdx.has(i) || solventIdx.has(j);
@@ -452,16 +590,22 @@ function render3D(r) {
     for (const p of proj) {
       const faded = solventIdx.has(p.i);
       const rr = (rad(p.el) * 0.45 + 0.18) * scale * (faded ? 0.7 : 1);
-      const depth = 0.75 + 0.25 * (p.z / (span + 0.01) + 1) / 2;
       ctx.globalAlpha = faded ? 0.45 : 1;
       ctx.beginPath();
       ctx.arc(p.sx, p.sy, Math.max(rr, 2), 0, Math.PI * 2);
-      ctx.fillStyle = COLOR[p.el] ?? "#888";
+      ctx.fillStyle = VIEW_MODE === "charge" && charges[p.i] !== undefined
+        ? chargeColor(charges[p.i], qmax)
+        : (COLOR[p.el] ?? "#888");
       ctx.fill();
-      ctx.globalAlpha = faded ? 0.45 : depth;
-      ctx.strokeStyle = "rgba(255,255,255,.6)";
+      ctx.strokeStyle = VIEW_MODE === "charge" ? "rgba(60,60,60,.5)" : "rgba(255,255,255,.6)";
       ctx.lineWidth = 1;
       ctx.stroke();
+      if (VIEW_MODE === "charge" && charges[p.i] !== undefined && !faded && p.el !== "H") {
+        ctx.fillStyle = "#333";
+        ctx.font = "10px ui-monospace,monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(charges[p.i].toFixed(2), p.sx, p.sy - rr - 3);
+      }
       ctx.globalAlpha = 1;
     }
   }
@@ -708,13 +852,43 @@ window.rbRenderCompare = function () {
   const chosen = jobs.filter(j => COMPARE_SEL.has(j.id));
   let table = "";
   if (chosen.length >= 2) {
+    // 모의 앱 스타일 비교 차트 (시리즈 색상)
+    const METRICS = [
+      ["homo_ev", "HOMO", "eV"], ["lumo_ev", "LUMO", "eV"], ["gap_ev", "HOMO–LUMO 갭", "eV"],
+      ["dipole_debye", "쌍극자 모멘트", "D"],
+      ["oxidation_potential_v", "산화 전위", "V"], ["reduction_potential_v", "환원 전위", "V"],
+      ["solvation_energy_kcal", "용매화 에너지", "kcal/mol"],
+      ["interaction_energy_kcal", "클러스터 상호작용", "kcal/mol"],
+    ];
+    let charts = "";
+    for (const [key, title, unit] of METRICS) {
+      const entries = chosen
+        .map((j, i) => ({name: j.material.name.split(" (")[0], v: j.result.descriptors[key], i}))
+        .filter(e => e.v != null);
+      if (entries.length < 2) continue;
+      const maxAbs = Math.max(...entries.map(e => Math.abs(e.v)), 1e-9);
+      const W = 340, rowH = 24, H = entries.length * rowH + 6;
+      let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:360px" role="img">`;
+      entries.forEach((e, k) => {
+        const y = k * rowH + 4, w = Math.max(2, Math.abs(e.v) / maxAbs * (W - 190));
+        sv += `<text x="0" y="${y + 12}" class="axis-label">${esc(e.name.slice(0, 12))}</text>
+          <rect x="96" y="${y}" width="${w}" height="15" rx="3" fill="var(--series-${(e.i % 8) + 1})"/>
+          <text x="${102 + w}" y="${y + 12}" class="value-label">${e.v}</text>`;
+      });
+      sv += "</svg>";
+      charts += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 4px">
+        ${esc(title)}${unit ? ` (${unit})` : ""}</h3>${sv}</div>`;
+    }
+    if (charts) {
+      table += `<div class="grid-2" style="margin-bottom:14px">${charts}</div>`;
+    }
     const keys = [];
     for (const j of chosen) {
       for (const k of Object.keys(j.result.descriptors)) {
         if (k !== "potential_reference" && !keys.includes(k)) keys.push(k);
       }
     }
-    table = '<div class="scroll-x"><table class="kv-table" style="min-width:560px"><tr><th>지표</th>' +
+    table += '<div class="scroll-x"><table class="kv-table" style="min-width:560px"><tr><th>지표</th>' +
       chosen.map(j => `<th>${esc(j.material.name.split(" (")[0])}</th>`).join("") + "</tr>";
     for (const k of keys) {
       const [label, unit] = DESC_LABELS[k] || [k, ""];
