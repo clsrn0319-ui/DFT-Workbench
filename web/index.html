@@ -758,6 +758,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 .ratio-row .input, .ratio-row input{flex:1 1 0;width:100%;min-width:0}
 #rb-real{display:none;position:fixed;top:0;right:0;bottom:0;left:232px;overflow-y:auto;z-index:40;background:var(--page);padding:28px 32px 64px}
 #rb-real.open{display:block}
+#rb-real.mode-calc #rbv-results{display:none}
+#rb-real.mode-results #rbv-calc{display:none}
 @media (max-width:760px){#rb-real{left:0}}
 #rb-real .rb-inner{max-width:1080px;margin:0 auto}
 #rb-real h1{margin:0 0 4px;font-size:20px}
@@ -771,6 +773,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <section id="rb-real">
 <div class="rb-inner">
+<div id="rbv-calc">
   <h1>DFT 계산 (실계산)</h1>
   <p class="rb-note">이 페이지의 제출·결과는 전부 이 컴퓨터의 PySCF가 <b>실제로 수행한 계산</b>입니다.
     다른 메뉴(대시보드·분자 물성 등)의 수치는 디자인 데모용 모의 데이터입니다.</p>
@@ -856,7 +859,11 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div class="form-error" id="form-error"></div>
     <button class="btn primary big" id="submit-btn">계산 제출 (실제 DFT 실행)</button>
   </div>
+</div>
 
+<div id="rbv-results">
+  <h1>DFT 계산 결과 (실계산)</h1>
+  <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
   <div class="card">
     <div class="card-head"><h2>작업 큐 / 결과 (실계산)</h2>
       <span class="muted small">2초마다 자동 갱신 · PUBLISHED의 "결과 보기" 클릭 시 상세</span></div>
@@ -869,72 +876,112 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div id="result-body"></div>
   </div>
 </div>
+</div>
 </section>
 <script src="/static/app.js"></script>
 <script>
 (function () {
   var real = document.getElementById("rb-real");
   var jump = document.querySelector(".rb-jump2");
-  var navBtn = null;
+  var myNav = null;
+
+  // 사이드바 구성: 모의 데이터 열람 페이지는 제외, 관리·참고 페이지는 프록시로 유지
+  var NAV = [
+    {group: "분자 데이터", items: [
+      {label: "물질 보관함", proxy: "물질 보관함"},
+      {label: "용매 라이브러리", proxy: "용매 라이브러리"}]},
+    {group: "계산", items: [{label: "DFT 계산", mode: "calc"}]},
+    {group: "결과", items: [{label: "DFT 계산 결과", mode: "results"}]},
+    {group: "참고", items: [
+      {label: "물성 사전", proxy: "물성 사전"},
+      {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
+  ];
 
   function sidebarRight() {
     var sb = document.querySelector(".sidebar");
     return sb ? Math.round(sb.getBoundingClientRect().right) : 232;
   }
-  function openReal() {
-    real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
-    real.classList.add("open");
-    document.querySelectorAll(".sidebar .nav-item.active").forEach(function (b) {
-      if (b !== navBtn) b.classList.remove("active");
+  function setActive(label) {
+    if (!myNav) return;
+    myNav.querySelectorAll(".nav-item").forEach(function (b) {
+      b.classList.toggle("active", b.textContent.trim() === label);
     });
-    if (navBtn) navBtn.classList.add("active");
-    if (window.rbReloadMaterials) try { window.rbReloadMaterials(); } catch (e) {}
   }
-  function closeReal() {
-    real.classList.remove("open");
-    if (navBtn) navBtn.classList.remove("active");
+  function openReal(mode, label) {
+    real.classList.remove("mode-calc", "mode-results");
+    real.classList.add("open", "mode-" + mode);
+    real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
+    real.scrollTop = 0;
+    setActive(label);
+    if (mode === "calc" && window.rbReloadMaterials) {
+      try { window.rbReloadMaterials(); } catch (e) {}
+    }
+  }
+  function closeReal() { real.classList.remove("open"); }
+  window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
+
+  function mockItem(text) {
+    var items = document.querySelectorAll(".sidebar .nav-item");
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].textContent.trim() === text && !items[i].dataset.rb) return items[i];
+    }
+    return null;
   }
 
-  // 모의 데이터 열람 페이지 숨김 목록 (물질 보관함·용매 라이브러리·물성 사전 등 관리/참고 페이지는 유지)
-  var HIDDEN = ["대시보드", "분자 물성", "구조 최적화", "물질 비교", "DFT 계산 결과"];
   function ensureNav() {
-    var items = Array.prototype.slice.call(document.querySelectorAll(".sidebar .nav-item"));
-    var anchor = null;
-    for (var i = 0; i < items.length; i++) {
-      var t = items[i].textContent.trim();
-      if (t.indexOf("구조 최적화") === 0) { items[i].style.display = "none"; continue; }
-      if (HIDDEN.indexOf(t) !== -1) { items[i].style.display = "none"; continue; }
-      if (t === "물질 보관함") anchor = items[i];
-    }
-    if (!anchor) return;
-    if (!navBtn || !navBtn.isConnected) {
-      navBtn = document.createElement("button");
-      navBtn.className = "nav-item";
-      navBtn.id = "rb-nav-dft";
-      navBtn.textContent = "DFT 계산";
-      navBtn.addEventListener("click", openReal);
-      anchor.insertAdjacentElement("afterend", navBtn);
-      if (real.classList.contains("open")) navBtn.classList.add("active");
-    }
+    var sidebar = document.querySelector(".sidebar");
+    if (!sidebar) return;
+    // 원본 메뉴 그룹은 전부 숨기고(참조용으로 유지) 우리 메뉴로 대체
+    sidebar.querySelectorAll(".nav-group").forEach(function (g) {
+      if (!g.dataset.rb) g.style.display = "none";
+    });
+    if (myNav && myNav.isConnected) return;
+    myNav = document.createElement("div");
+    myNav.dataset.rb = "1";
+    NAV.forEach(function (grp) {
+      var g = document.createElement("div");
+      g.className = "nav-group";
+      g.dataset.rb = "1";
+      var lab = document.createElement("div");
+      lab.className = "nav-group-label";
+      lab.textContent = grp.group;
+      g.appendChild(lab);
+      grp.items.forEach(function (it) {
+        var b = document.createElement("button");
+        b.className = "nav-item";
+        b.dataset.rb = "1";
+        b.textContent = it.label;
+        b.addEventListener("click", function () {
+          if (it.mode) { openReal(it.mode, it.label); }
+          else {
+            closeReal();
+            setActive(it.label);
+            var target = mockItem(it.proxy);
+            if (target) target.click();
+          }
+        });
+        g.appendChild(b);
+      });
+      myNav.appendChild(g);
+    });
+    var brand = sidebar.querySelector(".brand");
+    if (brand) brand.insertAdjacentElement("afterend", myNav);
+    else sidebar.prepend(myNav);
   }
 
   ensureNav();
-  // 대시보드(모의)를 숨겼으므로 시작 화면은 실계산 페이지
-  var opened = false;
-  var bootTimer = setInterval(function () {
-    ensureNav();
-    if (!opened && navBtn && navBtn.isConnected) { opened = true; openReal(); clearInterval(bootTimer); }
-  }, 300);
-  setTimeout(function () { clearInterval(bootTimer); }, 15000);
   new MutationObserver(ensureNav).observe(document.getElementById("root"), {childList: true, subtree: true});
-  document.addEventListener("click", function (e) {
-    var item = e.target.closest ? e.target.closest(".nav-item") : null;
-    if (item && item !== navBtn) closeReal();
-  }, true);
-  jump.addEventListener("click", function (e) { e.preventDefault(); openReal(); });
+  jump.addEventListener("click", function (e) { e.preventDefault(); openReal("calc", "DFT 계산"); });
   window.addEventListener("resize", function () {
     if (real.classList.contains("open")) real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
   });
+  // 시작 화면 = DFT 계산 페이지
+  var opened = false;
+  var bootTimer = setInterval(function () {
+    ensureNav();
+    if (!opened && myNav && myNav.isConnected) { opened = true; openReal("calc", "DFT 계산"); clearInterval(bootTimer); }
+  }, 300);
+  setTimeout(function () { clearInterval(bootTimer); }, 15000);
 })();
 </script>
 

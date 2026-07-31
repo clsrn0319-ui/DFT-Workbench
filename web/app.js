@@ -197,6 +197,7 @@ async function submit() {
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
     await refreshJobs();
+    if (window.rbOpenResults) window.rbOpenResults();  // 제출 후 결과 페이지로 이동
   } catch (e) {
     $("form-error").textContent = e.message;
   } finally {
