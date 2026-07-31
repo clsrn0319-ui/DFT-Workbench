@@ -17,6 +17,7 @@
   - 분위기: 기록용 메타데이터 (단일 분자 DFT는 대기를 명시적으로 모델링하지 않음)
 """
 
+import math
 import time
 import traceback
 
@@ -99,6 +100,11 @@ def _resolve_params(settings):
         "do_opt": do_opt,
         "do_thermo": do_thermo,
         "redox_adiabatic": redox_adiabatic,
+        # 수직 전위의 비평형 용매화(동결 용매장): 용매 존재 시 기본 활성
+        "noneq": True if exp.get("nonequilibriumSolvation") is None
+                 else bool(exp["nonequilibriumSolvation"]),
+        "ensemble": acc.get("ensemble", False) if exp.get("boltzmannEnsemble") is None
+                    else bool(exp["boltzmannEnsemble"]),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
         "functional": functional,
@@ -134,13 +140,21 @@ def _make_mf(mol, xc, disp, solvent_key, scf_tol):
     return mf
 
 
-def _run_scf(mf, label, log):
+def _run_scf(mf, label, log, dm0=None):
     t0 = time.time()
-    energy = mf.kernel()
+    energy = mf.kernel(dm0) if dm0 is not None else mf.kernel()
     if not mf.converged:
         raise RuntimeError(f"{label} SCF 미수렴")
     log(f"{label} SCF 수렴 — E = {energy:.6f} Ha ({time.time() - t0:.1f}s)")
     return float(energy)
+
+
+def _freeze_solvent_from(mf_ion, dm_neutral):
+    """이온 계산의 용매 반응장을 중성 분자 밀도로 고정 (비평형 수직 근사)."""
+    sv = mf_ion.with_solvent
+    sv.build()
+    sv.e, sv.v = sv.kernel(dm_neutral)
+    sv.frozen = True
 
 
 def _optimize_geometry(mf, log, label=""):
@@ -286,31 +300,71 @@ def run_job(job, update, is_cancelled=lambda: False):
                     e_c = _run_scf(mf_c, f"conformer {i + 1}/{len(candidates)}", log)
                     ranked.append((e_c, cand_atoms))
                 ranked.sort(key=lambda t: t[0])
-                atoms = ranked[0][1]
                 spread = (ranked[-1][0] - ranked[0][0]) * HARTREE2KCAL
                 log(f"DFT 재순위화 완료 — 후보 간 에너지 폭 {spread:.2f} kcal/mol")
             else:
-                atoms = candidates[0][0]
+                ranked = [(0.0, candidates[0][0])]
+            atoms = ranked[0][1]
+            # Boltzmann 가중치 (설정 온도, 재순위 전자에너지 기준)
+            kT_kcal = 1.98720425e-3 * temperature
+            e_min = ranked[0][0]
+            rel_kcal = [(e - e_min) * HARTREE2KCAL for e, _ in ranked]
+            ws = [math.exp(-dk / kT_kcal) for dk in rel_kcal]
+            z = sum(ws)
+            pops = [w / z for w in ws]
+            conformer_populations = [
+                {"rel_e_kcal": round(dk, 2), "population_pct": round(100 * p, 1)}
+                for dk, p in zip(rel_kcal, pops)]
+            significant = [i for i, p in enumerate(pops) if p >= 0.05][:4]
 
-        # 2) DFT 구조 최적화 (기체상)
-        if params["do_opt"]:
-            stage("DFT 구조 최적화", 18)
-            atoms = _optimize_state(atoms, params, params["charge"],
-                                    params["multiplicity"], log)
-            log(f"구조 최적화 완료 ({params['functional']}/{params['basis_opt']}, 기체상)")
+        def final_singlepoint(at, label):
+            """(옵션 최적화 후) 환경 반영 최종 단일점 → 구조·mf·에너지·프런티어·쌍극자."""
+            if params["do_opt"]:
+                at = _optimize_state(at, params, params["charge"], params["multiplicity"], log)
+            mol_ = _build_mol(at, params["basis_sp"], params["charge"], params["multiplicity"])
+            mf_ = _make_mf(mol_, params["xc"], params["disp"], solvent_key, params["scf_tol"])
+            e_ = _run_scf(mf_, label, log)
+            homo_, lumo_ = _frontier_orbitals(mf_)
+            dip_ = float(np.linalg.norm(mf_.dip_moment(unit="Debye", verbose=0)))
+            return at, mol_, mf_, e_, homo_, lumo_, dip_
 
-        # 3) 최종 단일점 (환경 설정 반영)
-        stage("단일점 SCF (환경 반영)", 34)
-        mol = _build_mol(atoms, params["basis_sp"], params["charge"], params["multiplicity"])
-        mf = _make_mf(mol, params["xc"], params["disp"], solvent_key, params["scf_tol"])
-        e_total = _run_scf(mf, f"최종({solvent_key or 'vacuum'})", log)
+        ensemble_avg = None
+        if not explicit and params["ensemble"] and len(significant) > 1:
+            # 2~3') Boltzmann 앙상블: 유의(≥5%) conformer 각각 최적화·단일점 후 가중 평균
+            stage(f"Boltzmann 앙상블 ({len(significant)}개 conformer)", 18)
+            members = []
+            for k, ci in enumerate(significant):
+                if is_cancelled():
+                    raise CancelledError()
+                res = final_singlepoint(ranked[ci][1], f"앙상블 conformer {k + 1}/{len(significant)}")
+                members.append(res)
+            e_list = [m[3] for m in members]
+            e_min2 = min(e_list)
+            rel2 = [(e - e_min2) * HARTREE2KCAL for e in e_list]
+            ws2 = [math.exp(-dk / kT_kcal) for dk in rel2]
+            z2 = sum(ws2)
+            p2 = [w / z2 for w in ws2]
+            dom = max(range(len(members)), key=lambda i: p2[i])
+            atoms, mol, mf, e_total, homo, lumo, dipole = members[dom]
+            ensemble_avg = {
+                "homo_ev": sum(p * m[4] for p, m in zip(p2, members)),
+                "lumo_ev": sum(p * m[5] for p, m in zip(p2, members) if m[5] is not None),
+                "dipole_debye": sum(p * m[6] for p, m in zip(p2, members)),
+            }
+            conformer_populations = [
+                {"rel_e_kcal": round(dk, 2), "population_pct": round(100 * p, 1)}
+                for dk, p in zip(rel2, p2)]
+            log("앙상블 가중 완료 — 지배 conformer 비율 "
+                f"{100 * p2[dom]:.0f}%, 전자 기술자는 가중 평균값으로 보고")
+        else:
+            # 2~3) 지배 conformer(또는 클러스터) 단일 경로
+            stage("DFT 구조 최적화" if params["do_opt"] else "단일점 SCF (환경 반영)", 18)
+            atoms, mol, mf, e_total, homo, lumo, dipole = final_singlepoint(
+                atoms, f"최종({solvent_key or 'vacuum'})")
 
         # 4) 기술자 추출
         stage("기술자 추출", 40)
-        homo, lumo = _frontier_orbitals(mf)
         gap = (lumo - homo) if lumo is not None else None
-        dip_vec = mf.dip_moment(unit="Debye", verbose=0)
-        dipole = float(np.linalg.norm(dip_vec))
         _, charges = mf.mulliken_pop(verbose=0)
         descriptors = {
             "total_energy_hartree": e_total,
@@ -319,12 +373,27 @@ def run_job(job, update, is_cancelled=lambda: False):
             "gap_ev": round(gap, 3) if gap is not None else None,
             "dipole_debye": round(dipole, 3),
         }
+        if not explicit:
+            descriptors["conformer_populations"] = conformer_populations
+        if ensemble_avg is not None:
+            descriptors.update({
+                "homo_ev": round(ensemble_avg["homo_ev"], 3),
+                "lumo_ev": round(ensemble_avg["lumo_ev"], 3),
+                "gap_ev": round(ensemble_avg["lumo_ev"] - ensemble_avg["homo_ev"], 3),
+                "dipole_debye": round(ensemble_avg["dipole_debye"], 3),
+            })
+            notes_ensemble = ("전자 기술자(HOMO/LUMO/갭/쌍극자)는 Boltzmann 가중 평균 "
+                              f"({temperature} K) — 열보정·용매화·전위는 지배 conformer 기준")
+        else:
+            notes_ensemble = None
         notes = [
             "구조 최적화는 기체상에서 수행, 용매 효과는 최종 단일점에 SMD로 반영"
             if params["do_opt"] else
             f"{geom_info['forcefield']} 역장 구조에서의 DFT 단일점 (사전 스크리닝 수준)",
             "분위기는 기록용 조건 — 명시적 대기 분자 모델은 미포함",
         ]
+        if notes_ensemble:
+            notes.append(notes_ensemble)
 
         # 5) 진동수·열역학 보정 (기체상, 최적화 수준)
         thermo_neutral = None
@@ -360,6 +429,17 @@ def run_job(job, update, is_cancelled=lambda: False):
             e_cds = getattr(mf.with_solvent, "e_cds", None)
             if e_cds is not None:
                 descriptors["smd_cds_kcal"] = round(float(e_cds) * HARTREE2KCAL, 2)
+
+        # 6.2) 1 atm → 1 M 표준 상태 보정 + 용액상 깁스 자유에너지
+        if params["do_thermo"] and thermo_neutral is not None and solvent_key:
+            # ΔG(1 atm→1 M) = RT ln(V_m/1 L) = RT ln(0.082057·T), 298.15 K에서 +1.89 kcal/mol
+            ss_corr_kcal = 1.98720425e-3 * temperature * math.log(0.082057 * temperature)
+            descriptors["standard_state_corr_kcal"] = round(ss_corr_kcal, 2)
+            descriptors["gibbs_energy_solution_hartree"] = round(
+                e_total + thermo_neutral["g_corr_hartree"] + ss_corr_kcal / HARTREE2KCAL, 6)
+            notes.append(
+                f"용액상 깁스 자유에너지 = 용매 단일점 에너지 + 기체상 열보정 + "
+                f"1 atm→1 M 표준 상태 보정(+{ss_corr_kcal:.2f} kcal/mol)")
 
         # 6.5) 클러스터 상호작용 에너지 (조각 분해, 클러스터 구조 고정)
         if fragments and len(fragments) <= MAX_INTERACTION_FRAGMENTS:
@@ -397,15 +477,26 @@ def run_job(job, update, is_cancelled=lambda: False):
             else:
                 notes.append("기준 전극 '없음' — 전위 환산 없이 IP/EA만 보고합니다")
 
+            use_noneq = params["noneq"] and solvent_key is not None
+            dm_neutral = mf.make_rdm1() if use_noneq else None
+
             def ion_energy_vertical(dq, label, prog):
                 stage(f"{label} (수직 ΔSCF)", prog)
                 mol_i = _build_mol(atoms, params["basis_sp"], params["charge"] + dq, 2)
-                return _run_scf(
-                    _make_mf(mol_i, params["xc"], params["disp"], solvent_key, params["scf_tol"]),
-                    label, log)
+                mf_i = _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
+                                params["scf_tol"])
+                if use_noneq:
+                    _freeze_solvent_from(mf_i, dm_neutral)
+                    return _run_scf(mf_i, f"{label}(비평형)", log,
+                                    dm0=(dm_neutral / 2, dm_neutral / 2))
+                return _run_scf(mf_i, label, log)
 
             e_cat_v = ion_energy_vertical(+1, "양이온", 66)
             e_an_v = ion_energy_vertical(-1, "음이온", 70)
+            if use_noneq:
+                notes.append(
+                    "수직 IP/EA는 비평형 용매화(중성 밀도로 동결한 용매장) 근사 — "
+                    "용매 핵 재배향이 없는 순간 이온화를 기술. 광학 유전 응답 완화는 미포함(상한 추정)")
             ip_v = (e_cat_v - e_total) * HARTREE2EV
             ea_v = (e_total - e_an_v) * HARTREE2EV
             descriptors.update({

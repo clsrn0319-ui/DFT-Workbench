@@ -231,6 +231,8 @@ async function submit() {
         optimizeGeometry: $("optimize").value === "" ? null : $("optimize").value === "true",
         thermochemistry: $("thermo").value === "" ? null : $("thermo").value === "true",
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
+        nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
+        boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
       },
     },
   };
@@ -319,6 +321,8 @@ const DESC_LABELS = {
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],
   ea_vertical_ev: ["수직 전자 친화도 (EA)", "eV"],
+  standard_state_corr_kcal: ["1 atm→1 M 표준 상태 보정", "kcal/mol"],
+  gibbs_energy_solution_hartree: ["용액상 깁스 자유에너지 (1 M)", "Ha"],
   ip_gibbs_ev: ["ΔG 기반 이온화 에너지", "eV"],
   ea_gibbs_ev: ["ΔG 기반 전자 친화도", "eV"],
   ip_adiabatic_ev: ["단열 이온화 에너지 (IP)", "eV"],
@@ -336,6 +340,12 @@ function showResult(job) {
   let rows = "";
   for (const [key, val] of Object.entries(r.descriptors)) {
     if (key === "potential_reference" || val == null) continue;
+    if (key === "conformer_populations") {
+      const txt = val.map((c, i) =>
+        `#${i + 1}: +${c.rel_e_kcal} kcal/mol · ${c.population_pct}%`).join("  |  ");
+      rows += `<tr><th>Conformer 분포 (Boltzmann)</th><td>${esc(txt)}</td></tr>`;
+      continue;
+    }
     const [label, unit] = DESC_LABELS[key] || [key, ""];
     const suffix = key.includes("potential") && ref ? ` vs ${ref}` : "";
     rows += `<tr><th>${esc(label)}</th><td>${typeof val === "number" ? val : esc(val)} ${unit}${suffix}</td></tr>`;

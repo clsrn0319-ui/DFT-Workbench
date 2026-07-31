@@ -29,6 +29,8 @@ class ExpertSettings(BaseModel):
     optimizeGeometry: Optional[bool] = None
     thermochemistry: Optional[bool] = None
     redoxAdiabatic: Optional[bool] = None
+    nonequilibriumSolvation: Optional[bool] = None
+    boltzmannEnsemble: Optional[bool] = None
     scfTol: float = 1e-8
 
 

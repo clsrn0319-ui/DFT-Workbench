@@ -862,6 +862,18 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
             <option value="true">단열 (이온 구조 재최적화)</option>
             <option value="false">수직 (중성 구조 고정)</option>
           </select></div>
+        <div class="field"><span class="field-label">비평형 용매화 (수직 전위)</span>
+          <select class="input" id="noneq-solv">
+            <option value="">(자동 — 용매 있으면 적용)</option>
+            <option value="true">적용 (동결 용매장)</option>
+            <option value="false">평형 용매화 사용</option>
+          </select></div>
+        <div class="field"><span class="field-label">Boltzmann 앙상블 가중</span>
+          <select class="input" id="boltzmann">
+            <option value="">(정확도 프리셋 — 정밀에서 활성)</option>
+            <option value="true">적용 (유의 conformer 가중 평균)</option>
+            <option value="false">지배 conformer만</option>
+          </select></div>
       </div>
     </details>
     <div class="form-error" id="form-error"></div>
