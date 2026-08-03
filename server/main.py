@@ -175,6 +175,20 @@ def get_job(job_id: str):
     return job
 
 
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str):
+    old = store.get_job(job_id)
+    if old is None:
+        raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    if old["status"] != "FAILED":
+        raise HTTPException(400, "실패한 작업만 재시도할 수 있습니다.")
+    job = store.create_job(old["material"], old["settings"])
+    job["logs"].append(f"재시도 — 원본 작업 {job_id}")
+    store.update_job(job["id"], {"logs": job["logs"]})
+    worker.submit(job["id"])
+    return job
+
+
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
     if not store.request_cancel(job_id):

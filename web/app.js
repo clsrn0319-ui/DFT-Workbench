@@ -295,11 +295,15 @@ async function refreshJobs() {
         <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>
         ${job.status === "PUBLISHED"
           ? `<button class="btn ghost" data-view="${esc(job.id)}">결과 보기</button>` : ""}
+        ${job.status === "FAILED"
+          ? `<button class="btn ghost" data-retry="${esc(job.id)}">재시도</button>` : ""}
         ${["QUEUED", "RUNNING"].includes(job.status)
           ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
           : `<button class="btn ghost danger" data-del="${esc(job.id)}">삭제</button>`}
       </div>`;
     div.querySelector("[data-view]")?.addEventListener("click", () => showResult(job));
+    div.querySelector("[data-retry]")?.addEventListener("click", () =>
+      fetch(`/api/jobs/${job.id}/retry`, {method: "POST"}).then(refreshJobs));
     div.querySelector("[data-cancel]")?.addEventListener("click", () =>
       fetch(`/api/jobs/${job.id}/cancel`, {method: "POST"}).then(refreshJobs));
     div.querySelector("[data-del]")?.addEventListener("click", () =>
@@ -364,27 +368,29 @@ function svgLevels(homo, lumo, gap) {
 }
 
 function svgEswBar(red, ox, ref) {
-  const V0 = -0.5, V1 = 5.5, W = 640, H = 96, L = 10;
+  const V0 = -0.5, V1 = 5.5, W = 640, H = 118, L = 10;
   const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 14);
   let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:680px" role="img">`;
   for (let v = 0; v <= 5; v++) {
-    sv += `<line x1="${x(v)}" y1="24" x2="${x(v)}" y2="${H - 26}" class="gridline"/>
-      <text x="${x(v)}" y="${H - 13}" text-anchor="middle" class="axis-label">${v}</text>`;
+    sv += `<line x1="${x(v)}" y1="34" x2="${x(v)}" y2="${H - 32}" class="gridline"/>
+      <text x="${x(v)}" y="${H - 20}" text-anchor="middle" class="axis-label">${v}</text>`;
   }
-  for (const el of ELECTRODES) {
-    sv += `<line x1="${x(el.v)}" y1="16" x2="${x(el.v)}" y2="${H - 26}"
+  ELECTRODES.forEach((el, i) => {
+    const ly = i % 2 ? 26 : 12;  // 가까운 전극 라벨은 2단으로 엇갈리게
+    sv += `<line x1="${x(el.v)}" y1="${ly + 4}" x2="${x(el.v)}" y2="${H - 32}"
         stroke="var(--pin)" stroke-dasharray="4 3"/>
-      <text x="${x(el.v)}" y="11" text-anchor="middle" class="axis-label"
+      <text x="${x(el.v)}" y="${ly}" text-anchor="middle" class="axis-label"
         fill="var(--pin)">${esc(el.label.split(" (")[0])}</text>`;
-  }
-  sv += `<rect x="${x(red)}" y="38" width="${Math.max(2, x(ox) - x(red))}" height="18" rx="4"
+  });
+  sv += `<rect x="${x(red)}" y="52" width="${Math.max(2, x(ox) - x(red))}" height="18" rx="4"
       fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)"/>
-    <text x="${x(red) - 4}" y="51" text-anchor="end" class="value-label">${red.toFixed(2)}</text>
-    <text x="${x(ox) + 4}" y="51" class="value-label">${ox.toFixed(2)}</text>
-    <text x="${(x(red) + x(ox)) / 2}" y="${H - 13}" text-anchor="middle"
+    <text x="${x(red) - 4}" y="65" text-anchor="end" class="value-label">${red.toFixed(2)}</text>
+    <text x="${x(ox) + 4}" y="65" class="value-label">${ox.toFixed(2)}</text>
+    <text x="${W / 2}" y="${H - 5}" text-anchor="middle"
       class="axis-label">전위 (V vs ${esc(ref)})</text>`;
   return sv + "</svg>";
 }
+
 
 function svgPops(pops) {
   const W = 340, rowH = 24, H = pops.length * rowH + 6;
@@ -779,24 +785,25 @@ window.rbRenderEsw = function () {
       'DFT 계산에서 목적을 "전자구조 + 산화/환원 전위"로 선택해 제출하세요.</div>';
     return;
   }
-  const V0 = -0.5, V1 = 5.5, W = 820, H = 46 * jobs.length + 70, L = 170;
+  const V0 = -0.5, V1 = 5.5, W = 820, H = 46 * jobs.length + 82, L = 170;
   const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 16);
   let svg = `<svg class="esw-chart" viewBox="0 0 ${W} ${H}" role="img">`;
   for (let v = 0; v <= 5; v++) {
-    svg += `<line x1="${x(v)}" y1="26" x2="${x(v)}" y2="${H - 34}" stroke="var(--grid)" />
+    svg += `<line x1="${x(v)}" y1="32" x2="${x(v)}" y2="${H - 34}" stroke="var(--grid)" />
       <text x="${x(v)}" y="${H - 20}" font-size="11" text-anchor="middle" fill="var(--muted)">${v}</text>`;
   }
   svg += `<text x="${(L + W) / 2}" y="${H - 4}" font-size="11" text-anchor="middle" fill="var(--muted)">전위 (V vs Li/Li⁺)</text>`;
-  for (const el of ELECTRODES) {
-    svg += `<line x1="${x(el.v)}" y1="18" x2="${x(el.v)}" y2="${H - 34}"
+  ELECTRODES.forEach((el, i) => {
+    const ly = i % 2 ? 24 : 12;  // 인접 전극(Graphite/Si, LFP/NCM811) 라벨 2단 배치
+    svg += `<line x1="${x(el.v)}" y1="${ly + 4}" x2="${x(el.v)}" y2="${H - 34}"
         stroke="var(--pin)" stroke-dasharray="4 3" />
-      <text x="${x(el.v)}" y="12" font-size="10.5" text-anchor="middle" fill="var(--pin)">${esc(el.label)}</text>`;
-  }
+      <text x="${x(el.v)}" y="${ly}" font-size="10.5" text-anchor="middle" fill="var(--pin)">${esc(el.label)}</text>`;
+  });
   jobs.forEach((j, i) => {
     const d = j.result.descriptors;
     const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
     const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
-    const y = 40 + i * 46;
+    const y = 52 + i * 46;
     svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end" fill="var(--text-1)">${esc(j.material.name.split(" (")[0])}</text>
       <rect x="${x(red)}" y="${y - 8}" width="${Math.max(2, x(ox) - x(red))}" height="16" rx="4"
         fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)" />
