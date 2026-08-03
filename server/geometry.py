@@ -305,6 +305,14 @@ def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
     return atoms, fragments, {"n_molecules": 2}
 
 
+def atom_count(smiles: str) -> int:
+    """수소를 포함한 총 원자 수 — 계산 크기 상한 검사용."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    return Chem.AddHs(mol).GetNumAtoms()
+
+
 def atoms_to_xyz_block(atoms, comment=""):
     lines = [str(len(atoms)), comment]
     for sym, x, y, z in atoms:

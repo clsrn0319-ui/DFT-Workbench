@@ -157,3 +157,53 @@ def test_bde_flags_default_on():
     p = _resolve_params(_settings(expert={"bdeRelaxFragments": False,
                                           "bdeThermalCorrection": False}))
     assert p["bde_relax"] is False and p["bde_thermal"] is False
+
+
+def test_auth_password_hashing_and_login(tmp_path, monkeypatch):
+    """비밀번호는 해시로만 저장되고, 잘못된 비밀번호는 거부된다."""
+    from server import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(auth, "_users", {})
+    monkeypatch.setattr(auth, "_sessions", {})
+    monkeypatch.setattr(auth, "_loaded", False)
+    monkeypatch.setenv("RHOBENCH_ADMIN_PASSWORD", "bootstrap-pass")
+
+    auth.add_user("kim", "labpass1234", note="전지소재팀")
+    stored = auth._users["kim"]
+    assert "labpass1234" not in str(stored)      # 평문 저장 없음
+    assert stored["hash"] != stored["salt"]
+
+    assert auth.login("kim", "wrong") is None
+    token = auth.login("kim", "labpass1234")
+    assert token and auth.resolve(token)["username"] == "kim"
+
+    # 비밀번호 변경 시 기존 세션 무효화
+    auth.set_password("kim", "newpass12345")
+    assert auth.resolve(token) is None
+
+
+def test_auth_last_admin_protected(tmp_path, monkeypatch):
+    from server import auth
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(auth, "_users", {})
+    monkeypatch.setattr(auth, "_sessions", {})
+    monkeypatch.setattr(auth, "_loaded", True)
+    auth._create_user("admin", "adminpass123", is_admin=True)
+    with pytest.raises(ValueError):
+        auth.delete_user("admin")
+
+
+def test_job_owner_isolation(tmp_path, monkeypatch):
+    from server import store
+    monkeypatch.setattr(store, "JOBS_FILE", tmp_path / "jobs.json")
+    monkeypatch.setattr(store, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(store, "_jobs", {})
+    monkeypatch.setattr(store, "_loaded", True)
+    mat = {"id": None, "name": "t", "smiles": "O"}
+    store.create_job(mat, presets.DEFAULT_SETTINGS, owner="kim")
+    store.create_job(mat, presets.DEFAULT_SETTINGS, owner="lee")
+    assert len(store.list_jobs("kim")) == 1
+    assert len(store.list_jobs()) == 2          # 관리자 전체 조회
+    assert store.count_active("kim") == 1

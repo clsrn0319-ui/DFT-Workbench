@@ -1,9 +1,13 @@
 """백그라운드 계산 워커 — DFT는 CPU 집약적이므로 순차 실행 큐."""
 
+import os
 import queue
 import threading
 
 from . import engine, store
+
+# 동시 계산 워커 수 — DFT는 CPU 집약적이므로 기본 1개, 다중 사용자면 상향
+N_WORKERS = max(1, int(os.environ.get("RHOBENCH_WORKERS", "1")))
 
 _queue: "queue.Queue[str]" = queue.Queue()
 _started = False
@@ -38,5 +42,7 @@ def ensure_started():
     global _started
     with _start_lock:
         if not _started:
-            threading.Thread(target=_worker_loop, daemon=True, name="dft-worker").start()
+            for i in range(N_WORKERS):
+                threading.Thread(target=_worker_loop, daemon=True,
+                                 name=f"dft-worker-{i + 1}").start()
             _started = True

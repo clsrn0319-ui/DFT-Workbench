@@ -106,6 +106,147 @@ function buildSolventOptions() {
 
 window.rbReloadMaterials = () => { buildMaterialGrid(); buildSolventOptions(); };
 
+/* ---------- 인증 ---------- */
+let ME = null;
+let LIMITS = null;
+
+async function boot() {
+  try {
+    const res = await fetch("/api/me");
+    if (res.ok) {
+      const data = await res.json();
+      ME = data.user; LIMITS = data.limits;
+      await startApp();
+      return;
+    }
+  } catch (e) { /* 서버 미가동 — 로그인 화면 유지 */ }
+  showLogin();
+}
+
+function showLogin() {
+  $("rb-login").style.display = "flex";
+  $("rb-userbar").style.display = "none";
+  const submit = async () => {
+    $("login-err").textContent = "";
+    const username = $("login-user").value.trim();
+    const password = $("login-pass").value;
+    if (!username || !password) {
+      $("login-err").textContent = "아이디와 비밀번호를 입력하세요.";
+      return;
+    }
+    $("login-btn").disabled = true;
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({username, password}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "로그인에 실패했습니다.");
+      }
+      ME = (await res.json()).user;
+      const meRes = await fetch("/api/me");
+      if (meRes.ok) LIMITS = (await meRes.json()).limits;
+      await startApp();
+    } catch (e) {
+      $("login-err").textContent = e.message;
+    } finally {
+      $("login-btn").disabled = false;
+    }
+  };
+  $("login-btn").onclick = submit;
+  $("login-pass").onkeydown = e => { if (e.key === "Enter") submit(); };
+  $("login-user").onkeydown = e => { if (e.key === "Enter") $("login-pass").focus(); };
+}
+
+async function startApp() {
+  $("rb-login").style.display = "none";
+  $("rb-userbar").style.display = "flex";
+  $("rb-whoami").textContent = `${ME.username}${ME.is_admin ? " (관리자)" : ""}`;
+  $("rb-users-btn").style.display = ME.is_admin ? "" : "none";
+  $("rb-users-btn").onclick = () => window.rbOpenUsers && window.rbOpenUsers();
+  $("rb-logout").onclick = async () => {
+    await fetch("/api/logout", {method: "POST"});
+    location.reload();
+  };
+  dismissIntroOverlay();
+  await init();
+}
+
+/* 로그인을 마쳤으므로 앱의 인트로(ENTER) 화면은 자동으로 넘긴다 */
+function dismissIntroOverlay() {
+  let tries = 0;
+  const timer = setInterval(() => {
+    const btn = document.querySelector("#lp button");
+    if (btn) { btn.click(); clearInterval(timer); }
+    if (++tries > 40) clearInterval(timer);
+  }, 150);
+}
+
+/* ---------- 사용자 관리 (관리자) ---------- */
+window.rbRenderUsers = async function () {
+  const box = $("user-list");
+  if (!ME || !ME.is_admin) { box.textContent = "관리자만 볼 수 있습니다."; return; }
+  let users = [];
+  try {
+    users = (await (await fetch("/api/users")).json()).users;
+  } catch (e) {
+    box.textContent = "사용자 목록을 불러오지 못했습니다.";
+    return;
+  }
+  box.className = "scroll-x";
+  const fmt = t => t ? new Date(t * 1000).toLocaleString("ko-KR") : "—";
+  box.innerHTML = `<table class="table" style="min-width:560px">
+    <tr><th>아이디</th><th>권한</th><th>메모</th><th>마지막 로그인</th><th></th></tr>
+    ${users.map(u => `<tr>
+      <td><b>${esc(u.username)}</b>${u.username === ME.username ? ' <span class="chip">나</span>' : ""}</td>
+      <td>${u.is_admin ? '<span class="badge running">관리자</span>'
+                       : '<span class="badge queued">사용자</span>'}</td>
+      <td class="small muted">${esc(u.note || "")}</td>
+      <td class="small muted">${fmt(u.last_login)}</td>
+      <td class="row-actions">
+        <button class="btn ghost" data-pw="${esc(u.username)}">비밀번호 변경</button>
+        ${u.username === ME.username ? ""
+          : `<button class="btn ghost danger" data-del-user="${esc(u.username)}">삭제</button>`}
+      </td></tr>`).join("")}
+  </table>`;
+  box.querySelectorAll("[data-pw]").forEach(b => b.addEventListener("click", async () => {
+    const pw = prompt(`${b.dataset.pw}의 새 비밀번호 (8자 이상)`);
+    if (!pw) return;
+    const res = await fetch(`/api/users/${encodeURIComponent(b.dataset.pw)}/password`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({password: pw}),
+    });
+    if (!res.ok) {
+      alert((await res.json().catch(() => ({}))).detail || "변경 실패");
+    } else {
+      alert("변경되었습니다. 해당 사용자는 다시 로그인해야 합니다.");
+      window.rbRenderUsers();
+    }
+  }));
+  box.querySelectorAll("[data-del-user]").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm(`${b.dataset.delUser} 계정을 삭제할까요? 로그인할 수 없게 됩니다.`)) return;
+    const res = await fetch(`/api/users/${encodeURIComponent(b.dataset.delUser)}`,
+                            {method: "DELETE"});
+    if (!res.ok) alert((await res.json().catch(() => ({}))).detail || "삭제 실패");
+    window.rbRenderUsers();
+  }));
+  $("nu-add").onclick = async () => {
+    $("nu-err").textContent = "";
+    const body = {username: $("nu-name").value.trim(), password: $("nu-pass").value,
+                  note: $("nu-note").value.trim(), is_admin: $("nu-admin").value === "true"};
+    const res = await fetch("/api/users", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)});
+    if (!res.ok) {
+      $("nu-err").textContent = (await res.json().catch(() => ({}))).detail || "추가 실패";
+      return;
+    }
+    $("nu-name").value = ""; $("nu-pass").value = ""; $("nu-note").value = "";
+    window.rbRenderUsers();
+  };
+};
+
 async function init() {
   PRESETS = await (await fetch("/api/presets")).json();
 
@@ -266,7 +407,9 @@ const badgeClass = {QUEUED: "queued", RUNNING: "running", PUBLISHED: "published"
 const badgeLabel = {QUEUED: "대기", RUNNING: "실행", PUBLISHED: "PUBLISHED", FAILED: "실패"};
 
 async function refreshJobs() {
-  const {jobs} = await (await fetch("/api/jobs")).json();
+  const res = await fetch("/api/jobs");
+  if (res.status === 401) { location.reload(); return; }  // 세션 만료 → 로그인 화면
+  const {jobs} = await res.json();
   JOBS_CACHE = jobs;
   const real = document.getElementById("rb-real");
   if (real?.classList.contains("mode-esw") && window.rbRenderEsw) window.rbRenderEsw();
@@ -986,7 +1129,7 @@ function render3D(r) {
   draw();
 }
 
-init();
+boot();
 
 
 /* ================= 화학물질 조회 ================= */

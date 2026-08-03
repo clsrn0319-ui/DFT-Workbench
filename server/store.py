@@ -39,12 +39,13 @@ def _persist():
     tmp.replace(JOBS_FILE)
 
 
-def create_job(material: dict, settings: dict) -> dict:
+def create_job(material: dict, settings: dict, owner: str = "admin") -> dict:
     with _lock:
         _load()
         job_id = "JOB-" + time.strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6].upper()
         job = {
             "id": job_id,
+            "owner": owner,
             "material": material,
             "settings": settings,
             "status": "QUEUED",
@@ -79,10 +80,22 @@ def get_job(job_id: str):
         return _jobs.get(job_id)
 
 
-def list_jobs():
+def list_jobs(owner: str | None = None):
+    """owner를 주면 해당 사용자의 작업만 반환 (관리자는 None으로 전체 조회)."""
     with _lock:
         _load()
-        return sorted(_jobs.values(), key=lambda j: j["createdAt"], reverse=True)
+        jobs = _jobs.values()
+        if owner is not None:
+            jobs = [j for j in jobs if j.get("owner") == owner]
+        return sorted(jobs, key=lambda j: j["createdAt"], reverse=True)
+
+
+def count_active(owner: str) -> int:
+    """해당 사용자의 대기·실행 중 작업 수."""
+    with _lock:
+        _load()
+        return sum(1 for j in _jobs.values()
+                   if j.get("owner") == owner and j["status"] in ("QUEUED", "RUNNING"))
 
 
 def delete_job(job_id: str) -> bool:
