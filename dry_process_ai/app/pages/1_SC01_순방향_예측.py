@@ -108,16 +108,29 @@ if response is not None:
             })
             st.dataframe(pretty.round(3), use_container_width=True, hide_index=True)
 
-            # 단계별 추이 그래프 — 두께 감소·밀도 증가
+            # 단계별 추이 그래프 — 두께 감소·밀도 증가·면적당 용량 (값 라벨 병기)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=table["stage_index"], y=table["composite_thickness_um"],
-                                     name="합제층 두께 (μm)", mode="lines+markers"))
-            fig.add_trace(go.Scatter(x=table["stage_index"], y=table["composite_density_gcc"],
-                                     name="합제밀도 (g/cc)", mode="lines+markers", yaxis="y2"))
+            fig.add_trace(go.Scatter(
+                x=table["stage_index"], y=table["composite_thickness_um"],
+                name="합제층 두께 (μm)", mode="lines+markers+text",
+                text=[f"{v:.0f}" for v in table["composite_thickness_um"]],
+                textposition="top center"))
+            fig.add_trace(go.Scatter(
+                x=table["stage_index"], y=table["composite_density_gcc"],
+                name="합제밀도 (g/cc)", mode="lines+markers+text", yaxis="y2",
+                text=[f"{v:.2f}" for v in table["composite_density_gcc"]],
+                textposition="bottom center"))
+            fig.add_trace(go.Scatter(
+                x=table["stage_index"], y=table["areal_capacity_mah_cm2"],
+                name="면적당 용량 (mAh/cm²)", mode="lines+markers+text", yaxis="y3",
+                text=[f"{v:.2f}" for v in table["areal_capacity_mah_cm2"]],
+                textposition="top center", line=dict(dash="dot")))
             fig.update_layout(
                 yaxis=dict(title="두께 (μm)"),
                 yaxis2=dict(title="밀도 (g/cc)", overlaying="y", side="right"),
-                height=340, margin=dict(l=40, r=40, t=20, b=30),
+                yaxis3=dict(overlaying="y", side="right", position=0.97, showticklabels=False),
+                height=380, margin=dict(l=40, r=60, t=20, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
             st.plotly_chart(fig, use_container_width=True)
 
