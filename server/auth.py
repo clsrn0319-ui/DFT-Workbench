@@ -1,11 +1,16 @@
-"""사용자 인증·승인 — 관리자가 승인한 계정만 사용 가능.
+"""접속 통제 — 관리자가 공유한 비밀번호를 아는 사람만 사용할 수 있다.
 
-의존성 없이 표준 라이브러리만 사용한다:
-  - 비밀번호: PBKDF2-HMAC-SHA256 (솔트 + 20만 회 반복) 해시로만 저장
+개별 계정을 두지 않고 **공유 비밀번호 하나**로 출입만 통제한다.
+비밀번호는 서버를 실행하는 사람(관리자)이 정하며, 웹에서는 변경할 수 없다.
+
+  RHOBENCH_ACCESS_PASSWORD='공유할_비밀번호' uvicorn server.main:app ...
+
+환경변수를 주지 않으면 최초 실행 시 무작위로 발급해 콘솔에 한 번 출력하고
+data/access.json에 해시로 보관한다(평문 저장 없음).
+
+의존성 없이 표준 라이브러리만 사용:
+  - 비밀번호: PBKDF2-HMAC-SHA256 (솔트 + 20만 회 반복) 해시
   - 세션: 서버 메모리에 보관하는 무작위 토큰 (서버 재시작 시 전원 로그아웃)
-
-첫 실행 시 관리자 계정이 없으면 자동 생성한다. 비밀번호는 환경변수
-RHOBENCH_ADMIN_PASSWORD를 쓰고, 없으면 무작위 생성해 콘솔에 1회 출력한다.
 """
 
 import hashlib
@@ -17,14 +22,14 @@ import time
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-USERS_FILE = DATA_DIR / "users.json"
+ACCESS_FILE = DATA_DIR / "access.json"
 
 SESSION_TTL = 12 * 3600  # 12시간
 PBKDF2_ROUNDS = 200_000
 
 _lock = threading.RLock()
-_users: dict[str, dict] = {}
-_sessions: dict[str, dict] = {}
+_access: dict | None = None      # {"salt": ..., "hash": ...}
+_sessions: dict[str, float] = {}  # token → 만료 시각
 _loaded = False
 
 
@@ -33,151 +38,111 @@ def _hash_password(password: str, salt: str) -> str:
         "sha256", password.encode(), bytes.fromhex(salt), PBKDF2_ROUNDS).hex()
 
 
-def _save():
+def _store(password: str):
+    global _access
+    salt = secrets.token_hex(16)
+    _access = {"salt": salt, "hash": _hash_password(password, salt),
+               "updated_at": time.time()}
     DATA_DIR.mkdir(exist_ok=True)
-    tmp = USERS_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(list(_users.values()), ensure_ascii=False, indent=1),
-                   encoding="utf-8")
-    tmp.replace(USERS_FILE)
+    tmp = ACCESS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_access, indent=1), encoding="utf-8")
+    tmp.replace(ACCESS_FILE)
     try:
-        USERS_FILE.chmod(0o600)  # 해시 파일 접근 제한
+        ACCESS_FILE.chmod(0o600)  # 해시 파일 접근 제한
     except OSError:
         pass
 
 
+def _announce(password: str, generated: bool):
+    bar = "=" * 64
+    print(f"\n{bar}\n  RhoBench 접속 비밀번호\n\n"
+          f"      {password}\n\n"
+          + ("  (무작위 발급 — 지금 기록해 두세요. 다시 표시되지 않습니다)\n"
+             if generated else "  (환경변수 RHOBENCH_ACCESS_PASSWORD 사용)\n")
+          + "  이 비밀번호를 아는 사람만 접속할 수 있습니다. 필요한 분에게 공유하세요.\n"
+            "  변경하려면 RHOBENCH_ACCESS_PASSWORD 를 새 값으로 주고 서버를 다시 실행하세요.\n"
+          + bar + "\n", flush=True)
+
+
 def _load():
-    global _loaded
+    """환경변수가 있으면 항상 그 값을 채택(비밀번호 변경 수단), 없으면 저장본 사용."""
+    global _loaded, _access
     if _loaded:
         return
     _loaded = True
-    if USERS_FILE.exists():
+
+    env_password = os.environ.get("RHOBENCH_ACCESS_PASSWORD")
+    saved = None
+    if ACCESS_FILE.exists():
         try:
-            for u in json.loads(USERS_FILE.read_text(encoding="utf-8")):
-                _users[u["username"]] = u
+            saved = json.loads(ACCESS_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            pass
-    if not _users:
-        _bootstrap_admin()
+            saved = None
+
+    if env_password:
+        # 저장된 해시와 다르면 새 비밀번호로 교체하고 기존 세션을 모두 끊는다
+        if saved and secrets.compare_digest(
+                _hash_password(env_password, saved["salt"]), saved["hash"]):
+            _access = saved
+        else:
+            _store(env_password)
+            _sessions.clear()
+        _announce(env_password, generated=False)
+        return
+
+    if saved:
+        _access = saved
+        print("\n  RhoBench: 저장된 접속 비밀번호를 사용합니다 "
+              "(변경하려면 RHOBENCH_ACCESS_PASSWORD 지정 후 재실행).\n", flush=True)
+        return
+
+    generated = secrets.token_urlsafe(9)
+    _store(generated)
+    _announce(generated, generated=True)
 
 
-def _bootstrap_admin():
-    """관리자 계정 최초 생성 — 환경변수 우선, 없으면 무작위 발급 후 콘솔 안내."""
-    password = os.environ.get("RHOBENCH_ADMIN_PASSWORD")
-    generated = password is None
-    if generated:
-        password = secrets.token_urlsafe(12)
-    _create_user("admin", password, is_admin=True, note="최초 관리자")
-    banner = "=" * 62
-    print(f"\n{banner}\n  RhoBench 관리자 계정이 생성되었습니다.\n"
-          f"    아이디   : admin\n"
-          f"    비밀번호 : {password}\n"
-          + ("  (무작위 발급 — 지금 기록해 두세요. 다시 표시되지 않습니다)\n"
-             if generated else "  (환경변수 RHOBENCH_ADMIN_PASSWORD 사용)\n")
-          + f"  로그인 후 '사용자 관리'에서 연구실 구성원을 승인하세요.\n{banner}\n",
-          flush=True)
-
-
-def _create_user(username: str, password: str, is_admin: bool = False, note: str = ""):
-    salt = secrets.token_hex(16)
-    _users[username] = {
-        "username": username,
-        "salt": salt,
-        "hash": _hash_password(password, salt),
-        "is_admin": is_admin,
-        "note": note,
-        "created_at": time.time(),
-        "last_login": None,
-    }
-    _save()
-    return _users[username]
-
-
-def public(user: dict) -> dict:
-    """비밀번호 관련 필드를 제외한 안전한 표현."""
-    return {k: v for k, v in user.items() if k not in ("salt", "hash")}
-
-
-def list_users():
+def check_password(password: str) -> bool:
     with _lock:
         _load()
-        return [public(u) for u in
-                sorted(_users.values(), key=lambda u: u["created_at"])]
+        if not _access:
+            return False
+        return secrets.compare_digest(
+            _hash_password(password, _access["salt"]), _access["hash"])
 
 
-def add_user(username: str, password: str, is_admin: bool = False, note: str = ""):
+def login(password: str):
+    """비밀번호가 맞으면 세션 토큰 반환, 아니면 None."""
     with _lock:
-        _load()
-        if username in _users:
-            raise ValueError("이미 존재하는 아이디입니다.")
-        if len(username) < 2 or len(password) < 8:
-            raise ValueError("아이디는 2자 이상, 비밀번호는 8자 이상이어야 합니다.")
-        return public(_create_user(username, password, is_admin, note))
-
-
-def set_password(username: str, password: str):
-    with _lock:
-        _load()
-        user = _users.get(username)
-        if user is None:
-            raise ValueError("존재하지 않는 사용자입니다.")
-        if len(password) < 8:
-            raise ValueError("비밀번호는 8자 이상이어야 합니다.")
-        user["salt"] = secrets.token_hex(16)
-        user["hash"] = _hash_password(password, user["salt"])
-        _save()
-        # 해당 사용자의 기존 세션 무효화
-        for tok in [t for t, s in _sessions.items() if s["username"] == username]:
-            _sessions.pop(tok, None)
-
-
-def delete_user(username: str):
-    with _lock:
-        _load()
-        if username not in _users:
-            raise ValueError("존재하지 않는 사용자입니다.")
-        if _users[username].get("is_admin") and sum(
-                1 for u in _users.values() if u.get("is_admin")) <= 1:
-            raise ValueError("마지막 관리자 계정은 삭제할 수 없습니다.")
-        del _users[username]
-        _save()
-        for tok in [t for t, s in _sessions.items() if s["username"] == username]:
-            _sessions.pop(tok, None)
-
-
-def login(username: str, password: str):
-    """성공 시 세션 토큰 반환, 실패 시 None."""
-    with _lock:
-        _load()
-        user = _users.get(username)
-        if user is None:
-            # 사용자 없음도 해시 비용을 치러 타이밍 차이를 줄임
-            _hash_password(password, secrets.token_hex(16))
-            return None
-        if not secrets.compare_digest(_hash_password(password, user["salt"]), user["hash"]):
+        if not check_password(password):
             return None
         token = secrets.token_urlsafe(32)
-        _sessions[token] = {"username": username, "expires": time.time() + SESSION_TTL}
-        user["last_login"] = time.time()
-        _save()
+        _sessions[token] = time.time() + SESSION_TTL
         return token
 
 
-def logout(token: str):
+def logout(token: str | None):
     with _lock:
         _sessions.pop(token, None)
 
 
-def resolve(token: str | None):
-    """세션 토큰 → 사용자. 만료·무효면 None."""
+def is_valid(token: str | None) -> bool:
+    """세션 토큰 유효성 — 만료된 토큰은 정리한다."""
     if not token:
-        return None
+        return False
     with _lock:
         _load()
-        sess = _sessions.get(token)
-        if sess is None:
-            return None
-        if sess["expires"] < time.time():
+        expires = _sessions.get(token)
+        if expires is None:
+            return False
+        if expires < time.time():
             _sessions.pop(token, None)
-            return None
-        user = _users.get(sess["username"])
-        return public(user) if user else None
+            return False
+        return True
+
+
+def active_sessions() -> int:
+    with _lock:
+        now = time.time()
+        for tok in [t for t, e in _sessions.items() if e < now]:
+            _sessions.pop(tok, None)
+        return len(_sessions)

@@ -764,7 +764,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-lookup #rbv-lookup{display:block}
 #rb-real.mode-esw #rbv-esw{display:block}
 #rb-real.mode-compare #rbv-compare{display:block}
-#rb-real.mode-users #rbv-users{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -794,11 +793,10 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <div id="rb-login">
   <div class="box">
-    <h1>RhoBench 로그인</h1>
-    <p class="sub">승인된 계정만 사용할 수 있습니다. 계정이 필요하면 관리자에게 요청하세요.</p>
-    <div class="field"><span class="field-label">아이디</span>
-      <input class="input" id="login-user" autocomplete="username"></div>
-    <div class="field"><span class="field-label">비밀번호</span>
+    <h1>RhoBench 접속</h1>
+    <p class="sub">관리자가 공유한 접속 비밀번호를 입력하세요.
+      비밀번호를 모르면 관리자에게 문의하세요.</p>
+    <div class="field"><span class="field-label">접속 비밀번호</span>
       <input class="input" id="login-pass" type="password" autocomplete="current-password"></div>
     <div class="err" id="login-err"></div>
     <button class="btn primary big" id="login-btn" style="margin-top:4px">로그인</button>
@@ -807,7 +805,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <div id="rb-userbar" style="display:none">
   <span id="rb-whoami" class="muted"></span>
-  <button class="btn ghost" id="rb-users-btn" style="display:none">사용자 관리</button>
   <button class="btn ghost" id="rb-logout">로그아웃</button>
 </div>
 
@@ -978,33 +975,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   <div class="card" id="esw-body"></div>
 </div>
 
-<div id="rbv-users" class="rbv">
-  <h1>사용자 관리</h1>
-  <p class="rb-note">관리자만 볼 수 있는 화면입니다. 여기에서 승인한 계정만 로그인·계산할 수 있습니다.</p>
-  <div class="card">
-    <div class="card-head"><h2>새 사용자 승인</h2></div>
-    <div class="form-grid">
-      <div class="field"><span class="field-label">아이디</span>
-        <input class="input" id="nu-name" placeholder="예: kim"></div>
-      <div class="field"><span class="field-label">비밀번호 (8자 이상)</span>
-        <input class="input" id="nu-pass" type="text" placeholder="초기 비밀번호"></div>
-      <div class="field"><span class="field-label">메모 (선택)</span>
-        <input class="input" id="nu-note" placeholder="예: 전지소재팀"></div>
-      <div class="field"><span class="field-label">권한</span>
-        <select class="input" id="nu-admin">
-          <option value="false">일반 사용자</option>
-          <option value="true">관리자</option>
-        </select></div>
-    </div>
-    <div class="form-error" id="nu-err"></div>
-    <button class="btn primary big" id="nu-add">사용자 추가</button>
-  </div>
-  <div class="card">
-    <div class="card-head"><h2>승인된 사용자</h2></div>
-    <div id="user-list" class="empty small">불러오는 중…</div>
-  </div>
-</div>
-
 <div id="rbv-compare" class="rbv">
   <h1>물질 비교</h1>
   <p class="rb-note">PUBLISHED 결과를 골라 나란히 비교합니다 — 바인더·전해액 후보 선별용.</p>
@@ -1051,19 +1021,17 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
     real.scrollTop = 0;
     setActive(label);
-    real.classList.remove("mode-lookup", "mode-esw", "mode-compare", "mode-users");
+    real.classList.remove("mode-lookup", "mode-esw", "mode-compare");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
     }
     if (mode === "esw" && window.rbRenderEsw) try { window.rbRenderEsw(); } catch (e) {}
     if (mode === "compare" && window.rbRenderCompare) try { window.rbRenderCompare(); } catch (e) {}
-    if (mode === "users" && window.rbRenderUsers) try { window.rbRenderUsers(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
   window.rbOpenCalc = function () { openReal("calc", "DFT 계산"); };
-  window.rbOpenUsers = function () { openReal("users", "사용자 관리"); };
 
   function mockItem(text) {
     var items = document.querySelectorAll(".sidebar .nav-item");

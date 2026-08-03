@@ -159,51 +159,57 @@ def test_bde_flags_default_on():
     assert p["bde_relax"] is False and p["bde_thermal"] is False
 
 
-def test_auth_password_hashing_and_login(tmp_path, monkeypatch):
-    """비밀번호는 해시로만 저장되고, 잘못된 비밀번호는 거부된다."""
+def test_shared_password_auth(tmp_path, monkeypatch):
+    """공유 비밀번호는 해시로만 저장되고, 틀린 비밀번호는 거부된다."""
     from server import auth
-    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setattr(auth, "ACCESS_FILE", tmp_path / "access.json")
     monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(auth, "_users", {})
+    monkeypatch.setattr(auth, "_access", None)
     monkeypatch.setattr(auth, "_sessions", {})
     monkeypatch.setattr(auth, "_loaded", False)
-    monkeypatch.setenv("RHOBENCH_ADMIN_PASSWORD", "bootstrap-pass")
+    monkeypatch.setenv("RHOBENCH_ACCESS_PASSWORD", "lab-shared-1234")
 
-    auth.add_user("kim", "labpass1234", note="전지소재팀")
-    stored = auth._users["kim"]
-    assert "labpass1234" not in str(stored)      # 평문 저장 없음
-    assert stored["hash"] != stored["salt"]
+    assert auth.login("wrong") is None
+    token = auth.login("lab-shared-1234")
+    assert token and auth.is_valid(token)
 
-    assert auth.login("kim", "wrong") is None
-    token = auth.login("kim", "labpass1234")
-    assert token and auth.resolve(token)["username"] == "kim"
+    saved = (tmp_path / "access.json").read_text(encoding="utf-8")
+    assert "lab-shared-1234" not in saved      # 평문 저장 없음
 
-    # 비밀번호 변경 시 기존 세션 무효화
-    auth.set_password("kim", "newpass12345")
-    assert auth.resolve(token) is None
+    auth.logout(token)
+    assert not auth.is_valid(token)
+    assert not auth.is_valid(None)
 
 
-def test_auth_last_admin_protected(tmp_path, monkeypatch):
+def test_shared_password_change_revokes_sessions(tmp_path, monkeypatch):
+    """비밀번호를 바꿔 재실행하면 기존 세션이 모두 끊긴다."""
     from server import auth
-    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setattr(auth, "ACCESS_FILE", tmp_path / "access.json")
     monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(auth, "_users", {})
+    monkeypatch.setattr(auth, "_access", None)
     monkeypatch.setattr(auth, "_sessions", {})
-    monkeypatch.setattr(auth, "_loaded", True)
-    auth._create_user("admin", "adminpass123", is_admin=True)
-    with pytest.raises(ValueError):
-        auth.delete_user("admin")
+    monkeypatch.setattr(auth, "_loaded", False)
+    monkeypatch.setenv("RHOBENCH_ACCESS_PASSWORD", "first-password")
+    token = auth.login("first-password")
+    assert auth.is_valid(token)
+
+    # 새 비밀번호로 서버 재시작 상황 재현
+    monkeypatch.setenv("RHOBENCH_ACCESS_PASSWORD", "second-password")
+    monkeypatch.setattr(auth, "_loaded", False)
+    auth._load()
+    assert not auth.is_valid(token)            # 기존 세션 무효
+    assert auth.login("first-password") is None
+    assert auth.login("second-password")
 
 
-def test_job_owner_isolation(tmp_path, monkeypatch):
+def test_active_job_count_is_global(tmp_path, monkeypatch):
     from server import store
     monkeypatch.setattr(store, "JOBS_FILE", tmp_path / "jobs.json")
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(store, "_jobs", {})
     monkeypatch.setattr(store, "_loaded", True)
     mat = {"id": None, "name": "t", "smiles": "O"}
-    store.create_job(mat, presets.DEFAULT_SETTINGS, owner="kim")
-    store.create_job(mat, presets.DEFAULT_SETTINGS, owner="lee")
-    assert len(store.list_jobs("kim")) == 1
-    assert len(store.list_jobs()) == 2          # 관리자 전체 조회
-    assert store.count_active("kim") == 1
+    store.create_job(mat, presets.DEFAULT_SETTINGS)
+    store.create_job(mat, presets.DEFAULT_SETTINGS)
+    assert store.count_active() == 2
+    assert len(store.list_jobs()) == 2

@@ -23,7 +23,7 @@ from . import presets, store, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
 MAX_ATOMS = int(os.environ.get("RHOBENCH_MAX_ATOMS", "60"))
-MAX_ACTIVE_JOBS_PER_USER = int(os.environ.get("RHOBENCH_MAX_ACTIVE_JOBS", "3"))
+MAX_ACTIVE_JOBS = int(os.environ.get("RHOBENCH_MAX_ACTIVE_JOBS", "4"))
 SESSION_COOKIE = "rb_session"
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -93,33 +93,25 @@ class JobRequest(BaseModel):
     settings: JobSettings = JobSettings()
 
 
-def current_user(request: Request) -> dict:
-    """세션 쿠키로 사용자를 확인. 승인된 계정만 API를 사용할 수 있다."""
-    user = auth.resolve(request.cookies.get(SESSION_COOKIE))
-    if user is None:
+def require_login(request: Request):
+    """공유 비밀번호로 로그인한 세션만 API를 사용할 수 있다."""
+    if not auth.is_valid(request.cookies.get(SESSION_COOKIE)):
         raise HTTPException(401, "로그인이 필요합니다.")
-    return user
-
-
-def admin_user(user: dict = Depends(current_user)) -> dict:
-    if not user.get("is_admin"):
-        raise HTTPException(403, "관리자만 사용할 수 있습니다.")
-    return user
+    return True
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
 
 
 @app.post("/api/login")
 def login(req: LoginRequest, response: Response):
-    token = auth.login(req.username, req.password)
+    token = auth.login(req.password)
     if token is None:
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.")
+        raise HTTPException(401, "비밀번호가 올바르지 않습니다.")
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax",
                         max_age=auth.SESSION_TTL)
-    return {"user": auth.resolve(token)}
+    return {"ok": True}
 
 
 @app.post("/api/logout")
@@ -130,55 +122,13 @@ def logout(request: Request, response: Response):
 
 
 @app.get("/api/me")
-def me(user: dict = Depends(current_user)):
-    return {"user": user, "limits": {"max_atoms": MAX_ATOMS,
-                                     "max_active_jobs": MAX_ACTIVE_JOBS_PER_USER}}
-
-
-class NewUser(BaseModel):
-    username: str = Field(min_length=2, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
-    is_admin: bool = False
-    note: str = Field("", max_length=200)
-
-
-class PasswordChange(BaseModel):
-    password: str = Field(min_length=8, max_length=256)
-
-
-@app.get("/api/users")
-def get_users(user: dict = Depends(admin_user)):
-    return {"users": auth.list_users()}
-
-
-@app.post("/api/users")
-def create_user(req: NewUser, user: dict = Depends(admin_user)):
-    try:
-        return {"user": auth.add_user(req.username, req.password, req.is_admin, req.note)}
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-
-
-@app.post("/api/users/{username}/password")
-def change_password(username: str, req: PasswordChange, user: dict = Depends(admin_user)):
-    try:
-        auth.set_password(username, req.password)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {"ok": True}
-
-
-@app.delete("/api/users/{username}")
-def remove_user(username: str, user: dict = Depends(admin_user)):
-    try:
-        auth.delete_user(username)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {"ok": True}
+def me(_: bool = Depends(require_login)):
+    return {"limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS},
+            "active_sessions": auth.active_sessions()}
 
 
 @app.get("/api/presets")
-def get_presets(user: dict = Depends(current_user)):
+def get_presets(_: bool = Depends(require_login)):
     return {
         "materials": presets.MATERIALS,
         "solvents": [{k: v for k, v in s.items() if k != "smd"} for s in presets.SOLVENTS],
@@ -199,12 +149,12 @@ class LookupRequest(BaseModel):
 
 
 @app.post("/api/lookup")
-def lookup_compound(req: LookupRequest, user: dict = Depends(current_user)):
+def lookup_compound(req: LookupRequest, _: bool = Depends(require_login)):
     return lookup_mod.lookup(req.query)
 
 
 @app.post("/api/jobs")
-def submit_jobs(req: JobRequest, user: dict = Depends(current_user)):
+def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
     settings = req.settings.model_dump()
     if settings["envType"] == "진공·기체":
         settings["solventId"] = None
@@ -268,12 +218,12 @@ def submit_jobs(req: JobRequest, user: dict = Depends(current_user)):
         if f not in presets.FUNCTIONALS:
             raise HTTPException(400, f"지원하지 않는 범함수: {f}")
 
-    # 자원 보호: 사용자당 동시 작업 수 제한
+    # 자원 보호: 서버 전체 동시 작업 수 제한 (공유 서버)
     n_new = len(targets) * len(functionals)
-    n_active = store.count_active(user["username"])
-    if n_active + n_new > MAX_ACTIVE_JOBS_PER_USER:
+    n_active = store.count_active()
+    if n_active + n_new > MAX_ACTIVE_JOBS:
         raise HTTPException(
-            400, f"동시 실행 가능한 작업은 {MAX_ACTIVE_JOBS_PER_USER}개입니다 "
+            400, f"서버에서 동시에 실행 가능한 작업은 {MAX_ACTIVE_JOBS}개입니다 "
                  f"(현재 {n_active}개 진행 중, 요청 {n_new}개). 완료를 기다리거나 취소하세요.")
 
     jobs = []
@@ -283,7 +233,7 @@ def submit_jobs(req: JobRequest, user: dict = Depends(current_user)):
             label = dict(material)
             if len(functionals) > 1:
                 label["name"] = f"{material['name']} · {f}"
-            job = store.create_job(label, job_settings, owner=user["username"])
+            job = store.create_job(label, job_settings)
             worker.submit(job["id"])
             jobs.append(job)
     return {"jobs": jobs}
@@ -302,9 +252,9 @@ CSV_COLUMNS = [
 
 
 @app.get("/api/export")
-def export_results(format: str = "json", user: dict = Depends(current_user)):
-    """본인의 PUBLISHED 결과 일괄 내보내기 — 표 형식(csv) 또는 전체 원본(json)."""
-    jobs = [j for j in store.list_jobs(user["username"])
+def export_results(format: str = "json", _: bool = Depends(require_login)):
+    """PUBLISHED 결과 일괄 내보내기 — 표 형식(csv) 또는 전체 원본(json)."""
+    jobs = [j for j in store.list_jobs()
             if j["status"] == "PUBLISHED" and j.get("result")]
     if format == "json":
         return JSONResponse(
@@ -330,35 +280,31 @@ def export_results(format: str = "json", user: dict = Depends(current_user)):
         headers={"Content-Disposition": 'attachment; filename="rhobench_results.csv"'})
 
 
-def _owned_job(job_id: str, user: dict) -> dict:
-    """본인 작업만 접근 허용 (관리자는 전체 접근)."""
+def _job_or_404(job_id: str) -> dict:
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
-    if not user.get("is_admin") and job.get("owner") != user["username"]:
-        raise HTTPException(403, "다른 사용자의 작업입니다.")
     return job
 
 
 @app.get("/api/jobs")
-def list_jobs(user: dict = Depends(current_user), all: bool = False):
-    owner = None if (user.get("is_admin") and all) else user["username"]
-    return {"jobs": store.list_jobs(owner)}
+def list_jobs(_: bool = Depends(require_login)):
+    return {"jobs": store.list_jobs()}
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str, user: dict = Depends(current_user)):
-    return _owned_job(job_id, user)
+def get_job(job_id: str, _: bool = Depends(require_login)):
+    return _job_or_404(job_id)
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def retry_job(job_id: str, user: dict = Depends(current_user)):
-    old = _owned_job(job_id, user)
+def retry_job(job_id: str, _: bool = Depends(require_login)):
+    old = _job_or_404(job_id)
     if old["status"] != "FAILED":
         raise HTTPException(400, "실패한 작업만 재시도할 수 있습니다.")
-    if store.count_active(user["username"]) >= MAX_ACTIVE_JOBS_PER_USER:
-        raise HTTPException(400, f"동시 실행 가능한 작업은 {MAX_ACTIVE_JOBS_PER_USER}개입니다.")
-    job = store.create_job(old["material"], old["settings"], owner=user["username"])
+    if store.count_active() >= MAX_ACTIVE_JOBS:
+        raise HTTPException(400, f"동시 실행 가능한 작업은 {MAX_ACTIVE_JOBS}개입니다.")
+    job = store.create_job(old["material"], old["settings"])
     job["logs"].append(f"재시도 — 원본 작업 {job_id}")
     store.update_job(job["id"], {"logs": job["logs"]})
     worker.submit(job["id"])
@@ -366,16 +312,16 @@ def retry_job(job_id: str, user: dict = Depends(current_user)):
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str, user: dict = Depends(current_user)):
-    _owned_job(job_id, user)
+def cancel_job(job_id: str, _: bool = Depends(require_login)):
+    _job_or_404(job_id)
     if not store.request_cancel(job_id):
         raise HTTPException(400, "취소할 수 없는 상태입니다.")
     return {"ok": True}
 
 
 @app.delete("/api/jobs/{job_id}")
-def delete_job(job_id: str, user: dict = Depends(current_user)):
-    _owned_job(job_id, user)
+def delete_job(job_id: str, _: bool = Depends(require_login)):
+    _job_or_404(job_id)
     if not store.delete_job(job_id):
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
     return {"ok": True}
