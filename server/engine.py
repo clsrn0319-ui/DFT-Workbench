@@ -376,6 +376,11 @@ def run_job(job, update, is_cancelled=lambda: False):
         stage("기술자 추출", 40)
         gap = (lumo - homo) if lumo is not None else None
         _, charges = mf.mulliken_pop(verbose=0)
+        try:
+            density_cloud = desc_mod.density_cloud(mf, mol)
+        except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
+            density_cloud = None
+            log(f"전자밀도 구름 생성 생략: {exc}")
         descriptors = {
             "total_energy_hartree": e_total,
             "homo_ev": round(homo, 3),
@@ -661,6 +666,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
                            for f in fragments] if fragments else None),
             "fingerprint_structures": fingerprint_structures or None,
+            "density_cloud": density_cloud,
             "conditions": {
                 "environment": settings["envType"],
                 "explicit_molecules": explicit_label or "없음",

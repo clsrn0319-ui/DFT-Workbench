@@ -118,6 +118,47 @@ def tddft_lambda_max(mf, nstates=8):
     }
 
 
+def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=0):
+    """전자 밀도 ρ(r)를 격자에서 계산해 밀도 가중 표본점(전자구름)으로 반환한다.
+
+    점의 밀집도가 곧 전자가 존재할 확률에 비례하도록 ρ를 가중치로 표본추출한다
+    (등가면이 아니라 확률 구름 표현). 반환 좌표 단위는 Å.
+    """
+    dm = mf.make_rdm1()
+    if dm.ndim == 3:
+        dm = dm[0] + dm[1]
+    coords = mol.atom_coords(unit="Angstrom")
+    lo, hi = coords.min(0) - 2.4, coords.max(0) + 2.4
+    axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    n_grid = int(np.prod([len(a) for a in axes]))
+    if n_grid > 400000:  # 대형 분자는 격자를 성기게
+        spacing *= (n_grid / 400000.0) ** (1 / 3)
+        axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+
+    rho_parts = []
+    for start in range(0, len(grid), 20000):  # 메모리 보호를 위한 청크 처리
+        chunk = grid[start:start + 20000] / 0.52917721092
+        ao = mol.eval_gto("GTOval", chunk)
+        rho_parts.append(np.einsum("pi,ij,pj->p", ao, dm, ao))
+    rho = np.concatenate(rho_parts)
+
+    mask = rho > threshold
+    if not mask.any():
+        return None
+    pts, w = grid[mask], rho[mask]
+    rng = np.random.default_rng(seed)
+    n = min(max_points, len(pts))
+    idx = rng.choice(len(pts), size=n, replace=False, p=w / w.sum())
+    sel_pts, sel_rho = pts[idx], w[idx]
+    return {
+        "points": [[round(float(c), 2) for c in p] for p in sel_pts],
+        "rho": [round(float(v), 4) for v in sel_rho],
+        "rho_max": round(float(w.max()), 4),
+        "spacing": round(float(spacing), 3),
+    }
+
+
 def li_cation_site(mol, mep):
     """MEP 최소점(가장 음전하인 부위)에서 바깥으로 Li⁺를 배치할 좌표.
 

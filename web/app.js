@@ -426,7 +426,7 @@ function niceRange(values, pad = 0.5) {
 }
 
 /* ---------- 물성 지문 레이더 ---------- */
-const FP_AXES = [
+const FP_PRESET = [
   {key: "gap_ev", label: "HOMO-LUMO gap", unit: "eV", lower: false},
   {key: "dipole_debye", label: "쌍극자 모멘트", unit: "D", lower: false},
   {key: "oxidation_potential_v", label: "산화 전위", unit: "V", lower: false},
@@ -434,6 +434,60 @@ const FP_AXES = [
   {key: "homo_ev", label: "HOMO 에너지", unit: "eV", lower: true},
   {key: "li_binding_kj", label: "Li⁺ 결합 에너지", unit: "kJ/mol", lower: true},
 ];
+// ↓낮을수록 유리한 지표 (레이더에서 바깥쪽 방향을 뒤집음)
+const LOWER_IS_BETTER = new Set(["homo_ev", "li_binding_kj", "solvation_energy_kcal",
+  "interaction_energy_kcal", "dimer_binding_kj", "reduction_potential_v",
+  "reduction_potential_gibbs_v", "mep_min_kcal"]);
+let FP_AXES = FP_PRESET.slice();
+
+function numericDescriptorKeys() {
+  const keys = new Set();
+  for (const j of JOBS_CACHE) {
+    if (j.status !== "PUBLISHED") continue;
+    for (const [k, v] of Object.entries(j.result?.descriptors || {})) {
+      if (typeof v === "number") keys.add(k);
+    }
+  }
+  return [...keys];
+}
+
+function axisMeta(key) {
+  const [label, unit] = DESC_LABELS[key] || [key, ""];
+  return {key, label, unit, lower: LOWER_IS_BETTER.has(key)};
+}
+
+function renderAxisPicker(containerId, onChange) {
+  const box = $(containerId);
+  if (!box) return;
+  const keys = numericDescriptorKeys();
+  const chosen = new Set(FP_AXES.map(a => a.key));
+  box.innerHTML = `<div class="toolbar" style="margin-bottom:6px">
+      <span class="muted small">레이더 축 선택 (3~8개)</span>
+      <button class="btn" data-fp-preset="1" type="button">스크리닝 프리셋</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${keys.map(k => {
+        const m = axisMeta(k);
+        return `<button class="btn ${chosen.has(k) ? "primary" : ""}" data-fp-axis="${esc(k)}"
+          type="button" style="padding:3px 10px;font-size:11.5px">${esc(m.label)}</button>`;
+      }).join("")}
+    </div>`;
+  box.querySelectorAll("[data-fp-axis]").forEach(btn => btn.addEventListener("click", () => {
+    const k = btn.dataset.fpAxis;
+    if (chosen.has(k)) {
+      if (FP_AXES.length <= 3) return;
+      FP_AXES = FP_AXES.filter(a => a.key !== k);
+    } else {
+      if (FP_AXES.length >= 8) return;
+      FP_AXES = [...FP_AXES, axisMeta(k)];
+    }
+    onChange();
+  }));
+  box.querySelector("[data-fp-preset]")?.addEventListener("click", () => {
+    FP_AXES = FP_PRESET.slice();
+    onChange();
+  });
+}
 
 function fpRange(key) {
   // 사용자의 PUBLISHED 결과 전체로 min-max 범위 산출 (1건뿐이면 ±20% 여유)
@@ -445,20 +499,25 @@ function fpRange(key) {
   return [lo, hi];
 }
 
-function svgRadar(d) {
+function svgRadar(series) {
+  // series: 기술자 객체 하나 또는 [{name, d, color}] 배열 (여러 물질 오버레이)
+  const list = Array.isArray(series) ? series : [{name: null, d: series, idx: 0}];
   const axes = FP_AXES.map(a => {
-    const v = d[a.key];
-    if (typeof v !== "number") return null;
     const r = fpRange(a.key);
     if (!r) return null;
-    let t = (v - r[0]) / (r[1] - r[0]);
-    if (a.lower) t = 1 - t;                       // ↓바깥: 낮을수록 바깥쪽
-    return {...a, v, t: Math.max(0.06, Math.min(1, t))};
+    const vals = list.map(s => s.d[a.key]);
+    if (!vals.some(v => typeof v === "number")) return null;
+    return {...a, range: r};
   }).filter(Boolean);
   if (axes.length < 3) return "";
   const W = 460, H = 340, CX = W / 2, CY = H / 2, R = 92;
   const ang = i => -Math.PI / 2 + i * 2 * Math.PI / axes.length;
   const pt = (i, f) => [CX + Math.cos(ang(i)) * R * f, CY + Math.sin(ang(i)) * R * f];
+  const norm = (a, v) => {
+    let t = (v - a.range[0]) / (a.range[1] - a.range[0]);
+    if (a.lower) t = 1 - t;
+    return Math.max(0.06, Math.min(1, t));
+  };
   let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:460px" role="img">`;
   for (const f of [0.25, 0.5, 0.75, 1]) {
     sv += `<polygon points="${axes.map((_, i) => pt(i, f).map(n => n.toFixed(1)).join(",")).join(" ")}"
@@ -473,15 +532,32 @@ function svgRadar(d) {
       <text x="${lx}" y="${ly + 14}" text-anchor="${anchor}" class="axis-label">
         (${esc(a.unit)}${a.lower ? ", ↓바깥" : ""})</text>`;
   });
-  const poly = axes.map((a, i) => pt(i, a.t).map(n => n.toFixed(1)).join(",")).join(" ");
-  sv += `<polygon points="${poly}" fill="color-mix(in srgb, var(--accent) 16%, transparent)"
-    stroke="var(--accent)" stroke-width="2"/>`;
-  axes.forEach((a, i) => {
-    const [x, y] = pt(i, a.t);
-    sv += `<circle cx="${x}" cy="${y}" r="4" fill="var(--accent)" class="ring-mark">
-      <title>${esc(a.label)}: ${a.v} ${esc(a.unit)}</title></circle>`;
+  list.forEach((sObj, si) => {
+    const col = list.length > 1 ? `var(--series-${(sObj.idx % 8) + 1})` : "var(--accent)";
+    const usable = axes.filter(a => typeof sObj.d[a.key] === "number");
+    if (usable.length < 3) return;
+    const poly = axes.map((a, i) => {
+      const v = sObj.d[a.key];
+      const f = typeof v === "number" ? norm(a, v) : 0.06;
+      return pt(i, f).map(n => n.toFixed(1)).join(",");
+    }).join(" ");
+    sv += `<polygon points="${poly}" fill="${list.length > 1 ? "none" : "color-mix(in srgb, var(--accent) 16%, transparent)"}"
+      stroke="${col}" stroke-width="2"/>`;
+    axes.forEach((a, i) => {
+      const v = sObj.d[a.key];
+      if (typeof v !== "number") return;
+      const [x, y] = pt(i, norm(a, v));
+      sv += `<circle cx="${x}" cy="${y}" r="4" fill="${col}" class="ring-mark">
+        <title>${sObj.name ? esc(sObj.name) + " — " : ""}${esc(a.label)}: ${v} ${esc(a.unit)}</title></circle>`;
+    });
   });
-  return sv + "</svg>";
+  sv += "</svg>";
+  if (list.length > 1) {
+    sv += `<div class="legend">${list.map(sObj =>
+      `<span class="legend-item"><span class="legend-swatch"
+        style="background:var(--series-${(sObj.idx % 8) + 1})"></span>${esc(sObj.name)}</span>`).join("")}</div>`;
+  }
+  return sv;
 }
 
 function svgAdsorption(ads) {
@@ -509,37 +585,42 @@ function svgAdsorption(ads) {
   return sv + "</svg>";
 }
 
-function svgHomoLumoAxis(homo, lumo) {
-  // 전극 페르미 준위 근사 μ ≈ −(1.44 + V) eV (V는 Li/Li⁺ 기준 전위)
+function svgHomoLumoAxis(entries) {
+  // entries: {name, homo, lumo, idx}[] — 단일이면 길이 1
   const marks = ELECTRODES.map(e => ({label: e.label.split(" (")[0], mu: -(1.44 + e.v)}));
-  const lo = Math.min(homo, ...marks.map(m => m.mu)) - 0.6;
-  const hi = Math.max(lumo, ...marks.map(m => m.mu)) + 0.6;
-  const W = 640, H = 128, L = 74;
-  const x = v => L + (v - lo) / (hi - lo) * (W - L - 26);
+  const vals = entries.flatMap(e => [e.homo, e.lumo]).concat(marks.map(m => m.mu));
+  const lo = Math.min(...vals) - 0.6, hi = Math.max(...vals) + 0.6;
+  const rowH = 26, W = 700, L = 148, H = 62 + entries.length * rowH + 34;
+  const x = v => L + (v - lo) / (hi - lo) * (W - L - 30);
   let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:680px" role="img">`;
   const start = Math.ceil(lo), end = Math.floor(hi);
-  for (let v = start; v <= end; v++) {
+  const step = (end - start) > 14 ? 2 : 1;
+  for (let v = start; v <= end; v += step) {
     sv += `<line x1="${x(v)}" y1="46" x2="${x(v)}" y2="${H - 30}" class="gridline"/>
-      <text x="${x(v)}" y="${H - 16}" text-anchor="middle" class="axis-label">${v}</text>`;
+      <text x="${x(v)}" y="${H - 14}" text-anchor="middle" class="axis-label">${v}</text>`;
   }
-  sv += `<text x="${W - 18}" y="30" class="axis-label">eV</text>`;
+  sv += `<text x="${W - 16}" y="30" class="axis-label">eV</text>`;
   marks.forEach((m, i) => {
     const ly = i % 2 ? 40 : 26;
-    const cathode = m.mu < -2.5;
-    const col = cathode ? "var(--pin)" : "var(--accent)";
+    const col = m.mu < -2.5 ? "var(--pin)" : "var(--accent)";
     sv += `<line x1="${x(m.mu)}" y1="${ly + 3}" x2="${x(m.mu)}" y2="${H - 30}"
         stroke="${col}" stroke-dasharray="4 3"/>
       <text x="${x(m.mu)}" y="${ly}" text-anchor="middle" class="axis-label"
         fill="${col}">${esc(m.label)}</text>`;
   });
-  sv += `<text x="${L - 8}" y="82" text-anchor="end" class="axis-label">분자</text>
-    <line x1="${x(homo)}" y1="78" x2="${x(lumo)}" y2="78"
-      stroke="color-mix(in srgb, var(--accent) 55%, transparent)" stroke-width="9"
-      stroke-linecap="round"/>
-    <line x1="${x(homo)}" y1="70" x2="${x(homo)}" y2="86" stroke="var(--accent)" stroke-width="2.5"/>
-    <line x1="${x(lumo)}" y1="70" x2="${x(lumo)}" y2="86" stroke="var(--accent)" stroke-width="2.5"/>
-    <text x="${x(homo)}" y="66" text-anchor="middle" class="value-label">${homo}</text>
-    <text x="${x(lumo)}" y="66" text-anchor="middle" class="value-label">${lumo}</text>`;
+  entries.forEach((e, k) => {
+    const y = 62 + k * rowH;
+    const col = entries.length > 1 ? `var(--series-${(e.idx % 8) + 1})` : "var(--accent)";
+    const nm = e.name.length > 13 ? e.name.slice(0, 12) + "…" : e.name;
+    sv += `<text x="${L - 8}" y="${y + 4}" text-anchor="end" class="axis-label">${esc(nm)}
+        <title>${esc(e.name)}</title></text>
+      <line x1="${x(e.homo)}" y1="${y}" x2="${x(e.lumo)}" y2="${y}"
+        stroke="${col}" stroke-width="8" stroke-linecap="round" opacity="0.5"/>
+      <line x1="${x(e.homo)}" y1="${y - 7}" x2="${x(e.homo)}" y2="${y + 7}" stroke="${col}" stroke-width="2.5"/>
+      <line x1="${x(e.lumo)}" y1="${y - 7}" x2="${x(e.lumo)}" y2="${y + 7}" stroke="${col}" stroke-width="2.5"/>
+      <text x="${x(e.homo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.homo}</text>
+      <text x="${x(e.lumo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.lumo}</text>`;
+  });
   return sv + "</svg>";
 }
 
@@ -589,6 +670,7 @@ function showResult(job) {
         <div class="toolbar" style="margin-bottom:6px">
           <button class="btn" id="v3d-element" type="button">원소 색</button>
           <button class="btn" id="v3d-charge" type="button">부분 전하 색</button>
+          <button class="btn" id="v3d-cloud" type="button">전자구름</button>
         </div>
         <div id="viewer3d" style="width:100%;height:280px;position:relative;
           border:1px solid var(--grid);border-radius:10px;overflow:hidden"></div>
@@ -599,7 +681,7 @@ function showResult(job) {
   if (d.homo_ev != null && d.lumo_ev != null) {
     html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
         HOMO / LUMO (전극 페르미 준위 공통 축)</h3>
-      ${svgHomoLumoAxis(d.homo_ev, d.lumo_ev)}
+      ${svgHomoLumoAxis([{name: job.material.name, homo: d.homo_ev, lumo: d.lumo_ev, idx: 0}])}
       <p class="muted small" style="margin:4px 0 0">
         막대 왼쪽 끝 = HOMO, 오른쪽 끝 = LUMO, 길이 = 갭 · 점선 = 전극 페르미 준위 근사
         μ ≈ −(1.44 + V) eV — <b>LUMO가 음극 준위보다 낮으면 환원</b>,
@@ -608,8 +690,9 @@ function showResult(job) {
   const radar = svgRadar(d);
   if (radar) {
     html += `<div class="grid-2" style="margin-top:16px"><div>
-      <h3 style="font-size:13px;color:var(--accent)">물성 지문 (스크리닝 축)</h3>
-      ${radar}
+      <h3 style="font-size:13px;color:var(--accent)">물성 지문 (축 선택 가능)</h3>
+      <div id="fp-axis-picker"></div>
+      <div id="fp-radar">${radar}</div>
       <p class="muted small" style="margin:4px 0 0">
         저장된 PUBLISHED 결과 전체 범위로 min-max 정규화 · 점에 마우스를 올리면 원값·단위 표시 ·
         바깥쪽일수록 스크리닝에 유리한 방향</p></div>`;
@@ -678,8 +761,16 @@ function showResult(job) {
       <pre class="xyz">${esc(r.structure_xyz)}</pre></details>`;
 
   $("result-body").innerHTML = html;
+  if ($("fp-axis-picker")) {
+    const redraw = () => {
+      renderAxisPicker("fp-axis-picker", redraw);
+      $("fp-radar").innerHTML = svgRadar(d);
+    };
+    redraw();
+  }
   $("v3d-element").addEventListener("click", () => { VIEW_MODE = "element"; render3D(CURRENT_RESULT); });
   $("v3d-charge").addEventListener("click", () => { VIEW_MODE = "charge"; render3D(CURRENT_RESULT); });
+  $("v3d-cloud").addEventListener("click", () => { VIEW_MODE = "cloud"; render3D(CURRENT_RESULT); });
   $("result-card").style.display = "";
   render3D(r);
   $("result-card").scrollIntoView({behavior: "smooth"});
@@ -724,6 +815,13 @@ function render3D(r) {
     : baseNote;
   $("v3d-element")?.classList.toggle("primary", VIEW_MODE === "element");
   $("v3d-charge")?.classList.toggle("primary", VIEW_MODE === "charge");
+  $("v3d-cloud")?.classList.toggle("primary", VIEW_MODE === "cloud");
+  const cloud = r.density_cloud;
+  if (VIEW_MODE === "cloud") {
+    note.textContent = cloud
+      ? "전자구름: 점의 밀집도가 전자 밀도 ρ(r)에 비례 — 점이 촘촘할수록 전자가 많이 머무는 영역 · 드래그 회전 / 휠 확대"
+      : "이 결과에는 전자밀도 데이터가 없습니다 (이전 버전에서 계산된 작업). 다시 계산하면 표시됩니다.";
+  }
 
   const COLOR = {H:"#cfcfcf",C:"#3a3a3a",N:"#2f5bd8",O:"#d62828",F:"#4fb944",
                  S:"#c9a227",P:"#e08020",Cl:"#3fae49",Br:"#8a4b26",I:"#7a3fa0",Li:"#b04fd8"};
@@ -770,9 +868,29 @@ function render3D(r) {
     for (const [i, j] of bonds) {
       const p = proj[i], q = proj[j];
       const faded = solventIdx.has(i) || solventIdx.has(j);
-      ctx.strokeStyle = faded ? "rgba(140,140,140,.45)" : "rgba(90,90,90,.9)";
-      ctx.lineWidth = faded ? 1.4 : 2.6;
+      const cloudMode = VIEW_MODE === "cloud";
+      ctx.strokeStyle = faded ? "rgba(140,140,140,.45)"
+        : (cloudMode ? "rgba(60,60,60,.55)" : "rgba(90,90,90,.9)");
+      ctx.lineWidth = faded ? 1.4 : (cloudMode ? 1.4 : 2.6);
       ctx.beginPath(); ctx.moveTo(p.sx, p.sy); ctx.lineTo(q.sx, q.sy); ctx.stroke();
+    }
+    if (VIEW_MODE === "cloud" && cloud) {
+      const rmax = cloud.rho_max || 1;
+      const cp3 = cloud.points.map((q, i) => {
+        const x0 = q[0] - cx, y0 = q[1] - cy, z0 = q[2] - cz;
+        const x1 = x0 * cyaw + z0 * syaw, z1 = -x0 * syaw + z0 * cyaw;
+        const y2 = y0 * cp - z1 * sp, z2 = y0 * sp + z1 * cp;
+        return {sx: W / 2 + x1 * scale, sy: H / 2 - y2 * scale, z: z2, rho: cloud.rho[i]};
+      }).sort((a, b) => a.z - b.z);
+      for (const q of cp3) {
+        const t = Math.min(1, Math.pow(q.rho / rmax, 0.28));
+        ctx.globalAlpha = 0.10 + 0.42 * t;
+        ctx.fillStyle = `rgb(${Math.round(70 + 120 * (1 - t))},${Math.round(120 + 60 * (1 - t))},${Math.round(200 + 40 * (1 - t))})`;
+        ctx.beginPath();
+        ctx.arc(q.sx, q.sy, 1.1 + 2.6 * t, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
     if (mepPts && VIEW_MODE === "charge") {
       for (const [kind, pos] of [["min", mepPts.min], ["max", mepPts.max]]) {
@@ -795,7 +913,8 @@ function render3D(r) {
     proj.sort((a, b) => a.z - b.z);
     for (const p of proj) {
       const faded = solventIdx.has(p.i);
-      const rr = (rad(p.el) * 0.45 + 0.18) * scale * (faded ? 0.7 : 1);
+      const shrink = VIEW_MODE === "cloud" ? 0.35 : 1;
+      const rr = (rad(p.el) * 0.45 + 0.18) * scale * (faded ? 0.7 : 1) * shrink;
       ctx.globalAlpha = faded ? 0.45 : 1;
       ctx.beginPath();
       ctx.arc(p.sx, p.sy, Math.max(rr, 2), 0, Math.PI * 2);
@@ -1067,6 +1186,35 @@ window.rbRenderCompare = function () {
   const chosen = jobs.filter(j => COMPARE_SEL.has(j.id));
   let table = "";
   if (chosen.length >= 2) {
+    // 요약 타일 — 물질별 핵심 지표
+    table += '<div class="stat-row">' + chosen.map((j, i) => {
+      const dd = j.result.descriptors;
+      return `<div class="stat-tile" style="border-left:4px solid var(--series-${(i % 8) + 1})">
+        <div class="stat-label">${esc(j.material.name)}</div>
+        <div class="stat-value">${dd.gap_ev ?? "—"}<span class="stat-unit"> eV 갭</span></div>
+        <div class="stat-sub">HOMO ${dd.homo_ev ?? "—"} · LUMO ${dd.lumo_ev ?? "—"} eV</div></div>`;
+    }).join("") + "</div>";
+
+    // HOMO/LUMO 공통 축 오버레이
+    const hl = chosen.map((j, i) => ({name: j.material.name, idx: i,
+      homo: j.result.descriptors.homo_ev, lumo: j.result.descriptors.lumo_ev}))
+      .filter(e => e.homo != null && e.lumo != null);
+    if (hl.length >= 2) {
+      table += `<h3 style="font-size:13px;color:var(--accent);margin:14px 0 4px">
+          HOMO / LUMO 공통 축 (전극 페르미 준위 대비)</h3>
+        ${svgHomoLumoAxis(hl)}
+        <p class="muted small" style="margin:4px 0 0">막대 왼쪽 = HOMO, 오른쪽 = LUMO ·
+          점선 = 전극 페르미 준위 근사 — 막대가 왼쪽 점선보다 오른쪽으로 넘으면 산화, 오른쪽 점선보다 왼쪽이면 환원 위험</p>`;
+    }
+
+    // 물성 지문 오버레이 레이더 (축 선택 가능)
+    const series = chosen.map((j, i) => ({name: j.material.name, d: j.result.descriptors, idx: i}));
+    table += `<h3 style="font-size:13px;color:var(--accent);margin:16px 0 4px">
+        물성 지문 겹쳐보기 (축 선택 가능)</h3>
+      <div id="cmp-axis-picker"></div>
+      <div id="cmp-radar">${svgRadar(series)}</div>
+      <p class="muted small" style="margin:4px 0 10px">
+        저장된 PUBLISHED 결과 전체 범위로 정규화 · 바깥쪽일수록 스크리닝에 유리한 방향</p>`;
     // 모의 앱 스타일 비교 차트 (시리즈 색상)
     const METRICS = [
       ["homo_ev", "HOMO", "eV"], ["lumo_ev", "LUMO", "eV"], ["gap_ev", "HOMO–LUMO 갭", "eV"],
@@ -1124,6 +1272,14 @@ window.rbRenderCompare = function () {
     table = '<p class="muted small">두 개 이상 선택하면 비교 표가 나타납니다.</p>';
   }
   box.innerHTML = picker + table;
+  if ($("cmp-axis-picker")) {
+    const series = chosen.map((j, i) => ({name: j.material.name, d: j.result.descriptors, idx: i}));
+    const redraw = () => {
+      renderAxisPicker("cmp-axis-picker", redraw);
+      $("cmp-radar").innerHTML = svgRadar(series);
+    };
+    redraw();
+  }
   box.querySelectorAll("[data-cmp]").forEach(b => b.addEventListener("click", () => {
     const id = b.dataset.cmp;
     COMPARE_SEL.has(id) ? COMPARE_SEL.delete(id) : COMPARE_SEL.add(id);
