@@ -1403,13 +1403,37 @@ function eswJobs() {
     && j.result?.descriptors?.reduction_potential_v != null);
 }
 
+function eswReason(job) {
+  // 왜 ESW에 못 그리는지 — 조용히 빠지지 않도록 이유를 밝힌다
+  const d = job.result?.descriptors || {};
+  if (d.ip_vertical_ev != null || d.ea_vertical_ev != null) {
+    return "기준 전극 '없음'으로 계산 — IP/EA만 있고 전위 환산값이 없습니다";
+  }
+  const purpose = job.settings?.purpose || "";
+  if (!purpose.includes("전위") && !purpose.includes("지문")) {
+    return `목적이 '${purpose}' — 전위를 계산하지 않았습니다`;
+  }
+  return "전위 값이 없습니다";
+}
+
 function eswSection(jobs) {
-  jobs = jobs.filter(j => j.result?.descriptors?.oxidation_potential_v != null
-                       && j.result?.descriptors?.reduction_potential_v != null);
-  if (!jobs.length) {
-    return '<div class="empty small">전위가 계산된 결과가 없습니다.<br>' +
+  const usable = jobs.filter(j => j.result?.descriptors?.oxidation_potential_v != null
+                              && j.result?.descriptors?.reduction_potential_v != null);
+  const skipped = jobs.filter(j => !usable.includes(j));
+  const skipNote = skipped.length ? `
+    <div class="banner warn" style="margin:0 0 10px">
+      <b>${skipped.length}개 물질은 이 차트에 표시할 수 없습니다.</b>
+      <ul class="log-list" style="margin-top:4px">
+        ${skipped.map(j => `<li>${esc(j.material.name)} — ${esc(eswReason(j))}</li>`).join("")}
+      </ul>
+      <span class="small">해결: 'DFT 계산'에서 목적을 <b>"전자구조 + 산화/환원 전위"</b>로,
+        기준 전극을 <b>Li/Li+</b>(또는 SHE)로 두고 다시 계산하세요.</span>
+    </div>` : "";
+  if (!usable.length) {
+    return skipNote + '<div class="empty small">전위가 계산된 결과가 없습니다.<br>' +
       'DFT 계산에서 목적을 "전자구조 + 산화/환원 전위"로 선택해 제출하세요.</div>';
   }
+  jobs = usable;
   const allV = jobs.flatMap(j => {
     const dd = j.result.descriptors;
     return [dd.reduction_potential_gibbs_v ?? dd.reduction_potential_v,
@@ -1463,7 +1487,7 @@ function eswSection(jobs) {
       <td class="${lfpOK ? "verdict-ok" : "verdict-no"}">${lfpOK ? "안정" : "산화 우려"}</td>
       <td class="${ncmOK ? "verdict-ok" : "verdict-no"}">${ncmOK ? "안정" : "산화 우려"}</td></tr>`;
   }
-  return svg + `
+  return skipNote + svg + `
     <div class="scroll-x" style="margin-top:14px"><table class="kv-table" style="min-width:640px">
       <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.1 V)</th>
         <th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th></tr>
