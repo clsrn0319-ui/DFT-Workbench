@@ -209,6 +209,7 @@ async function init() {
   $("add-explicit").onclick = () => addExplicitRow();
   $("submit-btn").onclick = submit;
   $("lookup-btn").onclick = doLookup;
+  wireResultsControls();
   $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
@@ -339,52 +340,110 @@ async function refreshJobs() {
   const {jobs} = await res.json();
   JOBS_CACHE = jobs;
   const real = document.getElementById("rb-real");
-  if (real?.classList.contains("mode-esw") && window.rbRenderEsw) window.rbRenderEsw();
+  if (real?.classList.contains("mode-results") && window.rbRenderResults) window.rbRenderResults();
+  else renderJobList();
   if (real?.classList.contains("mode-compare") && window.rbRenderCompare) window.rbRenderCompare();
+}
+
+function renderJobList() {
   const list = $("job-list");
-  if (!jobs.length) {
+  if (!list) return;
+  if (!JOBS_CACHE.length) {
     list.className = "empty small";
     list.textContent = "작업이 없습니다.";
+    updateSelCount();
     return;
   }
   list.className = "";
-  list.innerHTML = "";
-  for (const job of jobs) {
-    const div = document.createElement("div");
-    div.className = "job-row";
-    const solvent = PRESETS.solvents.find(s => s.id === job.settings.solventId);
-    const method = job.result?.conditions?.method
-      || `${job.settings.expert.functional}${job.settings.expert.basis ? "/" + job.settings.expert.basis : ""}`;
-    div.innerHTML = `
-      <div class="job-main">
-        <div><b>${esc(job.material.name)}</b> <span class="mono small muted">${esc(job.id)}</span></div>
-        <div class="small muted">${esc(job.settings.envType)} · ${esc(solvent?.abbr ?? "vacuum")} ·
-          ${esc(job.settings.structure)} · ${esc(method)} · ${esc(job.settings.accuracy)}</div>
-        ${["RUNNING", "QUEUED"].includes(job.status)
-          ? `<div class="progress-track"><div class="progress-fill" style="width:${job.progress}%"></div></div>
-             <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
-        ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
-        <details><summary class="small muted">로그 (${job.logs.length})</summary>
-          <ul class="log-list">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul></details>
+  // 소재별로 묶어서 표시 — 나중에 데이터를 찾기 쉽도록
+  const groups = new Map();
+  for (const job of JOBS_CACHE) {
+    if (!groups.has(job.material.name)) groups.set(job.material.name, []);
+    groups.get(job.material.name).push(job);
+  }
+  for (const id of [...EXPORT_SEL]) if (!JOBS_CACHE.some(j => j.id === id)) EXPORT_SEL.delete(id);
+
+  list.innerHTML = [...groups.entries()].map(([name, jobs]) => {
+    const done = jobs.filter(j => j.status === "PUBLISHED").length;
+    const active = jobs.filter(j => ["QUEUED", "RUNNING"].includes(j.status)).length;
+    const failed = jobs.filter(j => j.status === "FAILED").length;
+    return `<details class="job-group" ${active ? "open" : ""}
+        style="border:1px solid var(--grid);border-radius:10px;padding:8px 12px;margin-bottom:8px">
+      <summary style="cursor:pointer;font-weight:700">${esc(name)}
+        <span class="muted small" style="font-weight:400">— 총 ${jobs.length}건${done ? ` · 완료 ${done}` : ""}${active ? ` · 진행 ${active}` : ""}${failed ? ` · 실패 ${failed}` : ""}</span>
+      </summary>
+      <div style="margin-top:8px">${jobs.map(jobRowHtml).join("")}</div>
+    </details>`;
+  }).join("");
+
+  list.querySelectorAll("[data-export-sel]").forEach(cb => cb.addEventListener("change", () => {
+    cb.checked ? EXPORT_SEL.add(cb.dataset.exportSel) : EXPORT_SEL.delete(cb.dataset.exportSel);
+    updateSelCount();
+  }));
+  list.querySelectorAll("[data-view-job]").forEach(b => b.addEventListener("click", () => {
+    const job = JOBS_CACHE.find(x => x.id === b.dataset.viewJob);
+    if (job) { SELECTED_RESULT = job.id; showResult(job); }
+  }));
+  list.querySelectorAll("[data-retry]").forEach(b => b.addEventListener("click", () =>
+    fetch(`/api/jobs/${b.dataset.retry}/retry`, {method: "POST"}).then(refreshJobs)));
+  list.querySelectorAll("[data-cancel]").forEach(b => b.addEventListener("click", () =>
+    fetch(`/api/jobs/${b.dataset.cancel}/cancel`, {method: "POST"}).then(refreshJobs)));
+  list.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () =>
+    fetch(`/api/jobs/${b.dataset.del}`, {method: "DELETE"}).then(refreshJobs)));
+  updateSelCount();
+}
+
+function jobRowHtml(job) {
+  const solvent = PRESETS.solvents.find(s => s.id === job.settings.solventId);
+  const method = job.result?.conditions?.method
+    || `${job.settings.expert.functional}${job.settings.expert.basis ? "/" + job.settings.expert.basis : ""}`;
+  const done = job.status === "PUBLISHED";
+  return `<div class="job-row">
+    <div class="job-main">
+      <div>
+        ${done ? `<label class="compare-check"><input type="checkbox" data-export-sel="${esc(job.id)}"
+            ${EXPORT_SEL.has(job.id) ? "checked" : ""}> 내보내기</label> ` : ""}
+        <span class="mono small muted">${esc(job.id)}</span>
       </div>
-      <div class="job-side">
-        <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>
-        ${job.status === "PUBLISHED"
-          ? `<button class="btn ghost" data-view="${esc(job.id)}">결과 보기</button>` : ""}
-        ${job.status === "FAILED"
-          ? `<button class="btn ghost" data-retry="${esc(job.id)}">재시도</button>` : ""}
-        ${["QUEUED", "RUNNING"].includes(job.status)
-          ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
-          : `<button class="btn ghost danger" data-del="${esc(job.id)}">삭제</button>`}
-      </div>`;
-    div.querySelector("[data-view]")?.addEventListener("click", () => showResult(job));
-    div.querySelector("[data-retry]")?.addEventListener("click", () =>
-      fetch(`/api/jobs/${job.id}/retry`, {method: "POST"}).then(refreshJobs));
-    div.querySelector("[data-cancel]")?.addEventListener("click", () =>
-      fetch(`/api/jobs/${job.id}/cancel`, {method: "POST"}).then(refreshJobs));
-    div.querySelector("[data-del]")?.addEventListener("click", () =>
-      fetch(`/api/jobs/${job.id}`, {method: "DELETE"}).then(refreshJobs));
-    list.appendChild(div);
+      <div class="small muted">${esc(job.settings.envType)} · ${esc(solvent?.abbr ?? "vacuum")} ·
+        ${esc(job.settings.structure)} · ${esc(method)} · ${esc(job.settings.accuracy)}</div>
+      ${["RUNNING", "QUEUED"].includes(job.status)
+        ? `<div class="progress-track"><div class="progress-fill" style="width:${job.progress}%"></div></div>
+           <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
+      ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
+      <details><summary class="small muted">로그 (${job.logs.length})</summary>
+        <ul class="log-list">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul></details>
+    </div>
+    <div class="job-side">
+      <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>
+      ${done ? `<button class="btn ghost" data-view-job="${esc(job.id)}">결과 보기</button>` : ""}
+      ${job.status === "FAILED" ? `<button class="btn ghost" data-retry="${esc(job.id)}">재시도</button>` : ""}
+      ${["QUEUED", "RUNNING"].includes(job.status)
+        ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
+        : `<button class="btn ghost danger" data-del="${esc(job.id)}">삭제</button>`}
+    </div></div>`;
+}
+
+function updateSelCount() {
+  const el = $("sel-count");
+  if (el) el.textContent = EXPORT_SEL.size
+    ? `${EXPORT_SEL.size}건 선택됨` : "선택 없음 → 전체 내보내기";
+}
+
+function wireResultsControls() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("sel-all", () => { publishedJobs().forEach(j => EXPORT_SEL.add(j.id)); renderJobList(); });
+  on("sel-none", () => { EXPORT_SEL.clear(); renderJobList(); });
+  const dl = format => {
+    const ids = [...EXPORT_SEL].join(",");
+    window.location = `/api/export?format=${format}` + (ids ? `&ids=${encodeURIComponent(ids)}` : "");
+  };
+  on("export-csv", () => dl("csv"));
+  on("export-json", () => dl("json"));
+  on("result-close", () => { $("result-card").style.display = "none"; SELECTED_RESULT = null; });
+  for (const id of ["res-filter-mat", "res-filter-cond"]) {
+    const el = $(id);
+    if (el) el.onchange = () => window.rbRenderResults();
   }
 }
 
@@ -516,7 +575,6 @@ const FP_PRESET = [
 const LOWER_IS_BETTER = new Set(["homo_ev", "li_binding_kj", "solvation_energy_kcal",
   "interaction_energy_kcal", "dimer_binding_kj", "reduction_potential_v",
   "reduction_potential_gibbs_v", "mep_min_kcal"]);
-let FP_AXES = FP_PRESET.slice();
 
 function numericDescriptorKeys() {
   const keys = new Set();
@@ -534,41 +592,104 @@ function axisMeta(key) {
   return {key, label, unit, lower: LOWER_IS_BETTER.has(key)};
 }
 
-function renderAxisPicker(containerId, onChange) {
-  const box = $(containerId);
-  if (!box) return;
-  const keys = numericDescriptorKeys();
-  const chosen = new Set(FP_AXES.map(a => a.key));
-  box.innerHTML = `<div class="toolbar" style="margin-bottom:6px">
-      <span class="muted small">레이더 축 선택 (3~8개)</span>
-      <button class="btn" data-fp-preset="1" type="button">스크리닝 프리셋</button>
-    </div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px">
-      ${keys.map(k => {
-        const m = axisMeta(k);
-        return `<button class="btn ${chosen.has(k) ? "primary" : ""}" data-fp-axis="${esc(k)}"
-          type="button" style="padding:3px 10px;font-size:11.5px">${esc(m.label)}</button>`;
-      }).join("")}
-    </div>`;
-  box.querySelectorAll("[data-fp-axis]").forEach(btn => btn.addEventListener("click", () => {
-    const k = btn.dataset.fpAxis;
-    if (chosen.has(k)) {
-      if (FP_AXES.length <= 3) return;
-      FP_AXES = FP_AXES.filter(a => a.key !== k);
-    } else {
-      if (FP_AXES.length >= 8) return;
-      FP_AXES = [...FP_AXES, axisMeta(k)];
-    }
-    onChange();
-  }));
-  box.querySelector("[data-fp-preset]")?.addEventListener("click", () => {
-    FP_AXES = FP_PRESET.slice();
-    onChange();
-  });
+/* ---------- 숫자 표기: 소수 넷째 자리까지 ---------- */
+function fmt(v) {
+  if (typeof v !== "number" || !isFinite(v)) return v;
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(4);
+}
+
+/* ---------- ★ 고정 물성 (사용자 지정, 레이더 축과 연동) ---------- */
+const PIN_KEY = "rhobench-pinned-descriptors";
+let PINNED = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PIN_KEY) || "null");
+    if (Array.isArray(saved) && saved.length) return new Set(saved);
+  } catch (e) { /* 기본값 사용 */ }
+  return new Set(FP_PRESET.map(a => a.key));
+})();
+
+function savePins() {
+  localStorage.setItem(PIN_KEY, JSON.stringify([...PINNED]));
+}
+
+function togglePin(key) {
+  if (PINNED.has(key)) {
+    if (PINNED.size <= 3) return "레이더 축은 최소 3개가 필요합니다.";
+    PINNED.delete(key);
+  } else {
+    if (PINNED.size >= 8) return "레이더 축은 최대 8개까지입니다.";
+    PINNED.add(key);
+  }
+  savePins();
+  return null;
+}
+
+/* ---------- 결과 화면: 결과 불러오기 · 상세 · ESW · 작업 큐 ---------- */
+let SELECTED_RESULT = null;   // 상세를 보고 있는 작업 id
+const EXPORT_SEL = new Set(); // 내보내기 선택 작업 id
+
+function publishedJobs() {
+  return JOBS_CACHE.filter(j => j.status === "PUBLISHED" && j.result);
+}
+
+function condLabel(job) {
+  const c = job.result?.conditions || {};
+  return `${c.method || ""} · ${c.solvent_model || ""}`;
+}
+
+function fillFilter(id, values, allLabel) {
+  const sel = $(id);
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  sel.add(new Option(allLabel, ""));
+  for (const v of values) sel.add(new Option(v.length > 42 ? v.slice(0, 40) + "…" : v, v));
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+window.rbRenderResults = function () {
+  const jobs = publishedJobs();
+  const mats = [...new Set(jobs.map(j => j.material.name))];
+  const conds = [...new Set(jobs.map(condLabel))];
+  fillFilter("res-filter-mat", mats, "모든 소재");
+  fillFilter("res-filter-cond", conds, "모든 조건");
+
+  const fm = $("res-filter-mat").value, fc = $("res-filter-cond").value;
+  const shown = jobs.filter(j => (!fm || j.material.name === fm) && (!fc || condLabel(j) === fc));
+  $("res-count").textContent = `${shown.length} / ${jobs.length}건`;
+
+  const picker = $("result-picker");
+  if (!shown.length) {
+    picker.className = "empty small";
+    picker.textContent = jobs.length
+      ? "조건에 맞는 결과가 없습니다. 필터를 바꿔보세요."
+      : "완료된 계산이 없습니다. 'DFT 계산'에서 제출하세요.";
+  } else {
+    picker.className = "mol-grid";
+    picker.innerHTML = shown.map(j => `
+      <button class="mol-card ${SELECTED_RESULT === j.id ? "selected" : ""}" data-open="${esc(j.id)}">
+        <b>${esc(j.material.name)}</b>
+        <span class="small muted">${esc(condLabel(j))}</span>
+        <span class="mono small muted">${esc(j.id)} · ${esc(fmtTime(j.finishedAt))}</span>
+      </button>`).join("");
+    picker.querySelectorAll("[data-open]").forEach(b => b.addEventListener("click", () => {
+      const job = JOBS_CACHE.find(x => x.id === b.dataset.open);
+      if (job) { SELECTED_RESULT = job.id; showResult(job); window.rbRenderResults(); }
+    }));
+  }
+
+  if (window.rbRenderEsw) window.rbRenderEsw();
+  renderJobList();
+};
+
+function fmtTime(t) {
+  return t ? new Date(t * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric",
+    hour: "2-digit", minute: "2-digit"}) : "—";
 }
 
 function fpRange(key) {
-  // 사용자의 PUBLISHED 결과 전체로 min-max 범위 산출 (1건뿐이면 ±20% 여유)
+  // 저장된 PUBLISHED 결과 전체로 min-max 범위 산출 (1건뿐이면 ±20% 여유)
   const vals = JOBS_CACHE.filter(j => j.status === "PUBLISHED")
     .map(j => j.result?.descriptors?.[key]).filter(v => typeof v === "number");
   if (!vals.length) return null;
@@ -577,17 +698,50 @@ function fpRange(key) {
   return [lo, hi];
 }
 
+function renderAxisPicker(containerId, onChange) {
+  const box = $(containerId);
+  if (!box) return;
+  const keys = numericDescriptorKeys();
+  for (const k of PINNED) if (!keys.includes(k)) keys.push(k);
+  box.innerHTML = `<div class="toolbar" style="margin-bottom:6px">
+      <span class="muted small">레이더 축 = ★ 고정 물성 (3~8개)</span>
+      <button class="btn" data-fp-preset="1" type="button">기본 축으로</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${keys.map(k => `<button class="btn ${PINNED.has(k) ? "primary" : ""}" data-fp-axis="${esc(k)}"
+          type="button" style="padding:3px 10px;font-size:11.5px">${esc(axisMeta(k).label)}</button>`).join("")}
+    </div>
+    <div class="form-error" data-fp-msg style="margin-top:4px"></div>`;
+  box.querySelectorAll("[data-fp-axis]").forEach(btn => btn.addEventListener("click", () => {
+    const msg = togglePin(btn.dataset.fpAxis);
+    if (msg) { box.querySelector("[data-fp-msg]").textContent = msg; return; }
+    onChange();
+  }));
+  box.querySelector("[data-fp-preset]").addEventListener("click", () => {
+    PINNED = new Set(FP_PRESET.map(a => a.key));
+    savePins();
+    onChange();
+  });
+}
+
 function svgRadar(series) {
-  // series: 기술자 객체 하나 또는 [{name, d, color}] 배열 (여러 물질 오버레이)
+  // series: 기술자 객체 하나 또는 [{name, d, idx}] 배열 (여러 물질 오버레이)
   const list = Array.isArray(series) ? series : [{name: null, d: series, idx: 0}];
-  const axes = FP_AXES.map(a => {
-    const r = fpRange(a.key);
-    if (!r) return null;
-    const vals = list.map(s => s.d[a.key]);
-    if (!vals.some(v => typeof v === "number")) return null;
-    return {...a, range: r};
-  }).filter(Boolean);
-  if (axes.length < 3) return "";
+  const axes = [...PINNED].map(key => {
+    const meta = axisMeta(key);
+    // 저장된 결과 전체로 범위를 잡되, 값이 없으면 현재 결과 값으로 대체 범위 구성
+    let range = fpRange(key);
+    if (!range) {
+      const here = list.map(s => s.d[key]).filter(v => typeof v === "number");
+      if (!here.length) return {...meta, range: null};
+      const v = here[0], pad = Math.abs(v) * 0.2 + 0.5;
+      range = [v - pad, v + pad];
+    }
+    return {...meta, range};
+  });
+  if (axes.length < 3) {
+    return '<p class="muted small">레이더를 그리려면 ★ 고정 물성이 3개 이상 필요합니다.</p>';
+  }
   const W = 460, H = 340, CX = W / 2, CY = H / 2, R = 92;
   const ang = i => -Math.PI / 2 + i * 2 * Math.PI / axes.length;
   const pt = (i, f) => [CX + Math.cos(ang(i)) * R * f, CY + Math.sin(ang(i)) * R * f];
@@ -606,27 +760,28 @@ function svgRadar(series) {
     sv += `<line x1="${CX}" y1="${CY}" x2="${x}" y2="${y}" stroke="var(--grid)"/>`;
     const [lx, ly] = pt(i, 1.2);
     const anchor = Math.abs(lx - CX) < 12 ? "middle" : (lx > CX ? "start" : "end");
-    sv += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" class="axis-label">${esc(a.label)}</text>
-      <text x="${lx}" y="${ly + 14}" text-anchor="${anchor}" class="axis-label">
-        (${esc(a.unit)}${a.lower ? ", ↓바깥" : ""})</text>`;
+    const missing = !a.range;
+    sv += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" class="axis-label"
+        ${missing ? 'opacity="0.45"' : ""}>${esc(a.label)}</text>
+      <text x="${lx}" y="${ly + 14}" text-anchor="${anchor}" class="axis-label" opacity="0.7">
+        (${esc(a.unit || "-")}${a.lower ? ", ↓바깥" : ""}${missing ? ", 값 없음" : ""})</text>`;
   });
-  list.forEach((sObj, si) => {
+  list.forEach(sObj => {
     const col = list.length > 1 ? `var(--series-${(sObj.idx % 8) + 1})` : "var(--accent)";
-    const usable = axes.filter(a => typeof sObj.d[a.key] === "number");
-    if (usable.length < 3) return;
     const poly = axes.map((a, i) => {
       const v = sObj.d[a.key];
-      const f = typeof v === "number" ? norm(a, v) : 0.06;
+      const f = (a.range && typeof v === "number") ? norm(a, v) : 0.06;
       return pt(i, f).map(n => n.toFixed(1)).join(",");
     }).join(" ");
-    sv += `<polygon points="${poly}" fill="${list.length > 1 ? "none" : "color-mix(in srgb, var(--accent) 16%, transparent)"}"
+    sv += `<polygon points="${poly}"
+      fill="${list.length > 1 ? "none" : "color-mix(in srgb, var(--accent) 16%, transparent)"}"
       stroke="${col}" stroke-width="2"/>`;
     axes.forEach((a, i) => {
       const v = sObj.d[a.key];
-      if (typeof v !== "number") return;
+      if (!a.range || typeof v !== "number") return;
       const [x, y] = pt(i, norm(a, v));
       sv += `<circle cx="${x}" cy="${y}" r="4" fill="${col}" class="ring-mark">
-        <title>${sObj.name ? esc(sObj.name) + " — " : ""}${esc(a.label)}: ${v} ${esc(a.unit)}</title></circle>`;
+        <title>${sObj.name ? esc(sObj.name) + " — " : ""}${esc(a.label)}: ${fmt(v)} ${esc(a.unit)}</title></circle>`;
     });
   });
   sv += "</svg>";
@@ -728,7 +883,7 @@ function showResult(job) {
     ["쌍극자 모멘트", d.dipole_debye, "D", "분자 극성"],
   ].filter(t => t[1] != null).map(([l, v, u, sub]) => `
     <div class="stat-tile"><div class="stat-label">${l}</div>
-      <div class="stat-value">${v}<span class="stat-unit"> ${u}</span></div>
+      <div class="stat-value">${fmt(v)}<span class="stat-unit"> ${u}</span></div>
       <div class="stat-sub">${sub}</div></div>`).join("");
 
   let html = `
@@ -752,6 +907,7 @@ function showResult(job) {
         </div>
         <div id="viewer3d" style="width:100%;height:280px;position:relative;
           border:1px solid var(--grid);border-radius:10px;overflow:hidden"></div>
+        <div class="legend" id="viewer3d-legend" style="margin-top:6px"></div>
         <p class="muted small" id="viewer3d-note" style="margin:6px 0 0"></p>
       </div>
     </div>`;
@@ -800,32 +956,31 @@ function showResult(job) {
       ${svgPops(d.conformer_populations)}`;
   }
 
-  const starKeys = new Set(FP_AXES.map(a => a.key));
   const shown = new Set(["potential_reference", "conformer_populations",
                          "mep_points", "surface_adsorption", "bde_all",
                          "bde_weakest_bond"]);
-  const ordered = [...FP_AXES.map(a => a.key),
-                   ...KV_GROUPS.flatMap(g => g[1]),
-                   ...Object.keys(d)];
+  const ordered = [...PINNED, ...KV_GROUPS.flatMap(g => g[1]), ...Object.keys(d)];
   let listRows = "";
   const seenKey = new Set();
   for (const k of ordered) {
     if (seenKey.has(k) || shown.has(k) || d[k] == null) continue;
     seenKey.add(k);
     const [label, unit] = DESC_LABELS[k] || [k, ""];
-    const star = starKeys.has(k);
+    const star = PINNED.has(k);
     const suffix = k.includes("potential") && ref ? ` vs ${ref}` : "";
     listRows += `<tr${star ? ' style="background:color-mix(in srgb,var(--pin) 7%,transparent)"' : ""}>
-      <td style="width:26px;color:${star ? "var(--pin)" : "var(--grid)"}">${star ? "★" : "☆"}</td>
+      <td style="width:30px"><button class="pin-btn ${star ? "on" : ""}" data-pin="${esc(k)}"
+        title="클릭하면 ★ 고정 — 레이더 축으로 사용됩니다">${star ? "★" : "☆"}</button></td>
       <td><b>${esc(label)}</b></td>
       <td class="small muted">${esc(unit)}${suffix}</td>
-      <td class="num" style="text-align:right;font-variant-numeric:tabular-nums">${d[k]}</td></tr>`;
+      <td class="num" style="text-align:right;font-variant-numeric:tabular-nums">${fmt(d[k])}</td></tr>`;
   }
   html += `<h3 style="font-size:13px;color:var(--accent);margin-top:18px">
-      물성 전체 목록 <span class="muted small">(★ = 스크리닝 고정 축)</span></h3>
+      물성 전체 목록 <span class="muted small">(★를 클릭하면 고정 — 레이더 축이 됩니다)</span></h3>
     <div class="scroll-x"><table class="table" style="min-width:520px">
       <tr><th></th><th>물성</th><th>단위</th><th class="num" style="text-align:right">값</th></tr>
-      ${listRows}</table></div>`;
+      ${listRows}</table></div>
+    <div class="form-error" id="pin-msg"></div>`;
 
   let condRows = "";
   for (const [k, v] of Object.entries(r.conditions)) {
@@ -842,8 +997,8 @@ function showResult(job) {
         <tr><th>결합</th><td>BDE 298 K</td><td>0 K (전자)</td><td>ZPE 보정</td><td>고정 구조</td><td>완화</td></tr>
         ${d.bde_all.map(bx => `<tr><th>${esc(bx.bond)}${bx.bond === d.bde_weakest_bond
           ? ' <span class="badge failed">최약</span>' : ""}</th>
-          <td><b>${bx.bde_298_kj != null ? bx.bde_298_kj + " kJ/mol" : "—"}</b></td>
-          <td>${bx.bde_kj}</td>
+          <td><b>${bx.bde_298_kj != null ? fmt(bx.bde_298_kj) + " kJ/mol" : "—"}</b></td>
+          <td>${fmt(bx.bde_kj)}</td>
           <td class="muted">${bx.zpe_correction_kj != null ? bx.zpe_correction_kj : "—"}</td>
           <td class="muted">${bx.bde_frozen_kj ?? "—"}</td>
           <td class="muted">${bx.relaxation_kj != null ? "−" + bx.relaxation_kj : "—"}</td></tr>`).join("")}
@@ -863,6 +1018,13 @@ function showResult(job) {
       <pre class="xyz">${esc(r.structure_xyz)}</pre></details>`;
 
   $("result-body").innerHTML = html;
+  $("result-body").querySelectorAll("[data-pin]").forEach(b => b.addEventListener("click", () => {
+    const msg = togglePin(b.dataset.pin);
+    const box = $("pin-msg");
+    if (msg) { if (box) box.textContent = msg; return; }
+    if (box) box.textContent = "";
+    showResult(job);   // 핀 변경을 목록·레이더에 즉시 반영
+  }));
   if ($("fp-axis-picker")) {
     const redraw = () => {
       renderAxisPicker("fp-axis-picker", redraw);
@@ -888,6 +1050,9 @@ function chargeColor(q, qmax) {
   return `rgb(${t > 0 ? 214 : r},${g},${t < 0 ? 216 : b})`;
 }
 
+const COLOR = {H:"#cfcfcf",C:"#3a3a3a",N:"#2f5bd8",O:"#d62828",F:"#4fb944",
+               S:"#c9a227",P:"#e08020",Cl:"#3fae49",Br:"#8a4b26",I:"#7a3fa0",Li:"#b04fd8"};
+
 function render3D(r) {
   const box = $("viewer3d");
   const note = $("viewer3d-note");
@@ -912,6 +1077,24 @@ function render3D(r) {
   const baseNote = solventIdx.size
     ? "선명한 분자 = 용질 · 흐린 분자 = 명시적 주변 분자 · 드래그 회전 / 휠 확대"
     : "드래그로 회전, 휠로 확대할 수 있습니다.";
+  const legend = $("viewer3d-legend");
+  if (legend) {
+    if (VIEW_MODE === "element") {
+      const present = [...new Set(atoms.map(a => a.el))];
+      legend.innerHTML = present.map(el =>
+        `<span class="legend-item"><span class="legend-swatch"
+          style="background:${COLOR[el] ?? "#888"};border:1px solid rgba(0,0,0,.15)"></span>${esc(el)}</span>`).join("");
+    } else if (VIEW_MODE === "charge") {
+      legend.innerHTML = `<span class="legend-item"><span class="legend-swatch"
+          style="background:rgb(75,145,216)"></span>음전하 (친핵 부위)</span>
+        <span class="legend-item"><span class="legend-swatch"
+          style="background:#fff;border:1px solid var(--border)"></span>중성</span>
+        <span class="legend-item"><span class="legend-swatch"
+          style="background:rgb(214,45,40)"></span>양전하 (친전자 부위)</span>`;
+    } else {
+      legend.innerHTML = `<span class="legend-item">점이 촘촘할수록 전자 밀도 ρ(r)가 높은 영역</span>`;
+    }
+  }
   note.textContent = VIEW_MODE === "charge"
     ? "부분 전하(Mulliken): 파랑 = 음전하(친핵 부위) · 빨강 = 양전하(친전자 부위) — " + baseNote
     : baseNote;
@@ -925,8 +1108,6 @@ function render3D(r) {
       : "이 결과에는 전자밀도 데이터가 없습니다 (이전 버전에서 계산된 작업). 다시 계산하면 표시됩니다.";
   }
 
-  const COLOR = {H:"#cfcfcf",C:"#3a3a3a",N:"#2f5bd8",O:"#d62828",F:"#4fb944",
-                 S:"#c9a227",P:"#e08020",Cl:"#3fae49",Br:"#8a4b26",I:"#7a3fa0",Li:"#b04fd8"};
   const RCOV = {H:.31,C:.76,N:.71,O:.66,F:.57,S:1.05,P:1.07,Cl:1.02,Br:1.2,I:1.39,Li:1.28};
   const rad = el => RCOV[el] ?? .8;
 

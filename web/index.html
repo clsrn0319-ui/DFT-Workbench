@@ -762,7 +762,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-calc #rbv-calc{display:block}
 #rb-real.mode-results #rbv-results{display:block}
 #rb-real.mode-lookup #rbv-lookup{display:block}
-#rb-real.mode-esw #rbv-esw{display:block}
 #rb-real.mode-compare #rbv-compare{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
@@ -936,20 +935,39 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 <div id="rbv-results" class="rbv">
   <h1>DFT 계산 결과</h1>
   <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
+
   <div class="card">
-    <div class="card-head"><h2>작업 큐 / 결과 (실계산)</h2>
+    <div class="card-head"><h2>결과 불러오기</h2>
       <div class="toolbar">
-        <a class="btn" href="/api/export?format=csv" download>CSV 내보내기</a>
-        <a class="btn" href="/api/export?format=json" download>JSON 내보내기</a>
-        <span class="muted small">2초마다 자동 갱신</span>
+        <select class="input" id="res-filter-mat" title="소재로 거르기"></select>
+        <select class="input" id="res-filter-cond" title="계산 조건으로 거르기"></select>
+        <span class="muted small" id="res-count"></span>
       </div></div>
-    <div id="job-list" class="empty small">작업이 없습니다.</div>
+    <div id="result-picker" class="mol-grid"></div>
   </div>
 
   <div class="card" id="result-card" style="display:none">
     <div class="card-head"><h2 id="result-title">결과 상세</h2>
-      <button class="btn ghost" onclick="document.getElementById('result-card').style.display='none'">닫기</button></div>
+      <button class="btn ghost" id="result-close">닫기</button></div>
     <div id="result-body"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>전기화학 안정성 (전체 결과 비교)</h2>
+      <span class="muted small">전위가 계산된 결과만 표시</span></div>
+    <div id="esw-body"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>작업 큐</h2>
+      <div class="toolbar">
+        <button class="btn" id="sel-all" type="button">전체 선택</button>
+        <button class="btn" id="sel-none" type="button">선택 해제</button>
+        <button class="btn" id="export-csv" type="button">선택 CSV 내보내기</button>
+        <button class="btn" id="export-json" type="button">선택 JSON 내보내기</button>
+        <span class="muted small" id="sel-count"></span>
+      </div></div>
+    <div id="job-list" class="empty small">작업이 없습니다.</div>
   </div>
 </div>
 
@@ -966,13 +984,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div class="form-error" id="lookup-error"></div>
     <div id="lookup-result"></div>
   </div>
-</div>
-
-<div id="rbv-esw" class="rbv">
-  <h1>전기화학 안정성 (ESW)</h1>
-  <p class="rb-note">DFT로 계산된 산화/환원 전위로 전기화학 안정 창(Electrochemical Stability Window)을
-    그리고, 배터리 활물질의 작동 전위와 비교합니다. 전위가 포함된 계산(목적: "전자구조 + 산화/환원 전위")만 표시됩니다.</p>
-  <div class="card" id="esw-body"></div>
 </div>
 
 <div id="rbv-compare" class="rbv">
@@ -998,7 +1009,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     {group: "계산", items: [{label: "DFT 계산", mode: "calc"}]},
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
-      {label: "전기화학 안정성", mode: "esw"},
       {label: "물질 비교", mode: "compare"}]},
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
@@ -1021,12 +1031,12 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
     real.scrollTop = 0;
     setActive(label);
-    real.classList.remove("mode-lookup", "mode-esw", "mode-compare");
+    real.classList.remove("mode-lookup", "mode-compare");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
     }
-    if (mode === "esw" && window.rbRenderEsw) try { window.rbRenderEsw(); } catch (e) {}
+    if (mode === "results" && window.rbRenderResults) try { window.rbRenderResults(); } catch (e) {}
     if (mode === "compare" && window.rbRenderCompare) try { window.rbRenderCompare(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }

@@ -252,10 +252,15 @@ CSV_COLUMNS = [
 
 
 @app.get("/api/export")
-def export_results(format: str = "json", _: bool = Depends(require_login)):
-    """PUBLISHED 결과 일괄 내보내기 — 표 형식(csv) 또는 전체 원본(json)."""
+def export_results(format: str = "json", ids: str = "",
+                   _: bool = Depends(require_login)):
+    """PUBLISHED 결과 내보내기 — ids를 주면 해당 작업만, 없으면 전체."""
+    wanted = {i.strip() for i in ids.split(",") if i.strip()}
     jobs = [j for j in store.list_jobs()
-            if j["status"] == "PUBLISHED" and j.get("result")]
+            if j["status"] == "PUBLISHED" and j.get("result")
+            and (not wanted or j["id"] in wanted)]
+    if wanted and not jobs:
+        raise HTTPException(400, "선택한 작업 중 내보낼 수 있는 완료 결과가 없습니다.")
     if format == "json":
         return JSONResponse(
             content={"exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
