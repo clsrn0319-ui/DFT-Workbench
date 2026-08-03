@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import csv
+import json
 import io
 import time
 
@@ -251,22 +252,7 @@ CSV_COLUMNS = [
 ]
 
 
-@app.get("/api/export")
-def export_results(format: str = "json", ids: str = "",
-                   _: bool = Depends(require_login)):
-    """PUBLISHED 결과 내보내기 — ids를 주면 해당 작업만, 없으면 전체."""
-    wanted = {i.strip() for i in ids.split(",") if i.strip()}
-    jobs = [j for j in store.list_jobs()
-            if j["status"] == "PUBLISHED" and j.get("result")
-            and (not wanted or j["id"] in wanted)]
-    if wanted and not jobs:
-        raise HTTPException(400, "선택한 작업 중 내보낼 수 있는 완료 결과가 없습니다.")
-    if format == "json":
-        return JSONResponse(
-            content={"exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                     "n_results": len(jobs), "jobs": jobs},
-            headers={"Content-Disposition": 'attachment; filename="rhobench_results.json"'})
-
+def _csv_text(jobs: list[dict]) -> str:
     desc_keys = []
     for j in jobs:
         for k, v in j["result"]["descriptors"].items():
@@ -279,8 +265,175 @@ def export_results(format: str = "json", ids: str = "",
         d = j["result"]["descriptors"]
         writer.writerow([c[1](j) for c in CSV_COLUMNS]
                         + [d.get(k, "") for k in desc_keys])
+    return buf.getvalue()
+
+
+def _js_literal(value) -> str:
+    """JS에 그대로 심어도 안전한 JSON 리터럴 (</script>·HTML 주석 차단)."""
+    return (json.dumps(value, ensure_ascii=False)
+            .replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+# 서버 없이 열리는 사본에 심는 계층 — API 호출을 파일 안의 결과로 대체한다.
+SNAPSHOT_SHIM_JS = r"""
+(function () {
+  var D = window.__RB_SNAPSHOT__;
+  var DENY = {detail: "이 파일은 결과 보기 전용 사본입니다 — 새 계산·조회는 RhoBench 서버에서 하세요."};
+
+  function reply(body, ok) {
+    return Promise.resolve({
+      ok: ok !== false, status: ok !== false ? 200 : 400,
+      json: function () { return Promise.resolve(body); },
+      text: function () { return Promise.resolve(JSON.stringify(body)); }
+    });
+  }
+
+  window.fetch = function (input, opts) {
+    var url = String(typeof input === "string" ? input : (input && input.url) || "");
+    var method = ((opts && opts.method) || "GET").toUpperCase();
+    if (method !== "GET") return reply(DENY, false);
+    if (url.indexOf("/api/me") === 0) return reply({limits: D.limits, active_sessions: 0});
+    if (url.indexOf("/api/presets") === 0) return reply(D.presets);
+    var one = url.match(/^\/api\/jobs\/([^/?]+)$/);
+    if (one) {
+      var hit = D.jobs.filter(function (j) { return j.id === decodeURIComponent(one[1]); })[0];
+      return hit ? reply(hit) : reply({detail: "작업을 찾을 수 없습니다."}, false);
+    }
+    if (url.indexOf("/api/jobs") === 0) return reply({jobs: D.jobs});
+    return reply(DENY, false);
+  };
+
+  function download(name, text, type) {
+    var url = URL.createObjectURL(new Blob([text], {type: type}));
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function note(text) {
+    var p = document.createElement("p");
+    p.className = "rb-note";
+    p.setAttribute("data-rb-snapshot", "1");
+    p.textContent = text;
+    return p;
+  }
+
+  function prependNote(viewId, text) {
+    var v = document.getElementById(viewId);
+    if (!v || v.querySelector("[data-rb-snapshot]")) return;
+    var first = v.querySelector("h1");
+    v.insertBefore(note(text), first ? first.nextSibling : v.firstChild);
+  }
+
+  var done = false;
+  var timer = setInterval(function () {
+    if (done || !document.getElementById("rbv-results")) return;
+
+    var label = "결과 보기 전용 사본 — " + D.jobs.length + "건 · 내보낸 시각 " +
+      D.exported_at + " · 계산 결과와 그래프는 모두 그대로 보실 수 있습니다.";
+    prependNote("rbv-results", label);
+    prependNote("rbv-compare", label);
+    prependNote("rbv-calc", "이 사본에서는 새 계산을 제출할 수 없습니다. " +
+      "계산하려면 RhoBench 서버에서 실행하세요.");
+    prependNote("rbv-lookup", "이 사본에서는 물질 조회를 할 수 없습니다 " +
+      "(인터넷 조회와 RDKit이 필요합니다).");
+
+    ["submit-btn", "lookup-btn", "add-explicit"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) { b.disabled = true; b.title = "결과 보기 전용 사본입니다"; }
+    });
+
+    var csv = document.getElementById("export-csv");
+    if (csv) csv.onclick = function () {
+      download("rhobench_results.csv", D.csv, "text/csv;charset=utf-8");
+    };
+    var js = document.getElementById("export-json");
+    if (js) js.onclick = function () {
+      download("rhobench_results.json", JSON.stringify(
+        {exported_at: D.exported_at, n_results: D.jobs.length, jobs: D.jobs}, null, 1),
+        "application/json");
+    };
+    var html = document.getElementById("export-html");
+    if (html) html.style.display = "none";   // 사본에서 다시 사본을 만들 수는 없다
+
+    var out = document.getElementById("rb-logout");
+    if (out) out.style.display = "none";
+    var who = document.getElementById("rb-whoami");
+    if (who) who.textContent = "결과 사본";
+
+    // 원본 부트 스크립트가 뒤늦게 계산 화면을 열므로, 그 뒤에 결과 화면으로 되돌린다
+    [300, 900, 1800, 3200].forEach(function (ms) {
+      setTimeout(function () {
+        if (window.rbOpenResults) window.rbOpenResults();
+      }, ms);
+    });
+
+    done = true;
+    clearInterval(timer);
+  }, 200);
+  setTimeout(function () { clearInterval(timer); }, 20000);
+})();
+"""
+
+
+def _snapshot_html(jobs: list[dict]) -> str:
+    """서버 없이 열리는 결과 보기 전용 HTML 한 파일을 만든다.
+
+    화면(web/index.html)과 로직(web/app.js)을 그대로 담고, 그 앞에 fetch 가로채기
+    계층을 넣어 API 대신 파일에 심어 둔 결과를 돌려준다. 계산 제출·물질 조회처럼
+    서버가 필요한 동작은 안내 문구와 함께 잠긴다.
+    """
+    page = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    marker = '<script src="/static/app.js"></script>'
+    if marker not in page:
+        raise HTTPException(500, "index.html에서 app.js 로드 지점을 찾지 못했습니다.")
+
+    snapshot = {
+        "exported_at": time.strftime("%Y-%m-%d %H:%M"),
+        "jobs": jobs,
+        "presets": get_presets(_=True),
+        "limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS},
+        "csv": "\ufeff" + _csv_text(jobs),
+    }
+    shim = ("<script>\nwindow.__RB_SNAPSHOT__ = " + _js_literal(snapshot) + ";\n"
+            + SNAPSHOT_SHIM_JS + "\n</script>")
+    # app.js 안의 </script> 는 HTML 파서가 스크립트를 끊지 않도록 감싼다
+    inline = "<script>\n" + app_js.replace("</script", "<\\/script") + "\n</script>"
+    return page.replace(marker, shim + "\n" + inline)
+
+
+@app.get("/api/export")
+def export_results(format: str = "json", ids: str = "",
+                   _: bool = Depends(require_login)):
+    """PUBLISHED 결과 내보내기 — ids를 주면 해당 작업만, 없으면 전체.
+
+    format: json · csv · html(서버 없이 열리는 단일 파일 사본)
+    """
+    wanted = {i.strip() for i in ids.split(",") if i.strip()}
+    jobs = [j for j in store.list_jobs()
+            if j["status"] == "PUBLISHED" and j.get("result")
+            and (not wanted or j["id"] in wanted)]
+    if wanted and not jobs:
+        raise HTTPException(400, "선택한 작업 중 내보낼 수 있는 완료 결과가 없습니다.")
+    if format == "json":
+        return JSONResponse(
+            content={"exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                     "n_results": len(jobs), "jobs": jobs},
+            headers={"Content-Disposition": 'attachment; filename="rhobench_results.json"'})
+
+    if format == "html":
+        if not jobs:
+            raise HTTPException(400, "내보낼 완료 결과가 없습니다. 먼저 계산을 완료하세요.")
+        return Response(
+            content=_snapshot_html(jobs),
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="rhobench_results.html"'})
+
     return Response(
-        content="\ufeff" + buf.getvalue(),  # BOM — Excel 한글 깨짐 방지
+        content="\ufeff" + _csv_text(jobs),  # BOM — Excel 한글 깨짐 방지
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="rhobench_results.csv"'})
 

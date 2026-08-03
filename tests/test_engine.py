@@ -202,6 +202,42 @@ def test_shared_password_change_revokes_sessions(tmp_path, monkeypatch):
     assert auth.login("second-password")
 
 
+def test_snapshot_html_is_self_contained():
+    """HTML 사본은 서버 참조 없이 결과를 품고 있어야 한다."""
+    import json as _json
+    import re
+    from server.main import _snapshot_html
+
+    job = {
+        "id": "JOB-TEST-1", "status": "PUBLISHED",
+        "material": {"id": None, "name": "물", "smiles": "O"},
+        "createdAt": 0, "finishedAt": 1,
+        "result": {
+            "descriptors": {"homo_ev": -7.5, "gap_ev": 8.0},
+            "conditions": {"method": "PBE0-D3(BJ)/def2-svp",
+                           "solvent_model": "SMD", "temperature_k": 298.15},
+            "wall_time_s": 1.0,
+        },
+    }
+    html = _snapshot_html([job])
+
+    # 서버에서 받아오던 스크립트가 파일 안으로 들어왔는지
+    assert '<script src="/static/app.js">' not in html
+    assert "window.__RB_SNAPSHOT__" in html
+    assert "rbRenderCompare" in html          # app.js 본문이 인라인됨
+
+    # 심어 둔 데이터가 실제 결과를 담고 있는지
+    payload = _json.loads(re.search(r"window\.__RB_SNAPSHOT__ = (.*?);\n", html, re.S).group(1))
+    assert len(payload["jobs"]) == 1
+    assert payload["jobs"][0]["result"]["descriptors"]["homo_ev"] == -7.5
+    assert "presets" in payload and "materials" in payload["presets"]
+    assert payload["csv"].startswith("﻿") and "homo_ev" in payload["csv"]
+
+    # 데이터 리터럴이 HTML 파서를 깨뜨리지 않도록 <, > 가 이스케이프되었는지
+    literal = re.search(r"window\.__RB_SNAPSHOT__ = (.*?);\n", html, re.S).group(1)
+    assert "<" not in literal and ">" not in literal
+
+
 def test_active_job_count_is_global(tmp_path, monkeypatch):
     from server import store
     monkeypatch.setattr(store, "JOBS_FILE", tmp_path / "jobs.json")

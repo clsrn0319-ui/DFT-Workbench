@@ -454,6 +454,7 @@ function wireResultsControls() {
   };
   on("export-csv", () => dl("csv"));
   on("export-json", () => dl("json"));
+  on("export-html", () => dl("html"));
   on("result-close", () => { $("result-card").style.display = "none"; SELECTED_RESULT = null; });
   const slider = $("cmp-opacity");
   if (slider) slider.oninput = () => {
