@@ -26,8 +26,12 @@ from pyscf import gto, dft, scf
 from pyscf.hessian import thermo as pyscf_thermo
 from pyscf.solvent import smd
 
+from . import descriptors as desc_mod
 from . import presets
-from .geometry import smiles_to_conformers, build_cluster, atoms_to_xyz_block
+from .geometry import (smiles_to_conformers, build_cluster,
+                       build_cluster_from_atoms, atoms_to_xyz_block)
+
+HARTREE2KJ = 2625.4996
 
 MAX_CLUSTER_OPT_ATOMS = 35  # 이보다 큰 클러스터는 DFT 최적화를 자동 생략 (MMFF 구조 사용)
 MAX_INTERACTION_FRAGMENTS = 6  # 상호작용 에너지 분해를 수행할 최대 분자 수
@@ -256,7 +260,10 @@ def run_job(job, update, is_cancelled=lambda: False):
         solvent_key = _solvent_key(settings)
         smiles = job["material"]["smiles"]
         temperature = float(settings.get("temperature") or 298.15)
-        want_redox = "전위" in settings.get("purpose", "")
+        purpose = settings.get("purpose", "")
+        want_fingerprint = "지문" in purpose
+        want_redox = "전위" in purpose or want_fingerprint  # 반응성 지표에 IP/EA 필요
+        fingerprint_structures = {}
         closed_shell = params["multiplicity"] == 1
         explicit = [(m["smiles"], m["count"]) for m in (settings.get("explicitMolecules") or [])]
         explicit_label = " + ".join(
@@ -567,11 +574,93 @@ def run_job(job, update, is_cancelled=lambda: False):
                     f"전위는 수직 IP/EA 기반 근사 (구조 완화 미포함), "
                     f"{ref} 절대 전위 {e_abs} V 가정")
 
+        # 8) 물성 지문 — 확장 기술자 (MEP · 반응성 지표 · 결합/흡착 · TDDFT)
+        if want_fingerprint:
+            def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1):
+                """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출."""
+                stage(label, prog)
+                cl_atoms, frags, _ = build_cluster_from_atoms(
+                    host_atoms, smiles, guest_smiles, seed=7)
+                mol_c = _build_mol(cl_atoms, params["basis_sp"],
+                                   params["charge"] + charge, mult)
+                e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],
+                                        solvent_key, params["scf_tol"]), label, log)
+                g_atoms = cl_atoms[frags[1]["start"]:frags[1]["end"]]
+                mol_g = _build_mol(g_atoms, params["basis_sp"], charge, mult)
+                e_g = _run_scf(_make_mf(mol_g, params["xc"], params["disp"],
+                                        solvent_key, params["scf_tol"]),
+                               f"{label} 단독", log)
+                return (e_c - e_total - e_g) * HARTREE2KJ, cl_atoms
+
+            stage("MEP · 반응성 지표", 60)
+            mep = desc_mod.mep_extremes(mf, mol)
+            if mep:
+                descriptors.update({k: v for k, v in mep.items() if k.endswith("_kcal")})
+                descriptors["mep_points"] = {"max": mep["mep_max_point"],
+                                             "min": mep["mep_min_point"]}
+            if "ip_vertical_ev" in descriptors and "ea_vertical_ev" in descriptors:
+                descriptors.update(desc_mod.reactivity_indices(
+                    descriptors["ip_vertical_ev"], descriptors["ea_vertical_ev"]))
+
+            # Li⁺ 결합 에너지 — MEP 최소점(전자 풍부 부위)에 Li⁺ 배치
+            if mep and closed_shell:
+                stage("Li⁺ 결합 에너지", 66)
+                site = desc_mod.li_cation_site(mol, mep)
+                li_atoms = list(atoms) + [("Li", *site)]
+                mol_li = _build_mol(li_atoms, params["basis_sp"], params["charge"] + 1, 1)
+                e_li_complex = _run_scf(
+                    _make_mf(mol_li, params["xc"], params["disp"], solvent_key,
+                             params["scf_tol"]), "Li⁺ 착물", log)
+                mol_ion = _build_mol([("Li", 0.0, 0.0, 0.0)], params["basis_sp"], 1, 1)
+                e_li = _run_scf(_make_mf(mol_ion, params["xc"], params["disp"],
+                                         solvent_key, params["scf_tol"]), "Li⁺ 단독", log)
+                descriptors["li_binding_kj"] = round(
+                    (e_li_complex - e_total - e_li) * HARTREE2KJ, 1)
+                fingerprint_structures["li_complex"] = atoms_to_xyz_block(
+                    li_atoms, "Li+ 착물")
+
+            # 자기 이량체 (바인더–바인더 수소결합/응집) 에너지
+            if closed_shell:
+                e_dim, dim_atoms = pair_energy(atoms, smiles, "이량체 결합 에너지", 72)
+                descriptors["dimer_binding_kj"] = round(e_dim, 1)
+                fingerprint_structures["dimer"] = atoms_to_xyz_block(dim_atoms, "이량체")
+
+            # 활물질 표면 흡착 에너지 (대용 클러스터 모델)
+            if closed_shell:
+                ads = {}
+                for si, sm in enumerate(desc_mod.SURFACE_MODELS):
+                    try:
+                        e_ads, ads_atoms = pair_energy(
+                            atoms, sm["smiles"], f"{sm['label']} 표면 흡착", 76 + si * 4)
+                        ads[sm["key"]] = {"label": sm["label"], "desc": sm["desc"],
+                                          "energy_kj": round(e_ads, 1)}
+                        fingerprint_structures[f"ads_{sm['key']}"] = atoms_to_xyz_block(
+                            ads_atoms, f"{sm['label']} 흡착")
+                    except Exception as exc:  # noqa: BLE001 — 개별 표면 실패는 건너뜀
+                        log(f"{sm['label']} 표면 흡착 계산 실패: {exc}")
+                if ads:
+                    descriptors["surface_adsorption"] = ads
+                    notes.append(
+                        "표면 흡착 에너지는 슬랩이 아닌 대용 클러스터 모델 기반 — "
+                        "같은 모델끼리의 상대 경향만 유효하고 다른 표면 모델·문헌 절대값과는 비교 금지")
+
+            # UV-Vis λmax (TDDFT)
+            try:
+                stage("UV-Vis λmax (TDDFT)", 94)
+                uv = desc_mod.tddft_lambda_max(mf)
+                if uv:
+                    descriptors.update(uv)
+                    notes.append("UV-Vis λmax는 TDDFT 수직 여기 근사 — "
+                                 "진동 구조·용매 재조직화 미포함")
+            except Exception as exc:  # noqa: BLE001 — TDDFT 실패는 나머지 결과 유지
+                log(f"TDDFT 계산 실패: {exc}")
+
         elapsed = time.time() - t_start
         result = {
             "descriptors": descriptors,
             "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
                            for f in fragments] if fragments else None),
+            "fingerprint_structures": fingerprint_structures or None,
             "conditions": {
                 "environment": settings["envType"],
                 "explicit_molecules": explicit_label or "없음",

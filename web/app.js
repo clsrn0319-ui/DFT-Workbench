@@ -322,6 +322,17 @@ const DESC_LABELS = {
   entropy_cal_mol_k: ["엔트로피 S", "cal/(mol·K)"],
   n_imaginary_freqs: ["허수 진동수 개수", ""],
   interaction_energy_kcal: ["클러스터 상호작용 에너지", "kcal/mol"],
+  mep_max_kcal: ["MEP 최대 양전위", "kcal/mol"],
+  mep_min_kcal: ["MEP 최소 음전위", "kcal/mol"],
+  chemical_hardness_ev: ["화학적 경도 η", "eV"],
+  chemical_potential_ev: ["화학적 퍼텐셜 μ", "eV"],
+  electrophilicity_ev: ["친전자성 지수 ω", "eV"],
+  softness_inv_ev: ["화학적 연성 S", "1/eV"],
+  li_binding_kj: ["Li⁺ 결합 에너지", "kJ/mol"],
+  dimer_binding_kj: ["이량체 결합 에너지 (바인더–바인더)", "kJ/mol"],
+  uvvis_lambda_max_nm: ["UV-Vis 최대 흡수 λmax", "nm"],
+  uvvis_osc_strength: ["진동자 세기 f", ""],
+  uvvis_excitation_ev: ["수직 여기 에너지", "eV"],
   solvation_energy_kcal: ["용매화 에너지 ΔE(solv−gas)", "kcal/mol"],
   smd_cds_kcal: ["SMD CDS 항", "kcal/mol"],
   ip_vertical_ev: ["수직 이온화 에너지 (IP)", "eV"],
@@ -404,6 +415,124 @@ function svgPops(pops) {
   return sv + "</svg>";
 }
 
+/* ---------- 물성 지문 레이더 ---------- */
+const FP_AXES = [
+  {key: "gap_ev", label: "HOMO-LUMO gap", unit: "eV", lower: false},
+  {key: "dipole_debye", label: "쌍극자 모멘트", unit: "D", lower: false},
+  {key: "oxidation_potential_v", label: "산화 전위", unit: "V", lower: false},
+  {key: "lumo_ev", label: "LUMO 에너지", unit: "eV", lower: false},
+  {key: "homo_ev", label: "HOMO 에너지", unit: "eV", lower: true},
+  {key: "li_binding_kj", label: "Li⁺ 결합 에너지", unit: "kJ/mol", lower: true},
+];
+
+function fpRange(key) {
+  // 사용자의 PUBLISHED 결과 전체로 min-max 범위 산출 (1건뿐이면 ±20% 여유)
+  const vals = JOBS_CACHE.filter(j => j.status === "PUBLISHED")
+    .map(j => j.result?.descriptors?.[key]).filter(v => typeof v === "number");
+  if (!vals.length) return null;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1e-9) { const pad = Math.abs(hi) * 0.2 + 0.5; lo -= pad; hi += pad; }
+  return [lo, hi];
+}
+
+function svgRadar(d) {
+  const axes = FP_AXES.map(a => {
+    const v = d[a.key];
+    if (typeof v !== "number") return null;
+    const r = fpRange(a.key);
+    if (!r) return null;
+    let t = (v - r[0]) / (r[1] - r[0]);
+    if (a.lower) t = 1 - t;                       // ↓바깥: 낮을수록 바깥쪽
+    return {...a, v, t: Math.max(0.06, Math.min(1, t))};
+  }).filter(Boolean);
+  if (axes.length < 3) return "";
+  const S = 360, C = S / 2, R = 108;
+  const ang = i => -Math.PI / 2 + i * 2 * Math.PI / axes.length;
+  const pt = (i, f) => [C + Math.cos(ang(i)) * R * f, C + Math.sin(ang(i)) * R * f];
+  let sv = `<svg viewBox="0 0 ${S} ${S}" style="width:100%;max-width:380px" role="img">`;
+  for (const f of [0.25, 0.5, 0.75, 1]) {
+    sv += `<polygon points="${axes.map((_, i) => pt(i, f).map(n => n.toFixed(1)).join(",")).join(" ")}"
+      fill="none" stroke="var(--grid)"/>`;
+  }
+  axes.forEach((a, i) => {
+    const [x, y] = pt(i, 1);
+    sv += `<line x1="${C}" y1="${C}" x2="${x}" y2="${y}" stroke="var(--grid)"/>`;
+    const [lx, ly] = pt(i, 1.24);
+    const anchor = Math.abs(lx - C) < 12 ? "middle" : (lx > C ? "start" : "end");
+    sv += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" class="axis-label">${esc(a.label)}</text>
+      <text x="${lx}" y="${ly + 14}" text-anchor="${anchor}" class="axis-label">
+        (${esc(a.unit)}${a.lower ? ", ↓바깥" : ""})</text>`;
+  });
+  const poly = axes.map((a, i) => pt(i, a.t).map(n => n.toFixed(1)).join(",")).join(" ");
+  sv += `<polygon points="${poly}" fill="color-mix(in srgb, var(--accent) 16%, transparent)"
+    stroke="var(--accent)" stroke-width="2"/>`;
+  axes.forEach((a, i) => {
+    const [x, y] = pt(i, a.t);
+    sv += `<circle cx="${x}" cy="${y}" r="4" fill="var(--accent)" class="ring-mark">
+      <title>${esc(a.label)}: ${a.v} ${esc(a.unit)}</title></circle>`;
+  });
+  return sv + "</svg>";
+}
+
+function svgAdsorption(ads) {
+  const items = Object.values(ads);
+  if (!items.length) return "";
+  const W = 560, H = 210, L = 44, B = 40, T = 30;
+  const maxV = Math.max(...items.map(i => Math.abs(i.energy_kj)), 1);
+  const top = Math.ceil(maxV / 10) * 10;
+  const y = v => T + (1 - v / top) * (H - T - B);
+  const bw = Math.min(56, (W - L - 20) / items.length * 0.5);
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:600px" role="img">`;
+  for (const g of [0, top / 2, top]) {
+    sv += `<line x1="${L}" y1="${y(g)}" x2="${W - 12}" y2="${y(g)}" class="gridline"/>
+      <text x="${L - 6}" y="${y(g) + 4}" text-anchor="end" class="axis-label">${g}</text>`;
+  }
+  sv += `<text x="4" y="12" class="axis-label">|E_ad| (kJ/mol)</text>`;
+  items.forEach((it, i) => {
+    const cx = L + 24 + i * ((W - L - 40) / items.length);
+    const v = Math.abs(it.energy_kj);
+    sv += `<rect x="${cx - bw / 2}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}"
+        rx="2" fill="var(--series-${(i % 8) + 1})"><title>${esc(it.desc)}: ${it.energy_kj} kJ/mol</title></rect>
+      <text x="${cx}" y="${y(v) - 5}" text-anchor="middle" class="value-label">${it.energy_kj}</text>
+      <text x="${cx}" y="${H - 20}" text-anchor="middle" class="axis-label">${esc(it.label)}</text>`;
+  });
+  return sv + "</svg>";
+}
+
+function svgHomoLumoAxis(homo, lumo) {
+  // 전극 페르미 준위 근사 μ ≈ −(1.44 + V) eV (V는 Li/Li⁺ 기준 전위)
+  const marks = ELECTRODES.map(e => ({label: e.label.split(" (")[0], mu: -(1.44 + e.v)}));
+  const lo = Math.min(homo, ...marks.map(m => m.mu)) - 0.6;
+  const hi = Math.max(lumo, ...marks.map(m => m.mu)) + 0.6;
+  const W = 640, H = 128, L = 74;
+  const x = v => L + (v - lo) / (hi - lo) * (W - L - 26);
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:680px" role="img">`;
+  const start = Math.ceil(lo), end = Math.floor(hi);
+  for (let v = start; v <= end; v++) {
+    sv += `<line x1="${x(v)}" y1="46" x2="${x(v)}" y2="${H - 30}" class="gridline"/>
+      <text x="${x(v)}" y="${H - 16}" text-anchor="middle" class="axis-label">${v}</text>`;
+  }
+  sv += `<text x="${W - 18}" y="30" class="axis-label">eV</text>`;
+  marks.forEach((m, i) => {
+    const ly = i % 2 ? 40 : 26;
+    const cathode = m.mu < -2.5;
+    const col = cathode ? "var(--pin)" : "var(--accent)";
+    sv += `<line x1="${x(m.mu)}" y1="${ly + 3}" x2="${x(m.mu)}" y2="${H - 30}"
+        stroke="${col}" stroke-dasharray="4 3"/>
+      <text x="${x(m.mu)}" y="${ly}" text-anchor="middle" class="axis-label"
+        fill="${col}">${esc(m.label)}</text>`;
+  });
+  sv += `<text x="${L - 8}" y="82" text-anchor="end" class="axis-label">분자</text>
+    <line x1="${x(homo)}" y1="78" x2="${x(lumo)}" y2="78"
+      stroke="color-mix(in srgb, var(--accent) 55%, transparent)" stroke-width="9"
+      stroke-linecap="round"/>
+    <line x1="${x(homo)}" y1="70" x2="${x(homo)}" y2="86" stroke="var(--accent)" stroke-width="2.5"/>
+    <line x1="${x(lumo)}" y1="70" x2="${x(lumo)}" y2="86" stroke="var(--accent)" stroke-width="2.5"/>
+    <text x="${x(homo)}" y="66" text-anchor="middle" class="value-label">${homo}</text>
+    <text x="${x(lumo)}" y="66" text-anchor="middle" class="value-label">${lumo}</text>`;
+  return sv + "</svg>";
+}
+
 /* ---------- 결과 상세 ---------- */
 const KV_GROUPS = [
   ["에너지 · 열역학", ["total_energy_hartree", "zpe_kcal", "gibbs_correction_kcal",
@@ -457,6 +586,36 @@ function showResult(job) {
       </div>
     </div>`;
 
+  if (d.homo_ev != null && d.lumo_ev != null) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        HOMO / LUMO (전극 페르미 준위 공통 축)</h3>
+      ${svgHomoLumoAxis(d.homo_ev, d.lumo_ev)}
+      <p class="muted small" style="margin:4px 0 0">
+        막대 왼쪽 끝 = HOMO, 오른쪽 끝 = LUMO, 길이 = 갭 · 점선 = 전극 페르미 준위 근사
+        μ ≈ −(1.44 + V) eV — <b>LUMO가 음극 준위보다 낮으면 환원</b>,
+        <b>HOMO가 양극 준위보다 높으면 산화</b> 위험</p>`;
+  }
+  const radar = svgRadar(d);
+  if (radar) {
+    html += `<div class="grid-2" style="margin-top:16px"><div>
+      <h3 style="font-size:13px;color:var(--accent)">물성 지문 (스크리닝 축)</h3>
+      ${radar}
+      <p class="muted small" style="margin:4px 0 0">
+        저장된 PUBLISHED 결과 전체 범위로 min-max 정규화 · 점에 마우스를 올리면 원값·단위 표시 ·
+        바깥쪽일수록 스크리닝에 유리한 방향</p></div>`;
+    if (d.surface_adsorption) {
+      html += `<div><h3 style="font-size:13px;color:var(--accent)">활물질 표면 흡착 에너지</h3>
+        ${svgAdsorption(d.surface_adsorption)}
+        <p class="muted small" style="margin:4px 0 0">
+          막대가 길수록 해당 표면에 강하게 흡착 (E_ad 음수 방향) ·
+          대용 클러스터 모델 전제 — 다른 표면 모델·문헌 절대값과 비교 금지</p></div>`;
+    }
+    html += "</div>";
+  } else if (d.surface_adsorption) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">활물질 표면 흡착 에너지</h3>
+      ${svgAdsorption(d.surface_adsorption)}`;
+  }
+
   const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
   const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
   if (red != null && ox != null) {
@@ -470,19 +629,31 @@ function showResult(job) {
       ${svgPops(d.conformer_populations)}`;
   }
 
-  html += '<div class="grid-2" style="margin-top:16px">';
-  for (const [title, keys] of KV_GROUPS) {
-    let rows = "";
-    for (const k of keys) {
-      if (d[k] == null) continue;
-      const [label, unit] = DESC_LABELS[k] || [k, ""];
-      const suffix = k.includes("potential") && ref ? ` vs ${ref}` : "";
-      rows += `<tr><th>${esc(label)}</th><td>${d[k]} ${unit}${suffix}</td></tr>`;
-    }
-    if (rows) html += `<div><h3 style="font-size:13px;color:var(--accent)">${title}</h3>
-      <table class="kv-table">${rows}</table></div>`;
+  const starKeys = new Set(FP_AXES.map(a => a.key));
+  const shown = new Set(["potential_reference", "conformer_populations",
+                         "mep_points", "surface_adsorption"]);
+  const ordered = [...FP_AXES.map(a => a.key),
+                   ...KV_GROUPS.flatMap(g => g[1]),
+                   ...Object.keys(d)];
+  let listRows = "";
+  const seenKey = new Set();
+  for (const k of ordered) {
+    if (seenKey.has(k) || shown.has(k) || d[k] == null) continue;
+    seenKey.add(k);
+    const [label, unit] = DESC_LABELS[k] || [k, ""];
+    const star = starKeys.has(k);
+    const suffix = k.includes("potential") && ref ? ` vs ${ref}` : "";
+    listRows += `<tr${star ? ' style="background:color-mix(in srgb,var(--pin) 7%,transparent)"' : ""}>
+      <td style="width:26px;color:${star ? "var(--pin)" : "var(--grid)"}">${star ? "★" : "☆"}</td>
+      <td><b>${esc(label)}</b></td>
+      <td class="small muted">${esc(unit)}${suffix}</td>
+      <td class="num" style="text-align:right;font-variant-numeric:tabular-nums">${d[k]}</td></tr>`;
   }
-  html += "</div>";
+  html += `<h3 style="font-size:13px;color:var(--accent);margin-top:18px">
+      물성 전체 목록 <span class="muted small">(★ = 스크리닝 고정 축)</span></h3>
+    <div class="scroll-x"><table class="table" style="min-width:520px">
+      <tr><th></th><th>물성</th><th>단위</th><th class="num" style="text-align:right">값</th></tr>
+      ${listRows}</table></div>`;
 
   let condRows = "";
   for (const [k, v] of Object.entries(r.conditions)) {
@@ -534,6 +705,7 @@ function render3D(r) {
       for (let i = f.start; i < f.end; i++) solventIdx.add(i);
     }
   }
+  const mepPts = r.descriptors?.mep_points;
   const baseNote = solventIdx.size
     ? "선명한 분자 = 용질 · 흐린 분자 = 명시적 주변 분자 · 드래그 회전 / 휠 확대"
     : "드래그로 회전, 휠로 확대할 수 있습니다.";
@@ -591,6 +763,24 @@ function render3D(r) {
       ctx.strokeStyle = faded ? "rgba(140,140,140,.45)" : "rgba(90,90,90,.9)";
       ctx.lineWidth = faded ? 1.4 : 2.6;
       ctx.beginPath(); ctx.moveTo(p.sx, p.sy); ctx.lineTo(q.sx, q.sy); ctx.stroke();
+    }
+    if (mepPts && VIEW_MODE === "charge") {
+      for (const [kind, pos] of [["min", mepPts.min], ["max", mepPts.max]]) {
+        if (!pos) continue;
+        const x0 = pos[0] - cx, y0 = pos[1] - cy, z0 = pos[2] - cz;
+        const x1 = x0 * cyaw + z0 * syaw, z1 = -x0 * syaw + z0 * cyaw;
+        const y2 = y0 * cp - z1 * sp;
+        const sx = W / 2 + x1 * scale, sy = H / 2 - y2 * scale;
+        ctx.setLineDash([3, 2]);
+        ctx.strokeStyle = kind === "min" ? "#2a78d6" : "#e34948";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, 9, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = "10px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(kind === "min" ? "MEP− (Li⁺ 배위)" : "MEP+", sx, sy - 12);
+      }
     }
     proj.sort((a, b) => a.z - b.z);
     for (const p of proj) {

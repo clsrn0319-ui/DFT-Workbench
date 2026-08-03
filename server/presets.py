@@ -172,6 +172,17 @@ BASIS_SETS = ["def2-svp", "def2-tzvp", "6-31g*", "sto-3g"]
 PURPOSES = [
     "전자구조(구조 최적화)",
     "전자구조 + 산화/환원 전위",
+    "물성 지문 (확장 기술자 전체)",
+]
+
+# 스크리닝 레이더(물성 지문) 축 — (기술자 키, 표시명, 단위, 낮을수록 좋음)
+FINGERPRINT_AXES = [
+    ("gap_ev", "HOMO-LUMO gap", "eV", False),
+    ("dipole_debye", "쌍극자 모멘트", "D", False),
+    ("oxidation_potential_v", "산화 전위", "V", False),
+    ("lumo_ev", "LUMO 에너지", "eV", False),
+    ("homo_ev", "HOMO 에너지", "eV", True),
+    ("li_binding_kj", "Li⁺ 결합 에너지", "kJ/mol", True),
 ]
 
 DEFAULT_SETTINGS = {

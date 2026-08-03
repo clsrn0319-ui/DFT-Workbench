@@ -220,6 +220,91 @@ def build_cluster(solute_smiles: str, explicit, n_conformers: int = 10, seed: in
     return atoms, fragments, {"forcefield": forcefield, "n_molecules": len(fragments)}
 
 
+def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
+                             seed: int = 7, n_orientations: int = 12):
+    """DFT 최적화된 host 좌표는 고정한 채 guest 분자 1개를 접촉·이완 배치한다.
+
+    여러 방향으로 guest를 놓고 host 원자를 고정한 MMFF(폴백 UFF) 이완을 수행해
+    가장 낮은 역장 에너지의 접촉 기하를 선택한다. 표면 대용체·이량체 파트너를
+    DFT 최적화 용질에 붙일 때 사용한다.
+    """
+    rng = np.random.default_rng(seed)
+    host = _embed_single(host_smiles, seed)
+    if host.GetNumAtoms() != len(host_atoms):
+        raise GeometryError("host 원자 수가 SMILES와 일치하지 않습니다")
+    conf = host.GetConformer()
+    for i, (_, x, y, z) in enumerate(host_atoms):
+        conf.SetAtomPosition(i, Point3D(x, y, z))
+
+    guest = _embed_single(guest_smiles, seed)
+    g_xyz = _coords(guest) - _coords(guest).mean(axis=0)
+    g_radius = np.linalg.norm(g_xyz, axis=1).max() + 1.0
+    host_xyz = _coords(host)
+    center = host_xyz.mean(axis=0)
+    rel = host_xyz - center
+    host_radius = np.linalg.norm(rel, axis=1).max()
+    n_host = host.GetNumAtoms()
+
+    best = None
+    for _ in range(n_orientations):
+        direction = rng.normal(size=3)
+        direction /= np.linalg.norm(direction)
+        rot = g_xyz @ _random_rotation(rng).T
+        placed = None
+        for dist in np.arange(max(host_radius - 1.0, 1.0),
+                              host_radius + g_radius + 6.0, 0.3):
+            cand = rot + direction * (dist + g_radius)
+            if np.min(np.linalg.norm(rel[:, None, :] - cand[None, :, :], axis=2)) >= 2.6:
+                placed = cand + center
+                break
+        if placed is None:
+            continue
+
+        trial = Chem.Mol(guest)
+        tconf = trial.GetConformer()
+        for i, p in enumerate(placed):
+            tconf.SetAtomPosition(i, Point3D(*p))
+        combo = Chem.RWMol(Chem.CombineMols(host, trial))
+        Chem.SanitizeMol(combo)
+        # host 원자를 고정하고 guest만 이완
+        energy = None
+        try:
+            props = AllChem.MMFFGetMoleculeProperties(combo)
+            ff = (AllChem.MMFFGetMoleculeForceField(combo, props)
+                  if props is not None else AllChem.UFFGetMoleculeForceField(combo))
+        except Exception:
+            ff = None
+        if ff is None:
+            try:
+                ff = AllChem.UFFGetMoleculeForceField(combo)
+            except Exception:
+                ff = None
+        if ff is not None:
+            for i in range(n_host):
+                ff.AddFixedPoint(i)
+            ff.Minimize(maxIts=1000)
+            energy = ff.CalcEnergy()
+        if energy is None:
+            energy = 0.0
+        if best is None or energy < best[0]:
+            best = (energy, combo.GetConformer())
+
+    if best is None:
+        raise GeometryError(f"게스트 배치 실패: {guest_smiles}")
+
+    pos = best[1]
+    guest_atoms = [(guest.GetAtomWithIdx(i).GetSymbol(),
+                    *(pos.GetAtomPosition(n_host + i)))
+                   for i in range(guest.GetNumAtoms())]
+    atoms = list(host_atoms) + guest_atoms
+    fragments = [
+        {"label": "용질", "start": 0, "end": len(host_atoms), "smiles": host_smiles},
+        {"label": guest_smiles, "start": len(host_atoms), "end": len(atoms),
+         "smiles": guest_smiles},
+    ]
+    return atoms, fragments, {"n_molecules": 2}
+
+
 def atoms_to_xyz_block(atoms, comment=""):
     lines = [str(len(atoms)), comment]
     for sym, x, y, z in atoms:

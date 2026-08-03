@@ -70,6 +70,26 @@ def test_build_cluster_geometry():
     assert frags[0]["label"] == "용질"
 
 
+def test_reactivity_indices():
+    from server.descriptors import reactivity_indices
+    r = reactivity_indices(9.0, 1.0)
+    assert r["chemical_hardness_ev"] == 4.0
+    assert r["chemical_potential_ev"] == -5.0
+    assert r["electrophilicity_ev"] == pytest.approx(3.125, abs=1e-3)
+
+
+def test_guest_placement_is_relaxed():
+    """호스트 고정 이완 배치가 물리적 접촉 거리를 만드는지 확인."""
+    import numpy as np
+    from server.geometry import build_cluster_from_atoms, smiles_to_xyz
+    host, _ = smiles_to_xyz("O", 3)
+    atoms, frags, _ = build_cluster_from_atoms(host, "O", "O")
+    xyz = np.array([a[1:] for a in atoms])
+    d = np.linalg.norm(xyz[:3, None] - xyz[None, 3:], axis=2)
+    assert 1.5 < d.min() < 3.2
+    assert frags[1]["start"] == 3
+
+
 def test_run_job_real_scf_minimal():
     """실제 SCF 포함 최소 계산 — 물 분자, STO-3G, 수 초 이내."""
     job = {
