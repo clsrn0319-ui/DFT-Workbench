@@ -379,10 +379,12 @@ function svgLevels(homo, lumo, gap) {
 }
 
 function svgEswBar(red, ox, ref) {
-  const V0 = -0.5, V1 = 5.5, W = 640, H = 118, L = 10;
-  const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 14);
+  const [V0, V1, STEP] = niceRange(
+    [red, ox, ...ELECTRODES.map(e => e.v), 0], 0.6);
+  const W = 640, H = 118, L = 34;
+  const x = v => L + (v - V0) / (V1 - V0) * (W - L - 34);
   let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:680px" role="img">`;
-  for (let v = 0; v <= 5; v++) {
+  for (let v = V0; v <= V1 + 1e-9; v += STEP) {
     sv += `<line x1="${x(v)}" y1="34" x2="${x(v)}" y2="${H - 32}" class="gridline"/>
       <text x="${x(v)}" y="${H - 20}" text-anchor="middle" class="axis-label">${v}</text>`;
   }
@@ -413,6 +415,14 @@ function svgPops(pops) {
       <text x="${84 + w}" y="${y + 12}" class="value-label">${c.population_pct}%</text>`;
   });
   return sv + "</svg>";
+}
+
+/* ---------- 차트 공통: 데이터에 맞춘 눈금 범위 ---------- */
+function niceRange(values, pad = 0.5) {
+  const lo = Math.min(...values) - pad, hi = Math.max(...values) + pad;
+  const span = hi - lo;
+  const step = span > 12 ? 4 : span > 7 ? 2 : 1;
+  return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step, step];
 }
 
 /* ---------- 물성 지문 레이더 ---------- */
@@ -446,19 +456,19 @@ function svgRadar(d) {
     return {...a, v, t: Math.max(0.06, Math.min(1, t))};
   }).filter(Boolean);
   if (axes.length < 3) return "";
-  const S = 360, C = S / 2, R = 108;
+  const W = 460, H = 340, CX = W / 2, CY = H / 2, R = 92;
   const ang = i => -Math.PI / 2 + i * 2 * Math.PI / axes.length;
-  const pt = (i, f) => [C + Math.cos(ang(i)) * R * f, C + Math.sin(ang(i)) * R * f];
-  let sv = `<svg viewBox="0 0 ${S} ${S}" style="width:100%;max-width:380px" role="img">`;
+  const pt = (i, f) => [CX + Math.cos(ang(i)) * R * f, CY + Math.sin(ang(i)) * R * f];
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:460px" role="img">`;
   for (const f of [0.25, 0.5, 0.75, 1]) {
     sv += `<polygon points="${axes.map((_, i) => pt(i, f).map(n => n.toFixed(1)).join(",")).join(" ")}"
       fill="none" stroke="var(--grid)"/>`;
   }
   axes.forEach((a, i) => {
     const [x, y] = pt(i, 1);
-    sv += `<line x1="${C}" y1="${C}" x2="${x}" y2="${y}" stroke="var(--grid)"/>`;
-    const [lx, ly] = pt(i, 1.24);
-    const anchor = Math.abs(lx - C) < 12 ? "middle" : (lx > C ? "start" : "end");
+    sv += `<line x1="${CX}" y1="${CY}" x2="${x}" y2="${y}" stroke="var(--grid)"/>`;
+    const [lx, ly] = pt(i, 1.2);
+    const anchor = Math.abs(lx - CX) < 12 ? "middle" : (lx > CX ? "start" : "end");
     sv += `<text x="${lx}" y="${ly}" text-anchor="${anchor}" class="axis-label">${esc(a.label)}</text>
       <text x="${lx}" y="${ly + 14}" text-anchor="${anchor}" class="axis-label">
         (${esc(a.unit)}${a.lower ? ", ↓바깥" : ""})</text>`;
@@ -975,10 +985,16 @@ window.rbRenderEsw = function () {
       'DFT 계산에서 목적을 "전자구조 + 산화/환원 전위"로 선택해 제출하세요.</div>';
     return;
   }
-  const V0 = -0.5, V1 = 5.5, W = 820, H = 46 * jobs.length + 82, L = 170;
-  const x = v => L + (Math.max(V0, Math.min(V1, v)) - V0) / (V1 - V0) * (W - L - 16);
+  const allV = jobs.flatMap(j => {
+    const dd = j.result.descriptors;
+    return [dd.reduction_potential_gibbs_v ?? dd.reduction_potential_v,
+            dd.oxidation_potential_gibbs_v ?? dd.oxidation_potential_v];
+  }).filter(v => typeof v === "number");
+  const [V0, V1, STEP] = niceRange([...allV, ...ELECTRODES.map(e => e.v), 0], 0.6);
+  const W = 820, H = 46 * jobs.length + 82, L = 170;
+  const x = v => L + (v - V0) / (V1 - V0) * (W - L - 42);
   let svg = `<svg class="esw-chart" viewBox="0 0 ${W} ${H}" role="img">`;
-  for (let v = 0; v <= 5; v++) {
+  for (let v = V0; v <= V1 + 1e-9; v += STEP) {
     svg += `<line x1="${x(v)}" y1="32" x2="${x(v)}" y2="${H - 34}" stroke="var(--grid)" />
       <text x="${x(v)}" y="${H - 20}" font-size="11" text-anchor="middle" fill="var(--muted)">${v}</text>`;
   }
@@ -994,7 +1010,9 @@ window.rbRenderEsw = function () {
     const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
     const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
     const y = 52 + i * 46;
-    svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end" fill="var(--text-1)">${esc(j.material.name.split(" (")[0])}</text>
+    const nm = j.material.name.length > 13
+      ? j.material.name.slice(0, 12) + "…" : j.material.name;
+    svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end" fill="var(--text-1)">${esc(nm)}<title>${esc(j.material.name)}</title></text>
       <rect x="${x(red)}" y="${y - 8}" width="${Math.max(2, x(ox) - x(red))}" height="16" rx="4"
         fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)" />
       <text x="${x(red) - 4}" y="${y + 4}" font-size="10" text-anchor="end" fill="var(--text-2)">${red.toFixed(2)}</text>
@@ -1060,17 +1078,21 @@ window.rbRenderCompare = function () {
     let charts = "";
     for (const [key, title, unit] of METRICS) {
       const entries = chosen
-        .map((j, i) => ({name: j.material.name.split(" (")[0], v: j.result.descriptors[key], i}))
+        .map((j, i) => ({name: j.material.name, v: j.result.descriptors[key], i}))
         .filter(e => e.v != null);
       if (entries.length < 2) continue;
       const maxAbs = Math.max(...entries.map(e => Math.abs(e.v)), 1e-9);
-      const W = 340, rowH = 24, H = entries.length * rowH + 6;
-      let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:360px" role="img">`;
+      const W = 360, rowH = 38, PAD = 6;
+      const H = entries.length * rowH + PAD;
+      const barMax = W - 74;   // 값 라벨 자리 확보
+      let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:380px" role="img">`;
       entries.forEach((e, k) => {
-        const y = k * rowH + 4, w = Math.max(2, Math.abs(e.v) / maxAbs * (W - 190));
-        sv += `<text x="0" y="${y + 12}" class="axis-label">${esc(e.name.slice(0, 12))}</text>
-          <rect x="96" y="${y}" width="${w}" height="15" rx="3" fill="var(--series-${(e.i % 8) + 1})"/>
-          <text x="${102 + w}" y="${y + 12}" class="value-label">${e.v}</text>`;
+        const top = k * rowH + PAD;
+        const w = Math.max(3, Math.abs(e.v) / maxAbs * barMax);
+        sv += `<text x="0" y="${top + 9}" class="axis-label">${esc(e.name)}</text>
+          <rect x="0" y="${top + 15}" width="${w}" height="14" rx="3"
+            fill="var(--series-${(e.i % 8) + 1})"><title>${esc(e.name)}: ${e.v} ${esc(unit)}</title></rect>
+          <text x="${w + 6}" y="${top + 26}" class="value-label">${e.v}</text>`;
       });
       sv += "</svg>";
       charts += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 4px">
