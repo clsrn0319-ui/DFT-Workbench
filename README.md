@@ -57,6 +57,30 @@ python -m scripts.smoke_test   # 아크릴로나이트릴 1건 실계산 (~1분)
 python -m pytest tests/ -v     # 단위 테스트 (실 SCF 포함, ~30초)
 ```
 
+## 시연 (한 줄 실행)
+
+```bash
+./scripts/start.sh             # 비밀번호를 물어본 뒤 시작 — 접속 주소를 함께 출력
+./scripts/start.sh 비밀번호     # 비밀번호를 인자로 지정
+```
+
+Windows에서는 `RhoBench-start.bat`을 더블클릭하면 WSL 안의 서버를 켜고
+브라우저를 자동으로 엽니다 (파일 안의 `WSLDIR` 경로만 한 번 확인).
+
+시연 전에 보여줄 결과를 미리 만들어 두면 대기 시간이 없습니다:
+
+```bash
+python -m scripts.seed_demo              # EC·DMC·VDF·AN·AA 5종, '빠름', 약 3분
+python -m scripts.seed_demo --list       # 무엇을 계산할지만 확인
+python -m scripts.seed_demo --only EC,AN --accuracy 표준
+```
+
+전위까지 계산하므로 «전기화학 안정성(ESW)» 차트가 바로 그려집니다.
+
+인터넷으로 공개해야 하면 `notebooks/RhoBench_Colab.ipynb`를 Google Colab에서
+열어 실행하세요 — 무료로 공개 HTTPS 주소가 만들어집니다. 자세한 비교는
+아래 [원격 공유](#원격-공유-사내망-밖에서-보여주기) 참고.
+
 ## 연구실 내부 공유 (공유 비밀번호)
 
 서버 한 대에 띄우면 다른 사람은 **설치 없이 브라우저로만** 접속합니다.
@@ -94,6 +118,25 @@ RHOBENCH_ACCESS_PASSWORD='연구실에_공유할_비밀번호' RHOBENCH_WORKERS=
 
 > ⚠️ 사내망 밖(인터넷)에 공개하려면 HTTPS(리버스 프록시)를 반드시 앞에 두세요.
 > 현재 세션 쿠키는 평문 HTTP에서도 전송되므로 사내망 전용을 권장합니다.
+
+## 원격 공유 (사내망 밖에서 보여주기)
+
+**구글 드라이브는 프로그램을 실행하지 못합니다** — 파일 보관소이므로 코드를
+올려 둘 수는 있어도 그 자리에서 돌릴 수는 없습니다(구글은 2016년에 드라이브
+웹 호스팅을 종료했습니다). 실행하려면 파이썬이 도는 컴퓨터가 필요합니다.
+
+| 방법 | 준비 | 접속 주소 | 적합한 경우 |
+|---|---|---|---|
+| **내 PC + 같은 네트워크** | `./scripts/start.sh` | `http://<내 IP>:8000` (HTTP) | 같은 공간에서의 시연 — 가장 안정적 |
+| **내 PC + Cloudflare 터널** | `cloudflared tunnel --url http://localhost:8000` | 임시 `https://...trycloudflare.com` | 원격 참석자에게 잠깐 보여줄 때 |
+| **Google Colab** | `notebooks/RhoBench_Colab.ipynb` 실행 | 임시 `https://...trycloudflare.com` | 내 PC를 켜 두지 않고 무료로 공개 |
+| **클라우드 VM** | Ubuntu VM에 위 설치 절차 | 고정 주소 (HTTPS 설정 필요) | 상시 운영 |
+
+Colab은 CPU 2코어이므로 정확도 «빠름» 기준으로만 쓰고, 세션이 끊기면 결과가
+사라지므로 노트북 4번 셀에서 드라이브 저장을 켜 두세요.
+
+구글 드라이브에 올려서 유용한 것은 **결과와 문서**입니다 — 결과 화면의
+`CSV/JSON 내보내기`와 `docs/` 폴더의 Word 문서는 드라이브에서 그대로 열람·공유됩니다.
 
 ## 스크리닝 워크플로우 (화학물질 라이브러리)
 
