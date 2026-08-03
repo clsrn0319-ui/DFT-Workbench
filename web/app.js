@@ -462,6 +462,24 @@ function wireResultsControls() {
     if (lbl) lbl.textContent = CMP_OPACITY.toFixed(2);
     if (window.rbRenderCompare) window.rbRenderCompare();
   };
+  const ctype = $("cmp-chart-type");
+  if (ctype) {
+    ctype.value = CMP_CHART;
+    ctype.onchange = () => {
+      CMP_CHART = ctype.value;
+      localStorage.setItem(CMP_CHART_KEY, CMP_CHART);
+      if (window.rbRenderCompare) window.rbRenderCompare();
+    };
+  }
+  const tbars = $("cmp-table-bars");
+  if (tbars) {
+    tbars.checked = CMP_TABLE_BARS;
+    tbars.onchange = () => {
+      CMP_TABLE_BARS = tbars.checked;
+      localStorage.setItem(CMP_TBAR_KEY, CMP_TABLE_BARS ? "1" : "0");
+      if (window.rbRenderCompare) window.rbRenderCompare();
+    };
+  }
   for (const id of ["res-filter-mat", "res-filter-cond"]) {
     const el = $(id);
     if (el) el.onchange = () => window.rbRenderResults();
@@ -646,6 +664,38 @@ function togglePin(key) {
   return null;
 }
 
+/* ---------- 물질 비교: 사용자가 고르는 그래프 지표 ---------- */
+const CMP_METRIC_KEY = "rhobench-compare-metrics";
+const CMP_CHART_KEY = "rhobench-compare-chart";
+const CMP_TBAR_KEY = "rhobench-compare-table-bars";
+const CMP_DEFAULT_METRICS = ["homo_ev", "lumo_ev", "gap_ev", "dipole_debye",
+  "oxidation_potential_v", "reduction_potential_v", "solvation_energy_kcal",
+  "interaction_energy_kcal"];
+const CMP_MAX_METRICS = 12;
+
+let CMP_METRICS = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CMP_METRIC_KEY) || "null");
+    if (Array.isArray(saved)) return saved.filter(k => typeof k === "string");
+  } catch (e) { /* 기본값 사용 */ }
+  return [...CMP_DEFAULT_METRICS];
+})();
+let CMP_CHART = localStorage.getItem(CMP_CHART_KEY) || "hbar";  // hbar | vbar | line
+let CMP_TABLE_BARS = localStorage.getItem(CMP_TBAR_KEY) !== "0";
+
+function saveCmpMetrics() {
+  localStorage.setItem(CMP_METRIC_KEY, JSON.stringify(CMP_METRICS));
+}
+
+function toggleCmpMetric(key) {
+  const i = CMP_METRICS.indexOf(key);
+  if (i >= 0) CMP_METRICS.splice(i, 1);
+  else if (CMP_METRICS.length >= CMP_MAX_METRICS) return `그래프는 최대 ${CMP_MAX_METRICS}개까지입니다.`;
+  else CMP_METRICS.push(key);
+  saveCmpMetrics();
+  return null;
+}
+
 /* ---------- 결과 화면: 결과 불러오기 · 상세 · ESW · 작업 큐 ---------- */
 let SELECTED_RESULT = null;   // 상세를 보고 있는 작업 id
 const EXPORT_SEL = new Set(); // 내보내기 선택 작업 id
@@ -745,6 +795,167 @@ function renderAxisPicker(containerId, onChange) {
     savePins();
     onChange();
   });
+}
+
+/* ---------- 비교 그래프 지표 선택 ---------- */
+function comparableKeys(chosen) {
+  // 선택한 물질 중 2건 이상에서 숫자로 존재하는 지표 (표시 순서는 DESC_LABELS 순)
+  const count = {};
+  for (const j of chosen) {
+    for (const [k, v] of Object.entries(j.result?.descriptors || {})) {
+      if (typeof v === "number") count[k] = (count[k] || 0) + 1;
+    }
+  }
+  const order = Object.keys(DESC_LABELS);
+  return Object.keys(count).filter(k => count[k] >= 2 && k !== "potential_reference")
+    .sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+}
+
+function renderMetricPicker(chosen, onChange) {
+  const box = $("cmp-metric-picker");
+  if (!box) return;
+  const keys = comparableKeys(chosen);
+  for (const k of CMP_METRICS) if (!keys.includes(k)) keys.push(k);
+  if (!keys.length) {
+    box.innerHTML = '<p class="muted small" style="margin:8px 0 0">' +
+      "두 개 이상 선택하면 그래프로 그릴 지표를 고를 수 있습니다.</p>";
+    return;
+  }
+  box.innerHTML = `<div class="toolbar" style="margin:10px 0 6px">
+      <span class="muted small">그래프로 그릴 지표 (클릭해서 켜고 끄기 · 최대 ${CMP_MAX_METRICS}개)</span>
+      <button class="btn" data-cm-preset="1" type="button">기본 지표로</button>
+      <button class="btn" data-cm-clear="1" type="button">모두 끄기</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${keys.map(k => {
+        const m = axisMeta(k);
+        return `<button class="btn ${CMP_METRICS.includes(k) ? "primary" : ""}" data-cm-key="${esc(k)}"
+          type="button" style="padding:3px 10px;font-size:11.5px"
+          title="${esc(m.label)}${m.unit ? ` (${m.unit})` : ""}">${esc(m.label)}</button>`;
+      }).join("")}
+    </div>
+    <div class="form-error" data-cm-msg style="margin-top:4px"></div>`;
+  box.querySelectorAll("[data-cm-key]").forEach(btn => btn.addEventListener("click", () => {
+    const msg = toggleCmpMetric(btn.dataset.cmKey);
+    if (msg) { box.querySelector("[data-cm-msg]").textContent = msg; return; }
+    onChange();
+  }));
+  box.querySelector("[data-cm-preset]").addEventListener("click", () => {
+    CMP_METRICS = [...CMP_DEFAULT_METRICS];
+    saveCmpMetrics();
+    onChange();
+  });
+  box.querySelector("[data-cm-clear]").addEventListener("click", () => {
+    CMP_METRICS = [];
+    saveCmpMetrics();
+    onChange();
+  });
+}
+
+/* ---------- 비교 그래프: 가로 막대 · 세로 막대 · 꺾은선 ---------- */
+function shortName(name, n) {
+  const s = String(name);
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function cellText(v) {
+  if (typeof v === "number") return fmt(v);
+  if (v == null) return "—";
+  if (Array.isArray(v)) {
+    const parts = v.slice(0, 3).map(o => (o && typeof o === "object" && "population_pct" in o)
+      ? `${fmt(o.population_pct)}% (Δ${fmt(o.rel_e_kcal)})` : JSON.stringify(o));
+    return parts.join(" · ") + (v.length > 3 ? ` 외 ${v.length - 3}개` : "");
+  }
+  if (typeof v === "object") return Object.entries(v).map(([k, x]) => `${k} ${fmt(x)}`).join(" · ");
+  return String(v);
+}
+
+function rowScale(nums) {
+  // 표 미니 막대: 그 줄 안에서의 상대 위치 (절대 0 기준이 아님 — 총에너지처럼 큰 값도 차이가 보이게)
+  const lo = Math.min(...nums), hi = Math.max(...nums);
+  const pad = hi - lo > 1e-12 ? (hi - lo) * 0.18 : Math.abs(hi) * 0.2 + 0.5;
+  return {lo: lo - pad, hi: hi + pad};
+}
+
+function chartScale(vals) {
+  // 0을 반드시 포함하는 축 — 음수 지표(HOMO, 용매화 에너지 등)를 올바른 방향으로 표시
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  if (hi - lo < 1e-12) hi = lo + 1;
+  const pad = (hi - lo) * 0.04;
+  return {lo: lo - (lo < 0 ? pad : 0), hi: hi + (hi > 0 ? pad : 0)};
+}
+
+function svgMetricChart(entries, unit) {
+  const vals = entries.map(e => e.v);
+  const {lo, hi} = chartScale(vals);
+  const span = hi - lo;
+  const bar = (e, i) => `var(--series-${(e.i % 8) + 1})`;
+  const tip = e => `<title>${esc(e.name)}: ${fmt(e.v)}${unit ? " " + unit : ""}</title>`;
+
+  if (CMP_CHART === "hbar") {
+    // 값 라벨은 오른쪽 고정 열에 — 막대 길이와 상관없이 잘리거나 겹치지 않는다
+    const W = 360, rowH = 38, PAD = 6, barMax = W - 80;
+    const H = entries.length * rowH + PAD;
+    const x = v => (v - lo) / span * barMax;
+    const zero = x(0);
+    let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:380px" role="img">`;
+    if (lo < 0 && hi > 0) sv += `<line x1="${zero}" y1="${PAD}" x2="${zero}" y2="${H}" class="gridline" />`;
+    entries.forEach((e, k) => {
+      const top = k * rowH + PAD, xv = x(e.v);
+      const bx = Math.min(zero, xv), bw = Math.max(2, Math.abs(xv - zero));
+      const col = bar(e, k);
+      sv += `<text x="0" y="${top + 9}" class="axis-label">${esc(e.name)}</text>
+        <rect x="${bx}" y="${top + 15}" width="${bw}" height="14" rx="3" fill="${col}"
+          fill-opacity="${CMP_OPACITY}" stroke="${col}" stroke-opacity="0.85">${tip(e)}</rect>
+        <text x="${W}" y="${top + 26}" class="value-label" text-anchor="end">${fmt(e.v)}</text>`;
+    });
+    return sv + "</svg>";
+  }
+
+  if (CMP_CHART === "vbar") {
+    const colW = 78, W = Math.max(240, entries.length * colW), TOP = 16, BOT = 34;
+    const H = 190, plot = H - TOP - BOT;
+    const y = v => TOP + (hi - v) / span * plot;
+    const zero = y(0);
+    let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${Math.max(300, W)}px" role="img">`;
+    sv += `<line x1="0" y1="${zero}" x2="${W}" y2="${zero}" class="gridline" />`;
+    entries.forEach((e, k) => {
+      const cx = k * colW + colW / 2, yv = y(e.v), col = bar(e, k);
+      const by = Math.min(zero, yv), bh = Math.max(2, Math.abs(yv - zero));
+      const pos = e.v >= 0;
+      sv += `<rect x="${cx - 17}" y="${by}" width="34" height="${bh}" rx="3" fill="${col}"
+          fill-opacity="${CMP_OPACITY}" stroke="${col}" stroke-opacity="0.85">${tip(e)}</rect>
+        <text x="${cx}" y="${pos ? by - 4 : by + bh + 11}" class="value-label"
+          text-anchor="middle">${fmt(e.v)}</text>
+        <text x="${cx}" y="${H - 12}" class="axis-label" text-anchor="middle"
+          >${esc(shortName(e.name, 8))}<title>${esc(e.name)}</title></text>`;
+    });
+    return sv + "</svg>";
+  }
+
+  // line — 물질 순서에 따른 추이
+  const colW = 78, W = Math.max(240, entries.length * colW), TOP = 16, BOT = 34;
+  const H = 190, plot = H - TOP - BOT;
+  const y = v => TOP + (hi - v) / span * plot;
+  const px = k => k * colW + colW / 2;
+  const zero = y(0);
+  const pts = entries.map((e, k) => `${px(k)},${y(e.v)}`).join(" ");
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${Math.max(300, W)}px" role="img">`;
+  sv += `<line x1="0" y1="${zero}" x2="${W}" y2="${zero}" class="gridline" />
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2"
+      stroke-opacity="${CMP_OPACITY}" />`;
+  entries.forEach((e, k) => {
+    const col = bar(e, k), yv = y(e.v);
+    sv += `<circle cx="${px(k)}" cy="${yv}" r="5" fill="${col}" fill-opacity="${CMP_OPACITY}"
+        stroke="${col}">${tip(e)}</circle>
+      <text x="${px(k)}" y="${yv - 9}" class="value-label" text-anchor="middle">${fmt(e.v)}</text>
+      <text x="${px(k)}" y="${H - 12}" class="axis-label" text-anchor="middle"
+        >${esc(shortName(e.name, 8))}<title>${esc(e.name)}</title></text>`;
+  });
+  return sv + "</svg>";
 }
 
 function svgRadar(series) {
@@ -1507,6 +1718,7 @@ window.rbRenderCompare = function () {
   const box = $("compare-body");
   if (!jobs.length) {
     box.innerHTML = '<div class="empty small">PUBLISHED 결과가 없습니다.</div>';
+    renderMetricPicker([], () => window.rbRenderCompare());
     return;
   }
   for (const id of [...COMPARE_SEL]) if (!jobs.some(j => j.id === id)) COMPARE_SEL.delete(id);
@@ -1554,54 +1766,61 @@ window.rbRenderCompare = function () {
       <h3 style="font-size:13px;color:var(--accent);margin:16px 0 4px">
         전기화학 안정성 (선택 물질 비교)</h3>
       ${eswSection(chosen)}`;
-    // 모의 앱 스타일 비교 차트 (시리즈 색상)
-    const METRICS = [
-      ["homo_ev", "HOMO", "eV"], ["lumo_ev", "LUMO", "eV"], ["gap_ev", "HOMO–LUMO 갭", "eV"],
-      ["dipole_debye", "쌍극자 모멘트", "D"],
-      ["oxidation_potential_v", "산화 전위", "V"], ["reduction_potential_v", "환원 전위", "V"],
-      ["solvation_energy_kcal", "용매화 에너지", "kcal/mol"],
-      ["interaction_energy_kcal", "클러스터 상호작용", "kcal/mol"],
-    ];
+    // 사용자가 고른 지표를 그래프로 (그래프 종류는 '표시 설정'에서 선택)
     let charts = "";
-    for (const [key, title, unit] of METRICS) {
+    for (const key of CMP_METRICS) {
+      const {label: title, unit} = axisMeta(key);
       const entries = chosen
         .map((j, i) => ({name: j.material.name, v: j.result.descriptors[key], i}))
-        .filter(e => e.v != null);
+        .filter(e => typeof e.v === "number");
       if (entries.length < 2) continue;
-      const maxAbs = Math.max(...entries.map(e => Math.abs(e.v)), 1e-9);
-      const W = 360, rowH = 38, PAD = 6;
-      const H = entries.length * rowH + PAD;
-      const barMax = W - 74;   // 값 라벨 자리 확보
-      let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:380px" role="img">`;
-      entries.forEach((e, k) => {
-        const top = k * rowH + PAD;
-        const w = Math.max(3, Math.abs(e.v) / maxAbs * barMax);
-        const col = `var(--series-${(e.i % 8) + 1})`;
-        sv += `<text x="0" y="${top + 9}" class="axis-label">${esc(e.name)}</text>
-          <rect x="0" y="${top + 15}" width="${w}" height="14" rx="3" fill="${col}"
-            fill-opacity="${CMP_OPACITY}" stroke="${col}" stroke-opacity="0.85"
-            ><title>${esc(e.name)}: ${fmt(e.v)} ${esc(unit)}</title></rect>
-          <text x="${w + 6}" y="${top + 26}" class="value-label">${fmt(e.v)}</text>`;
-      });
-      sv += "</svg>";
       charts += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 4px">
-        ${esc(title)}${unit ? ` (${unit})` : ""}</h3>${sv}</div>`;
+        ${esc(title)}${unit ? ` (${esc(unit)})` : ""}</h3>${svgMetricChart(entries, unit)}</div>`;
     }
-    if (charts) {
-      table += `<div class="grid-2" style="margin-bottom:14px">${charts}</div>`;
-    }
+    table += charts
+      ? `<h3 style="font-size:13px;color:var(--accent);margin:16px 0 4px">선택한 지표 그래프</h3>
+         <div class="grid-2" style="margin-bottom:14px">${charts}</div>`
+      : `<p class="muted small" style="margin:16px 0 10px">
+         그래프로 그릴 지표가 없습니다 — 위 '표시 설정'에서 지표를 켜거나, 아래 표에서 '그래프' 버튼을 누르세요.</p>`;
+
     const keys = [];
     for (const j of chosen) {
       for (const k of Object.keys(j.result.descriptors)) {
         if (k !== "potential_reference" && !keys.includes(k)) keys.push(k);
       }
     }
-    table += '<div class="scroll-x"><table class="kv-table" style="min-width:560px"><tr><th>지표</th>' +
-      chosen.map(j => `<th>${esc(j.material.name.split(" (")[0])}</th>`).join("") + "</tr>";
+    table += `<h3 style="font-size:13px;color:var(--accent);margin:16px 0 4px">전체 값 표</h3>
+      <p class="muted small" style="margin:0 0 6px">각 줄의 '그래프' 버튼을 누르면 그 지표가 위 그래프에 추가됩니다 ·
+        칸 아래 미니 막대는 <b>그 줄 안에서의 상대 크기</b>(길수록 큰 값)이며, 위 그래프는 0을 기준으로 그립니다.</p>` +
+      '<div class="scroll-x"><table class="kv-table" style="min-width:560px"><tr><th>지표</th>' +
+      chosen.map((j, i) => `<th><span style="display:inline-block;width:8px;height:8px;border-radius:2px;
+        background:var(--series-${(i % 8) + 1});margin-right:5px"></span>${esc(shortName(j.material.name, 18))}</th>`).join("") +
+      "</tr>";
     for (const k of keys) {
-      const [label, unit] = DESC_LABELS[k] || [k, ""];
-      table += `<tr><th>${esc(label)}${unit ? ` (${unit})` : ""}</th>` +
-        chosen.map(j => `<td>${j.result.descriptors[k] ?? "—"}</td>`).join("") + "</tr>";
+      const {label, unit} = axisMeta(k);
+      const vals = chosen.map(j => j.result.descriptors[k]);
+      const nums = vals.filter(v => typeof v === "number");
+      const on = CMP_METRICS.includes(k);
+      const canChart = nums.length >= 2;
+      const btn = canChart
+        ? `<button class="btn ${on ? "primary" : ""}" data-cm-row="${esc(k)}" type="button"
+             style="padding:1px 7px;font-size:10.5px;margin-right:6px"
+             title="${on ? "그래프에서 빼기" : "그래프로 보기"}">그래프</button>`
+        : "";
+      const scale = CMP_TABLE_BARS && canChart ? rowScale(nums) : null;
+      table += `<tr><th style="white-space:nowrap">${btn}${esc(label)}${unit ? ` (${esc(unit)})` : ""}</th>` +
+        vals.map((v, i) => {
+          if (typeof v !== "number") return `<td>${esc(cellText(v))}</td>`;
+          let cell = `<span class="mono">${fmt(v)}</span>`;
+          if (scale) {
+            const w = (v - scale.lo) / (scale.hi - scale.lo) * 100;
+            cell += `<div style="position:relative;height:5px;margin-top:3px;background:var(--grid);
+              border-radius:3px;min-width:64px;max-width:150px"><div style="position:absolute;left:0;
+              width:${w.toFixed(1)}%;top:0;bottom:0;border-radius:3px;
+              background:var(--series-${(i % 8) + 1});opacity:${CMP_OPACITY}"></div></div>`;
+          }
+          return `<td>${cell}</td>`;
+        }).join("") + "</tr>";
     }
     table += "</table></div>" + `
       <ul class="log-list" style="margin-top:10px">
@@ -1613,6 +1832,7 @@ window.rbRenderCompare = function () {
     table = '<p class="muted small">두 개 이상 선택하면 비교 표가 나타납니다.</p>';
   }
   box.innerHTML = picker + table;
+  renderMetricPicker(chosen, () => window.rbRenderCompare());
   if ($("cmp-axis-picker")) {
     const series = chosen.map((j, i) => ({name: j.material.name, d: j.result.descriptors, idx: i}));
     const redraw = () => {
@@ -1621,6 +1841,11 @@ window.rbRenderCompare = function () {
     };
     redraw();
   }
+  box.querySelectorAll("[data-cm-row]").forEach(b => b.addEventListener("click", () => {
+    const msg = toggleCmpMetric(b.dataset.cmRow);
+    if (msg) { alert(msg); return; }
+    window.rbRenderCompare();
+  }));
   box.querySelectorAll("[data-cmp]").forEach(b => b.addEventListener("click", () => {
     const id = b.dataset.cmp;
     COMPARE_SEL.has(id) ? COMPARE_SEL.delete(id) : COMPARE_SEL.add(id);
