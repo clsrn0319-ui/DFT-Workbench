@@ -108,22 +108,19 @@ if response is not None:
             })
             st.dataframe(pretty.round(3), use_container_width=True, hide_index=True)
 
-            # 단계별 추이 그래프 — 면적당 용량(감소)·합제밀도(증가) 두 곡선 (값 병기)
+            # 단계별 추이 그래프 — 면적당 용량(감소)·합제밀도(증가) 두 곡선
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=table["stage_index"], y=table["areal_capacity_mah_cm2"],
-                name="면적당 용량 (mAh/cm²)", mode="lines+markers+text",
-                text=[f"{v:.2f}" for v in table["areal_capacity_mah_cm2"]],
-                textposition="top center"))
+                name="면적당 용량 (mAh/cm²)", mode="lines+markers"))
             fig.add_trace(go.Scatter(
                 x=table["stage_index"], y=table["composite_density_gcc"],
-                name="합제밀도 (g/cc)", mode="lines+markers+text", yaxis="y2",
-                text=[f"{v:.2f}" for v in table["composite_density_gcc"]],
-                textposition="bottom center", line=dict(dash="dash")))
+                name="합제밀도 (g/cc)", mode="lines+markers", yaxis="y2",
+                line=dict(dash="dash")))
             fig.update_layout(
                 yaxis=dict(title="면적당 용량 (mAh/cm²)"),
                 yaxis2=dict(title="합제밀도 (g/cc)", overlaying="y", side="right"),
-                height=360, margin=dict(l=40, r=50, t=20, b=30),
+                height=340, margin=dict(l=40, r=50, t=20, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
             st.plotly_chart(fig, use_container_width=True)

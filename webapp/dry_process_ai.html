@@ -1258,28 +1258,22 @@ function renderScheduleOnly(r){
   return `<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>단계</th><th>전단 M12</th><th>후단 M23·롤</th><th>계획 두께</th><th>계획 밀도</th></tr></thead><tbody>${ACTIVE_STAGES.map(s=>{const x=r.schedule.sched[s];return `<tr><td class="t">${s}</td><td>${x.gapF!=null?fmt(x.gapF,0):"—"}</td><td>${fmt(x.gap,1)}</td><td>${fmt(x.t,1)}</td><td>${fmt(x.d,3)}</td></tr>`;}).join("")}</tbody></table></div>`;
 }
 function svgTrend(table){
-  // 면적당 용량(단조 감소)과 합제밀도(단조 증가) 두 곡선만 — 단위가 달라
-  // 각자 min~max 로 정규화해 겹쳐 그리고, 값은 곡선 색 라벨로 병기한다.
-  const W=680,H=260,pl=44,pr=44,pt=34,pb=32,iw=W-pl-pr,ih=H-pt-pb;
+  // 면적당 용량(단조 감소)과 합제밀도(단조 증가) 두 곡선 — 단위가 달라 각자
+  // min~max 로 정규화해 겹쳐 그린다. 값 라벨 없이 깔끔한 추이만 표시.
+  const W=640,H=190,pl=46,pr=46,pt=14,pb=26,iw=W-pl-pr,ih=H-pt-pb;
   const qs=table.map(r=>r.q),ds=table.map(r=>r.d);
-  const norm=(arr,pad)=>{const lo=Math.min(...arr),hi=Math.max(...arr),sp=(hi-lo)||1;
-    return v=>pt+ih*(1-((v-lo)/sp)*(1-2*pad)-pad);};
-  const yQ=norm(qs,0.14),yD=norm(ds,0.14);
+  const qLo=Math.min(...qs)*0.95,qHi=Math.max(...qs)*1.05,dLo=Math.min(...ds)*0.98,dHi=Math.max(...ds)*1.02;
   const x=i=>pl+iw*i/(table.length-1);
-  const poly=(f)=>table.map((r,i)=>`${x(i).toFixed(1)},${f(r).toFixed(1)}`).join(" ");
-  const CQ="var(--accent)",CD="var(--warn)";  // 용량=초록 실선, 밀도=주황 파선
-  const labels=table.map((r,i)=>`
-    <text x="${x(i)}" y="${yQ(r.q)-8}" text-anchor="middle" fill="${CQ}" style="font-size:10px;font-weight:600">${r.q.toFixed(2)}</text>
-    <text x="${x(i)}" y="${yD(r.d)+15}" text-anchor="middle" fill="${CD}" style="font-size:10px;font-weight:600">${r.d.toFixed(2)}</text>`).join("");
+  const yQ=v=>pt+ih*(1-(v-qLo)/(qHi-qLo)),yD=v=>pt+ih*(1-(v-dLo)/(dHi-dLo));
+  const pQ=table.map((r,i)=>`${x(i).toFixed(1)},${yQ(r.q).toFixed(1)}`).join(" ");
+  const pD=table.map((r,i)=>`${x(i).toFixed(1)},${yD(r.d).toFixed(1)}`).join(" ");
   return `<div style="overflow-x:auto;margin-top:8px"><svg width="${W}" height="${H}" role="img" aria-label="단계별 면적당 용량·합제밀도 추이">
     <line class="axis" x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}"/>
-    <polyline points="${poly(r=>r.q)}" fill="none" stroke="${CQ}" stroke-width="2.5"/>
-    <polyline points="${poly(r=>r.d)}" fill="none" stroke="${CD}" stroke-width="2.5" stroke-dasharray="6 3"/>
-    ${table.map((r,i)=>`<circle cx="${x(i)}" cy="${yQ(r.q)}" r="3.5" fill="${CQ}"/><circle cx="${x(i)}" cy="${yD(r.d)}" r="3.5" fill="${CD}"/><text x="${x(i)}" y="${H-9}" text-anchor="middle" style="font-size:11px">${r.s}</text>`).join("")}
-    ${labels}
-    <text x="${pl}" y="20" fill="${CQ}" style="font-size:11px;font-weight:600">━ 면적당 용량 (mAh/cm²) ↓</text>
-    <text x="${W-pr}" y="20" text-anchor="end" fill="${CD}" style="font-size:11px;font-weight:600">╌ 합제밀도 (g/cc) ↑</text>
-  </svg></div>`;
+    <polyline points="${pQ}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <polyline points="${pD}" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 3"/>
+    ${table.map((r,i)=>`<circle cx="${x(i)}" cy="${yQ(r.q)}" r="3" fill="var(--accent)"/><circle cx="${x(i)}" cy="${yD(r.d)}" r="3" fill="var(--warn)"/><text x="${x(i)}" y="${H-8}" text-anchor="middle">${r.s}</text>`).join("")}
+    <text x="${pl}" y="${pt+8}" fill="var(--accent)">면적당 용량 mAh/cm² ↓</text>
+    <text x="${W-pr}" y="${pt+8}" text-anchor="end" fill="var(--warn)">밀도 g/cc ↑</text></svg></div>`;
 }
 
 // ---------- SC-02 ----------
