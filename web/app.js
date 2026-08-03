@@ -345,9 +345,17 @@ async function refreshJobs() {
   if (real?.classList.contains("mode-compare") && window.rbRenderCompare) window.rbRenderCompare();
 }
 
-function renderJobList() {
+function jobsSignature() {
+  return JOBS_CACHE.map(j => `${j.id}:${j.status}:${j.progress}:${j.logs.length}`).join("|")
+    + "#" + [...EXPORT_SEL].sort().join(",");
+}
+
+function renderJobList(force = false) {
   const list = $("job-list");
   if (!list) return;
+  const sig = jobsSignature();
+  if (!force && sig === JOB_LIST_SIG && list.children.length) return;  // 변화 없음 → 유지
+  JOB_LIST_SIG = sig;
   if (!JOBS_CACHE.length) {
     list.className = "empty small";
     list.textContent = "작업이 없습니다.";
@@ -367,7 +375,8 @@ function renderJobList() {
     const done = jobs.filter(j => j.status === "PUBLISHED").length;
     const active = jobs.filter(j => ["QUEUED", "RUNNING"].includes(j.status)).length;
     const failed = jobs.filter(j => j.status === "FAILED").length;
-    return `<details class="job-group" ${active ? "open" : ""}
+    const open = OPEN_GROUPS.has(name) || (active && !OPEN_GROUPS.size);
+    return `<details class="job-group" data-group="${esc(name)}" ${open ? "open" : ""}
         style="border:1px solid var(--grid);border-radius:10px;padding:8px 12px;margin-bottom:8px">
       <summary style="cursor:pointer;font-weight:700">${esc(name)}
         <span class="muted small" style="font-weight:400">— 총 ${jobs.length}건${done ? ` · 완료 ${done}` : ""}${active ? ` · 진행 ${active}` : ""}${failed ? ` · 실패 ${failed}` : ""}</span>
@@ -376,8 +385,13 @@ function renderJobList() {
     </details>`;
   }).join("");
 
+  list.querySelectorAll("details.job-group").forEach(d => d.addEventListener("toggle", () => {
+    d.open ? OPEN_GROUPS.add(d.dataset.group) : OPEN_GROUPS.delete(d.dataset.group);
+    JOB_LIST_SIG = jobsSignature();   // 펼침 변화는 재렌더 대상이 아님
+  }));
   list.querySelectorAll("[data-export-sel]").forEach(cb => cb.addEventListener("change", () => {
     cb.checked ? EXPORT_SEL.add(cb.dataset.exportSel) : EXPORT_SEL.delete(cb.dataset.exportSel);
+    JOB_LIST_SIG = jobsSignature();
     updateSelCount();
   }));
   list.querySelectorAll("[data-view-job]").forEach(b => b.addEventListener("click", () => {
@@ -432,8 +446,8 @@ function updateSelCount() {
 
 function wireResultsControls() {
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
-  on("sel-all", () => { publishedJobs().forEach(j => EXPORT_SEL.add(j.id)); renderJobList(); });
-  on("sel-none", () => { EXPORT_SEL.clear(); renderJobList(); });
+  on("sel-all", () => { publishedJobs().forEach(j => EXPORT_SEL.add(j.id)); renderJobList(true); });
+  on("sel-none", () => { EXPORT_SEL.clear(); renderJobList(true); });
   const dl = format => {
     const ids = [...EXPORT_SEL].join(",");
     window.location = `/api/export?format=${format}` + (ids ? `&ids=${encodeURIComponent(ids)}` : "");
@@ -441,6 +455,13 @@ function wireResultsControls() {
   on("export-csv", () => dl("csv"));
   on("export-json", () => dl("json"));
   on("result-close", () => { $("result-card").style.display = "none"; SELECTED_RESULT = null; });
+  const slider = $("cmp-opacity");
+  if (slider) slider.oninput = () => {
+    CMP_OPACITY = parseFloat(slider.value);
+    const lbl = $("cmp-opacity-val");
+    if (lbl) lbl.textContent = CMP_OPACITY.toFixed(2);
+    if (window.rbRenderCompare) window.rbRenderCompare();
+  };
   for (const id of ["res-filter-mat", "res-filter-cond"]) {
     const el = $(id);
     if (el) el.onchange = () => window.rbRenderResults();
@@ -628,6 +649,9 @@ function togglePin(key) {
 /* ---------- 결과 화면: 결과 불러오기 · 상세 · ESW · 작업 큐 ---------- */
 let SELECTED_RESULT = null;   // 상세를 보고 있는 작업 id
 const EXPORT_SEL = new Set(); // 내보내기 선택 작업 id
+const OPEN_GROUPS = new Set(); // 사용자가 펼쳐 둔 소재 그룹
+let CMP_OPACITY = 0.7;         // 비교 차트 막대·영역 투명도
+let JOB_LIST_SIG = null;       // 목록 변화 없으면 다시 그리지 않음 (펼침 유지)
 
 function publishedJobs() {
   return JOBS_CACHE.filter(j => j.status === "PUBLISHED" && j.result);
@@ -679,7 +703,6 @@ window.rbRenderResults = function () {
     }));
   }
 
-  if (window.rbRenderEsw) window.rbRenderEsw();
   renderJobList();
 };
 
@@ -774,7 +797,8 @@ function svgRadar(series) {
       return pt(i, f).map(n => n.toFixed(1)).join(",");
     }).join(" ");
     sv += `<polygon points="${poly}"
-      fill="${list.length > 1 ? "none" : "color-mix(in srgb, var(--accent) 16%, transparent)"}"
+      fill="${list.length > 1 ? "none" : "var(--accent)"}"
+      fill-opacity="${list.length > 1 ? 0 : CMP_OPACITY * 0.22}"
       stroke="${col}" stroke-width="2"/>`;
     axes.forEach((a, i) => {
       const v = sObj.d[a.key];
@@ -1379,13 +1403,12 @@ function eswJobs() {
     && j.result?.descriptors?.reduction_potential_v != null);
 }
 
-window.rbRenderEsw = function () {
-  const jobs = eswJobs();
-  const box = $("esw-body");
+function eswSection(jobs) {
+  jobs = jobs.filter(j => j.result?.descriptors?.oxidation_potential_v != null
+                       && j.result?.descriptors?.reduction_potential_v != null);
   if (!jobs.length) {
-    box.innerHTML = '<div class="empty small">전위가 포함된 PUBLISHED 결과가 없습니다.<br>' +
+    return '<div class="empty small">전위가 계산된 결과가 없습니다.<br>' +
       'DFT 계산에서 목적을 "전자구조 + 산화/환원 전위"로 선택해 제출하세요.</div>';
-    return;
   }
   const allV = jobs.flatMap(j => {
     const dd = j.result.descriptors;
@@ -1400,25 +1423,29 @@ window.rbRenderEsw = function () {
     svg += `<line x1="${x(v)}" y1="32" x2="${x(v)}" y2="${H - 34}" stroke="var(--grid)" />
       <text x="${x(v)}" y="${H - 20}" font-size="11" text-anchor="middle" fill="var(--muted)">${v}</text>`;
   }
-  svg += `<text x="${(L + W) / 2}" y="${H - 4}" font-size="11" text-anchor="middle" fill="var(--muted)">전위 (V vs Li/Li⁺)</text>`;
+  svg += `<text x="${(L + W) / 2}" y="${H - 4}" font-size="11" text-anchor="middle"
+    fill="var(--muted)">전위 (V vs Li/Li⁺)</text>`;
   ELECTRODES.forEach((el, i) => {
-    const ly = i % 2 ? 24 : 12;  // 인접 전극(Graphite/Si, LFP/NCM811) 라벨 2단 배치
+    const ly = i % 2 ? 24 : 12;
     svg += `<line x1="${x(el.v)}" y1="${ly + 4}" x2="${x(el.v)}" y2="${H - 34}"
         stroke="var(--pin)" stroke-dasharray="4 3" />
-      <text x="${x(el.v)}" y="${ly}" font-size="10.5" text-anchor="middle" fill="var(--pin)">${esc(el.label)}</text>`;
+      <text x="${x(el.v)}" y="${ly}" font-size="10.5" text-anchor="middle"
+        fill="var(--pin)">${esc(el.label)}</text>`;
   });
   jobs.forEach((j, i) => {
     const d = j.result.descriptors;
     const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
     const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
     const y = 52 + i * 46;
-    const nm = j.material.name.length > 13
-      ? j.material.name.slice(0, 12) + "…" : j.material.name;
-    svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end" fill="var(--text-1)">${esc(nm)}<title>${esc(j.material.name)}</title></text>
+    const nm = j.material.name.length > 13 ? j.material.name.slice(0, 12) + "…" : j.material.name;
+    const col = jobs.length > 1 ? `var(--series-${(i % 8) + 1})` : "var(--accent)";
+    svg += `<text x="${L - 8}" y="${y + 5}" font-size="12" text-anchor="end"
+        fill="var(--text-1)">${esc(nm)}<title>${esc(j.material.name)}</title></text>
       <rect x="${x(red)}" y="${y - 8}" width="${Math.max(2, x(ox) - x(red))}" height="16" rx="4"
-        fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)" />
-      <text x="${x(red) - 4}" y="${y + 4}" font-size="10" text-anchor="end" fill="var(--text-2)">${red.toFixed(2)}</text>
-      <text x="${x(ox) + 4}" y="${y + 4}" font-size="10" fill="var(--text-2)">${ox.toFixed(2)}</text>`;
+        fill="${col}" fill-opacity="${CMP_OPACITY * 0.45}" stroke="${col}" />
+      <text x="${x(red) - 4}" y="${y + 4}" font-size="10" text-anchor="end"
+        fill="var(--text-2)">${fmt(red)}</text>
+      <text x="${x(ox) + 4}" y="${y + 4}" font-size="10" fill="var(--text-2)">${fmt(ox)}</text>`;
   });
   svg += "</svg>";
 
@@ -1429,22 +1456,24 @@ window.rbRenderEsw = function () {
     const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
     const anodeOK = red < 0.1, anodeMid = red < 0.8;
     const ncmOK = ox > 4.3, lfpOK = ox > 3.45;
-    rows += `<tr><td><b>${esc(j.material.name)}</b><br><span class="mono small muted">${esc(j.id)}</span></td>
-      <td>${red.toFixed(2)} ~ ${ox.toFixed(2)} V</td>
+    rows += `<tr><td><b>${esc(j.material.name)}</b><br>
+        <span class="mono small muted">${esc(j.id)}</span></td>
+      <td>${fmt(red)} ~ ${fmt(ox)} V</td>
       <td class="${anodeOK ? "verdict-ok" : anodeMid ? "verdict-mid" : "verdict-no"}">${anodeOK ? "안정" : anodeMid ? "경계" : "환원 분해 우려"}</td>
       <td class="${lfpOK ? "verdict-ok" : "verdict-no"}">${lfpOK ? "안정" : "산화 우려"}</td>
       <td class="${ncmOK ? "verdict-ok" : "verdict-no"}">${ncmOK ? "안정" : "산화 우려"}</td></tr>`;
   }
-  box.innerHTML = svg + `
+  return svg + `
     <div class="scroll-x" style="margin-top:14px"><table class="kv-table" style="min-width:640px">
-      <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.1 V)</th><th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th></tr>
+      <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.1 V)</th>
+        <th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th></tr>
       ${rows}</table></div>
     <ul class="log-list" style="margin-top:10px">
       <li>판정 기준: 환원 전위 &lt; 음극 전위 → 음극에서 환원 안정, 산화 전위 &gt; 양극 전위 → 양극에서 산화 안정 (열역학적 기준)</li>
       <li>ΔG 기반 전위가 있으면 우선 사용, 없으면 단열/수직 전위 사용</li>
       <li>주의: 실제 전지에서는 SEI/CEI 피막의 동역학적 보호가 크게 작용합니다 — 예: EC는 환원 분해되지만 안정적 SEI를 형성해 사용됩니다. 이 판정은 스크리닝용 열역학 지표입니다.</li>
     </ul>`;
-};
+}
 
 /* ================= 물질 비교 ================= */
 const COMPARE_SEL = new Set();
@@ -1497,7 +1526,10 @@ window.rbRenderCompare = function () {
       <div id="cmp-axis-picker"></div>
       <div id="cmp-radar">${svgRadar(series)}</div>
       <p class="muted small" style="margin:4px 0 10px">
-        저장된 PUBLISHED 결과 전체 범위로 정규화 · 바깥쪽일수록 스크리닝에 유리한 방향</p>`;
+        저장된 PUBLISHED 결과 전체 범위로 정규화 · 바깥쪽일수록 스크리닝에 유리한 방향</p>
+      <h3 style="font-size:13px;color:var(--accent);margin:16px 0 4px">
+        전기화학 안정성 (선택 물질 비교)</h3>
+      ${eswSection(chosen)}`;
     // 모의 앱 스타일 비교 차트 (시리즈 색상)
     const METRICS = [
       ["homo_ev", "HOMO", "eV"], ["lumo_ev", "LUMO", "eV"], ["gap_ev", "HOMO–LUMO 갭", "eV"],
@@ -1520,10 +1552,12 @@ window.rbRenderCompare = function () {
       entries.forEach((e, k) => {
         const top = k * rowH + PAD;
         const w = Math.max(3, Math.abs(e.v) / maxAbs * barMax);
+        const col = `var(--series-${(e.i % 8) + 1})`;
         sv += `<text x="0" y="${top + 9}" class="axis-label">${esc(e.name)}</text>
-          <rect x="0" y="${top + 15}" width="${w}" height="14" rx="3"
-            fill="var(--series-${(e.i % 8) + 1})"><title>${esc(e.name)}: ${e.v} ${esc(unit)}</title></rect>
-          <text x="${w + 6}" y="${top + 26}" class="value-label">${e.v}</text>`;
+          <rect x="0" y="${top + 15}" width="${w}" height="14" rx="3" fill="${col}"
+            fill-opacity="${CMP_OPACITY}" stroke="${col}" stroke-opacity="0.85"
+            ><title>${esc(e.name)}: ${fmt(e.v)} ${esc(unit)}</title></rect>
+          <text x="${w + 6}" y="${top + 26}" class="value-label">${fmt(e.v)}</text>`;
       });
       sv += "</svg>";
       charts += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 4px">

@@ -953,12 +953,6 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
 
   <div class="card">
-    <div class="card-head"><h2>전기화학 안정성 (전체 결과 비교)</h2>
-      <span class="muted small">전위가 계산된 결과만 표시</span></div>
-    <div id="esw-body"></div>
-  </div>
-
-  <div class="card">
     <div class="card-head"><h2>작업 큐</h2>
       <div class="toolbar">
         <button class="btn" id="sel-all" type="button">전체 선택</button>
@@ -988,7 +982,16 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <div id="rbv-compare" class="rbv">
   <h1>물질 비교</h1>
-  <p class="rb-note">PUBLISHED 결과를 골라 나란히 비교합니다 — 바인더·전해액 후보 선별용.</p>
+  <p class="rb-note">PUBLISHED 결과를 골라 나란히 비교합니다 — 바인더·전해액 후보 선별용.
+    전기화학 안정성(ESW)도 선택한 물질끼리 함께 비교됩니다.</p>
+  <div class="card">
+    <div class="card-head"><h2>표시 설정</h2>
+      <label class="compare-check">막대·영역 투명도
+        <input type="range" id="cmp-opacity" min="0.15" max="1" step="0.05" value="0.7"
+          style="width:180px;accent-color:var(--accent)">
+        <span class="muted small" id="cmp-opacity-val">0.70</span></label>
+    </div>
+  </div>
   <div class="card" id="compare-body"></div>
 </div>
 </div>
