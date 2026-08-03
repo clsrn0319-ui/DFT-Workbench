@@ -139,3 +139,21 @@ def test_provenance_fields():
                 "freq_scale_factor", "geometry_optimizer", "solvent_model"]:
         assert key in prov
     assert prov["engine"].startswith("PySCF")
+
+
+def test_atomic_thermo_translation_only():
+    """단원자 조각: ZPE 0, 엔탈피 보정 = 5/2 RT."""
+    from server.engine import _atomic_thermo_fn, HARTREE2KJ
+    th = _atomic_thermo_fn(298.15)
+    assert th["zpe_hartree"] == 0.0
+    expected_kj = 2.5 * 8.31446261815324 * 298.15 / 1000
+    assert th["h_corr_hartree"] * HARTREE2KJ == pytest.approx(expected_kj, abs=1e-6)
+
+
+def test_bde_flags_default_on():
+    from server.engine import _resolve_params
+    p = _resolve_params(_settings())
+    assert p["bde_relax"] is True and p["bde_thermal"] is True
+    p = _resolve_params(_settings(expert={"bdeRelaxFragments": False,
+                                          "bdeThermalCorrection": False}))
+    assert p["bde_relax"] is False and p["bde_thermal"] is False

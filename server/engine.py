@@ -115,6 +115,9 @@ def _resolve_params(settings):
         # BDE 라디칼 조각 재최적화 (기본 활성 — 고정 구조는 BDE를 크게 과대평가)
         "bde_relax": True if exp.get("bdeRelaxFragments") is None
                      else bool(exp["bdeRelaxFragments"]),
+        # BDE의 ZPE·298 K 열보정 (열보정이 켜져 있을 때만 유효)
+        "bde_thermal": True if exp.get("bdeThermalCorrection") is None
+                       else bool(exp["bdeThermalCorrection"]),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
         "functional": functional,
@@ -235,6 +238,7 @@ def _provenance(params, settings, solvent_key):
         "freq_scale_factor": params["freq_scale"],
         "nonequilibrium_solvation": params["noneq"],
         "bde_fragment_relaxation": params["bde_relax"],
+        "bde_thermal_correction": params["bde_thermal"],
         "redox_adiabatic": params["redox_adiabatic"],
         "temperature_k": settings.get("temperature"),
         "pressure_pa": 101325,
@@ -314,6 +318,19 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
     log(f"진동수 계산{label} 완료 — 허수 진동수 {n_imag}개, "
         f"ZPE {result['zpe_hartree'] * HARTREE2KCAL:.2f} kcal/mol ({time.time() - t0:.1f}s)")
     return result
+
+
+def _atomic_thermo():
+    """단원자 조각의 열보정 — 진동 없음(ZPE=0), 병진 3/2·RT + pV(RT) = 5/2·RT."""
+    R_HARTREE_PER_K = 8.31446261815324 / (HARTREE2KJ * 1000)
+    return lambda temperature: {
+        "zpe_hartree": 0.0,
+        "h_corr_hartree": 2.5 * R_HARTREE_PER_K * temperature,
+        "n_imaginary": 0,
+    }
+
+
+_atomic_thermo_fn = _atomic_thermo()
 
 
 def _frontier_orbitals(mf):
@@ -804,11 +821,19 @@ def run_job(job, update, is_cancelled=lambda: False):
                 bonds = desc_mod.breakable_bonds(smiles)
                 bde_list = []
                 opt_solv = solvent_key if params["opt_in_solvent"] else None
+                # ZPE·열보정은 라디칼마다 진동수 계산이 필요 — 열보정이 켜진 경우에만 수행
+                bde_thermal = (params["bde_thermal"] and params["bde_relax"]
+                               and params["do_thermo"] and thermo_neutral is not None)
+                if bde_thermal:
+                    log("BDE에 ZPE·298 K 열보정 적용 — 라디칼 조각마다 진동수 계산 수행")
                 for bi, (label_b, f1, f2) in enumerate(bonds):
                     try:
                         stage(f"결합 해리에너지 {bi + 1}/{len(bonds)} ({label_b})", 90)
                         e_frozen = 0.0
                         e_relaxed = 0.0
+                        zpe_sum = 0.0
+                        h_sum = 0.0
+                        thermo_ok = bde_thermal
                         for side, fidx in enumerate((f1, f2)):
                             frag_atoms = [atoms[i] for i in fidx]
                             # (1) 모분자 구조를 고정한 수직 조각 에너지
@@ -829,7 +854,22 @@ def run_job(job, update, is_cancelled=lambda: False):
                                              solvent_key, params["scf_tol"]),
                                     f"라디칼 조각 {side + 1} 완화 ({label_b})", log)
                             else:
+                                rel_atoms = frag_atoms
                                 e_relaxed += e_v
+                            # ZPE·열보정: 라디칼 조각의 진동수 계산 (단원자는 병진만)
+                            if thermo_ok:
+                                try:
+                                    if len(rel_atoms) == 1:
+                                        th_f = _atomic_thermo_fn(temperature)
+                                    else:
+                                        th_f = _thermo_correction(
+                                            rel_atoms, params, 0, 2, temperature, log,
+                                            label=f" (라디칼 {side + 1}, {label_b})")
+                                    zpe_sum += th_f["zpe_hartree"]
+                                    h_sum += th_f["h_corr_hartree"]
+                                except Exception as exc:  # noqa: BLE001
+                                    log(f"{label_b} 조각 {side + 1} 열보정 실패: {exc}")
+                                    thermo_ok = False
                         entry = {
                             "bond": label_b,
                             "bde_kj": round((e_relaxed - e_total) * HARTREE2KJ, 1),
@@ -837,19 +877,36 @@ def run_job(job, update, is_cancelled=lambda: False):
                         }
                         entry["relaxation_kj"] = round(
                             entry["bde_frozen_kj"] - entry["bde_kj"], 1)
+                        if thermo_ok and thermo_neutral is not None:
+                            d_zpe = zpe_sum - thermo_neutral["zpe_hartree"]
+                            d_h = h_sum - thermo_neutral["h_corr_hartree"]
+                            entry["bde_zpe_kj"] = round(
+                                (e_relaxed - e_total + d_zpe) * HARTREE2KJ, 1)
+                            entry["bde_298_kj"] = round(
+                                (e_relaxed - e_total + d_h) * HARTREE2KJ, 1)
+                            entry["zpe_correction_kj"] = round(d_zpe * HARTREE2KJ, 1)
                         bde_list.append(entry)
                     except Exception as exc:  # noqa: BLE001 — 개별 결합 실패는 건너뜀
                         log(f"{label_b} 해리에너지 계산 실패: {exc}")
                 if bde_list:
-                    weakest = min(bde_list, key=lambda b: b["bde_kj"])
+                    has_298 = all("bde_298_kj" in b for b in bde_list)
+                    rank_key = "bde_298_kj" if has_298 else "bde_kj"
+                    weakest = min(bde_list, key=lambda b: b[rank_key])
                     descriptors["bde_min_kj"] = weakest["bde_kj"]
+                    if has_298:
+                        descriptors["bde_min_298_kj"] = weakest["bde_298_kj"]
                     descriptors["bde_weakest_bond"] = weakest["bond"]
                     descriptors["bde_all"] = bde_list
                     if params["bde_relax"]:
-                        notes.append(
-                            "결합 해리에너지(BDE)는 균일 분해 후 각 라디칼 조각을 재최적화한 값 "
-                            "(완화 전 고정 구조 값과 완화 에너지도 함께 보고). "
-                            "0 K 전자에너지 차이이며 ZPE·열보정은 미포함")
+                        msg = ("결합 해리에너지(BDE)는 균일 분해 후 각 라디칼 조각을 "
+                               "재최적화한 값 (완화 전 값·완화 에너지도 함께 보고)")
+                        if has_298:
+                            msg += (" · ZPE와 298 K 열보정 포함 값(BDE 298 K)을 함께 제공하며 "
+                                    "문헌 BDE와 직접 비교할 값은 이것 (전자에너지는 고수준 basis, "
+                                    "열보정은 최적화 수준 basis에서 산출)")
+                        else:
+                            msg += " · 0 K 전자에너지 차이이며 ZPE·열보정은 미포함"
+                        notes.append(msg)
                     else:
                         notes.append(
                             "결합 해리에너지(BDE)는 조각 구조를 고정한 근사 — "

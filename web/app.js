@@ -238,6 +238,7 @@ async function submit() {
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
         optimizeInSolvent: $("opt-solvent").value === "true",
         bdeRelaxFragments: $("bde-relax").value === "" ? null : $("bde-relax").value === "true",
+        bdeThermalCorrection: $("bde-thermal").value === "" ? null : $("bde-thermal").value === "true",
         freqScale: $("freq-scale").value ? parseFloat($("freq-scale").value) : null,
       },
     },
@@ -335,7 +336,8 @@ const DESC_LABELS = {
   softness_inv_ev: ["화학적 연성 S", "1/eV"],
   li_binding_kj: ["Li⁺ 결합 에너지", "kJ/mol"],
   dimer_binding_kj: ["이량체 결합 에너지 (바인더–바인더)", "kJ/mol"],
-  bde_min_kj: ["최약 결합 해리에너지 (BDE)", "kJ/mol"],
+  bde_min_kj: ["최약 결합 BDE (0 K 전자에너지)", "kJ/mol"],
+  bde_min_298_kj: ["최약 결합 BDE (298 K, 문헌 비교용)", "kJ/mol"],
   uvvis_lambda_max_nm: ["UV-Vis 최대 흡수 λmax", "nm"],
   uvvis_osc_strength: ["진동자 세기 f", ""],
   uvvis_excitation_ev: ["수직 여기 에너지", "eV"],
@@ -767,13 +769,17 @@ function showResult(job) {
     html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
         결합별 해리에너지 (BDE)</h3>
       <div class="scroll-x"><table class="kv-table">
-        <tr><th>결합</th><td>BDE (완화)</td><td>고정 구조</td><td>완화 에너지</td></tr>
+        <tr><th>결합</th><td>BDE 298 K</td><td>0 K (전자)</td><td>ZPE 보정</td><td>고정 구조</td><td>완화</td></tr>
         ${d.bde_all.map(bx => `<tr><th>${esc(bx.bond)}${bx.bond === d.bde_weakest_bond
           ? ' <span class="badge failed">최약</span>' : ""}</th>
-          <td><b>${bx.bde_kj}</b> kJ/mol</td>
+          <td><b>${bx.bde_298_kj != null ? bx.bde_298_kj + " kJ/mol" : "—"}</b></td>
+          <td>${bx.bde_kj}</td>
+          <td class="muted">${bx.zpe_correction_kj != null ? bx.zpe_correction_kj : "—"}</td>
           <td class="muted">${bx.bde_frozen_kj ?? "—"}</td>
           <td class="muted">${bx.relaxation_kj != null ? "−" + bx.relaxation_kj : "—"}</td></tr>`).join("")}
-      </table></div>`;
+      </table>
+      <p class="muted small" style="margin:4px 0 0">문헌 BDE와 직접 비교할 값은 <b>298 K</b> 열입니다
+        (ZPE + 열운동 + pV 포함). 0 K는 순수 전자에너지 차이입니다.</p></div>`;
   }
   html += `
     <details style="margin-top:14px"><summary class="small muted">계산 조건 전체</summary>
