@@ -108,3 +108,34 @@ def test_run_job_real_scf_minimal():
     assert d["homo_ev"] < 0 and d["gap_ev"] > 0
     assert "solvation_energy_kcal" in d
     assert state["result"]["result_origin"].startswith("SERVER_CALCULATION")
+
+
+def test_breakable_bonds():
+    from server.descriptors import breakable_bonds
+    bonds = breakable_bonds("CCO")
+    labels = [b[0] for b in bonds]
+    assert any("C" in l and "O" in l for l in labels)
+    for _, f1, f2 in bonds:
+        assert set(f1).isdisjoint(f2)
+
+
+def test_counterpoise_ghost_atoms_build():
+    """고스트 원자로 조각을 구성해도 전자 수는 조각만큼만 잡히는지 확인."""
+    from pyscf import gto
+    atoms = [("O", 0.0, 0.0, 0.0), ("H", 0.0, -0.76, 0.59), ("H", 0.0, 0.76, 0.59),
+             ("O", 0.0, 0.0, 3.0), ("H", 0.0, -0.76, 3.6), ("H", 0.0, 0.76, 3.6)]
+    spec = [(sym if i < 3 else f"ghost:{sym}", (x, y, z))
+            for i, (sym, x, y, z) in enumerate(atoms)]
+    mol = gto.M(atom=spec, basis="sto-3g", verbose=0)
+    assert mol.nelectron == 10           # 물 한 분자분
+    assert mol.nao > gto.M(atom=atoms[:3], basis="sto-3g").nao   # basis는 이량체 전체
+
+
+def test_provenance_fields():
+    from server.engine import _provenance, _resolve_params
+    settings = {**presets.DEFAULT_SETTINGS, "expert": dict(presets.DEFAULT_SETTINGS["expert"])}
+    prov = _provenance(_resolve_params(settings), settings, "smd:ec-dmc-11")
+    for key in ["engine", "rdkit", "basis_singlepoint", "scf_conv_tol",
+                "freq_scale_factor", "geometry_optimizer", "solvent_model"]:
+        assert key in prov
+    assert prov["engine"].startswith("PySCF")

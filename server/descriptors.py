@@ -159,6 +159,37 @@ def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=
     }
 
 
+def breakable_bonds(smiles: str, max_bonds: int = 5):
+    """균일 분해(homolysis) 대상 단일 결합 목록 — 고리 밖 무거운 원자 사이 결합.
+
+    각 항목은 (라벨, 조각1 원자 인덱스, 조각2 원자 인덱스). 인덱스는 수소를 붙인
+    (AddHs) 원자 순서를 따르며, 이는 3D 좌표 생성 순서와 동일하다.
+    """
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return []
+    mol = Chem.AddHs(mol)
+    out = []
+    for bond in mol.GetBonds():
+        if bond.GetBondType() != Chem.BondType.SINGLE or bond.IsInRing():
+            continue
+        a, b = bond.GetBeginAtom(), bond.GetEndAtom()
+        if a.GetSymbol() == "H" or b.GetSymbol() == "H":
+            continue
+        emol = Chem.RWMol(mol)
+        emol.RemoveBond(a.GetIdx(), b.GetIdx())
+        frags = Chem.GetMolFrags(emol.GetMol(), asMols=False)
+        if len(frags) != 2:
+            continue  # 고리 아님에도 분리되지 않으면 건너뜀
+        out.append((f"{a.GetSymbol()}{a.GetIdx()}–{b.GetSymbol()}{b.GetIdx()}",
+                    list(frags[0]), list(frags[1])))
+        if len(out) >= max_bonds:
+            break
+    return out
+
+
 def li_cation_site(mol, mep):
     """MEP 최소점(가장 음전하인 부위)에서 바깥으로 Li⁺를 배치할 좌표.
 

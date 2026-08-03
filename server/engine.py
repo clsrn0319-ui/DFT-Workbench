@@ -111,6 +111,7 @@ def _resolve_params(settings):
                     else bool(exp["boltzmannEnsemble"]),
         "freq_scale": (float(exp["freqScale"]) if exp.get("freqScale")
                        else presets.FREQ_SCALE.get(functional, 1.0)),
+        "opt_in_solvent": bool(exp.get("optimizeInSolvent")),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
         "functional": functional,
@@ -147,12 +148,95 @@ def _make_mf(mol, xc, disp, solvent_key, scf_tol):
 
 
 def _run_scf(mf, label, log, dm0=None):
+    """SCF 실행. 미수렴 시 damping·level shift·2차 수렴(SOSCF)으로 단계적 복구를 시도한다."""
     t0 = time.time()
     energy = mf.kernel(dm0) if dm0 is not None else mf.kernel()
     if not mf.converged:
-        raise RuntimeError(f"{label} SCF 미수렴")
+        dm_last = mf.make_rdm1()
+        # 1) 진동 억제: damping + level shift + 사이클 증가
+        log(f"{label} SCF 미수렴 — damping·level shift로 재시도")
+        mf.max_cycle = max(mf.max_cycle, 200)
+        mf.damp = 0.4
+        mf.level_shift = 0.4
+        energy = mf.kernel(dm_last)
+        if not mf.converged:
+            # 2) level shift를 낮춰 해에 접근
+            log(f"{label} 재시도 2 — level shift 완화")
+            mf.damp = 0.1
+            mf.level_shift = 0.1
+            energy = mf.kernel(mf.make_rdm1())
+        if not mf.converged:
+            # 3) 2차 수렴(뉴턴) — 초기 밀도는 직전 결과 사용
+            log(f"{label} 재시도 3 — 2차 수렴(SOSCF)")
+            try:
+                mf_n = mf.newton()
+                mf_n.max_cycle = 100
+                energy = mf_n.kernel(mf.make_rdm1())
+                if mf_n.converged:
+                    mf.converged = True
+                    mf.mo_coeff, mf.mo_energy, mf.mo_occ = (
+                        mf_n.mo_coeff, mf_n.mo_energy, mf_n.mo_occ)
+                    mf.e_tot = energy
+            except Exception as exc:  # noqa: BLE001 — 마지막 복구 시도
+                log(f"{label} SOSCF 실패: {exc}")
+    if not mf.converged:
+        raise RuntimeError(f"{label} SCF 미수렴 — damping·level shift·SOSCF 모두 실패")
     log(f"{label} SCF 수렴 — E = {energy:.6f} Ha ({time.time() - t0:.1f}s)")
     return float(energy)
+
+
+def _counterpoise_energy(all_atoms, keep_slice, basis, charge, mult,
+                         xc, disp, solvent_key, scf_tol, label, log):
+    """조각 에너지를 전체 클러스터 basis(고스트 원자 포함)에서 계산 — BSSE counterpoise 보정."""
+    spec = []
+    for i, (sym, x, y, z) in enumerate(all_atoms):
+        inside = keep_slice[0] <= i < keep_slice[1]
+        spec.append((sym if inside else f"ghost:{sym}", (x, y, z)))
+    mol_g = gto.M(atom=spec, basis=basis, charge=charge, spin=mult - 1,
+                  unit="Angstrom", verbose=0)
+    mf_g = _make_mf(mol_g, xc, disp, solvent_key, scf_tol)
+    return _run_scf(mf_g, label, log)
+
+
+def _provenance(params, settings, solvent_key):
+    """재현성을 위한 계산 환경·설정 전체 기록."""
+    import platform
+    import pyscf
+    import rdkit
+    try:
+        from pyscf.geomopt import geometric_solver  # noqa: F401
+        optimizer = "geomeTRIC"
+    except ImportError:
+        optimizer = "pyberny"
+    return {
+        "engine": f"PySCF {pyscf.__version__}",
+        "rdkit": rdkit.__version__,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "geometry_optimizer": optimizer,
+        "functional": params["functional"],
+        "xc_pyscf": params["xc"],
+        "dispersion": params["disp"] or "없음",
+        "basis_optimization": params["basis_opt"],
+        "basis_singlepoint": params["basis_sp"],
+        "density_fitting": "on (기본 auxbasis)",
+        "scf_conv_tol": params["scf_tol"],
+        "solvent_model": f"SMD({solvent_key})" if solvent_key else "vacuum",
+        "optimized_in_solvent": params["opt_in_solvent"] and solvent_key is not None,
+        "charge": params["charge"],
+        "multiplicity": params["multiplicity"],
+        "n_conformers_searched": params["n_conf"],
+        "n_conformers_dft_ranked": params["n_dft_rank"],
+        "boltzmann_ensemble": params["ensemble"],
+        "thermochemistry": params["do_thermo"],
+        "freq_scale_factor": params["freq_scale"],
+        "nonequilibrium_solvation": params["noneq"],
+        "redox_adiabatic": params["redox_adiabatic"],
+        "temperature_k": settings.get("temperature"),
+        "pressure_pa": 101325,
+        "accuracy_preset": settings.get("accuracy"),
+        "purpose": settings.get("purpose"),
+    }
 
 
 def _freeze_solvent_from(mf_ion, dm_neutral):
@@ -180,10 +264,10 @@ def _mol_to_atoms(mol):
     return [(mol.atom_symbol(i), *coords[i]) for i in range(mol.natm)]
 
 
-def _optimize_state(atoms, params, charge, multiplicity, log, label=""):
-    """기체상 구조 최적화 후 (atoms, 최적화 수준 mf)를 반환."""
+def _optimize_state(atoms, params, charge, multiplicity, log, label="", solvent_key=None):
+    """구조 최적화 후 좌표를 반환. solvent_key가 있으면 용매장(SMD) 안에서 최적화한다."""
     mol = _build_mol(atoms, params["basis_opt"], charge, multiplicity)
-    mf = _make_mf(mol, params["xc"], params["disp"], None, params["scf_tol"])
+    mf = _make_mf(mol, params["xc"], params["disp"], solvent_key, params["scf_tol"])
     mol_opt = _optimize_geometry(mf, log, label)
     return _mol_to_atoms(mol_opt)
 
@@ -214,6 +298,8 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
                              temperature=temperature, pressure=101325)
     g_corr = float(th["G_tot"][0]) - float(e_elec)
     result = {
+        "norm_mode": np.asarray(freq_info["norm_mode"]),
+        "freqs_cm": freqs_real,
         "zpe_hartree": float(th["ZPE"][0]),
         "g_corr_hartree": g_corr,
         "h_corr_hartree": float(th["H_tot"][0]) - float(e_elec),
@@ -330,7 +416,8 @@ def run_job(job, update, is_cancelled=lambda: False):
         def final_singlepoint(at, label):
             """(옵션 최적화 후) 환경 반영 최종 단일점 → 구조·mf·에너지·프런티어·쌍극자."""
             if params["do_opt"]:
-                at = _optimize_state(at, params, params["charge"], params["multiplicity"], log)
+                at = _optimize_state(at, params, params["charge"], params["multiplicity"], log,
+                                     solvent_key=solvent_key if params["opt_in_solvent"] else None)
             mol_ = _build_mol(at, params["basis_sp"], params["charge"], params["multiplicity"])
             mf_ = _make_mf(mol_, params["xc"], params["disp"], solvent_key, params["scf_tol"])
             e_ = _run_scf(mf_, label, log)
@@ -402,7 +489,9 @@ def run_job(job, update, is_cancelled=lambda: False):
         else:
             notes_ensemble = None
         notes = [
-            "구조 최적화는 기체상에서 수행, 용매 효과는 최종 단일점에 SMD로 반영"
+            (("구조 최적화를 SMD 용매장 안에서 수행 (용매 중 구조 완화 반영)"
+              if params["opt_in_solvent"] and solvent_key else
+              "구조 최적화는 기체상에서 수행, 용매 효과는 최종 단일점에 SMD로 반영"))
             if params["do_opt"] else
             f"{geom_info['forcefield']} 역장 구조에서의 DFT 단일점 (사전 스크리닝 수준)",
             "분위기는 기록용 조건 — 명시적 대기 분자 모델은 미포함",
@@ -416,6 +505,50 @@ def run_job(job, update, is_cancelled=lambda: False):
             stage("진동수 계산·열역학 보정", 50)
             thermo_neutral = _thermo_correction(
                 atoms, params, params["charge"], params["multiplicity"], temperature, log)
+
+            # 허수 진동수가 있으면 안장점 — 해당 모드를 따라 흔들어 재최적화
+            n_fix = 0
+            while (thermo_neutral["n_imaginary"] > 0 and params["do_opt"]
+                   and n_fix < 2 and not explicit):
+                n_fix += 1
+                stage(f"안장점 교정 재최적화 {n_fix}/2", 52)
+                freqs = thermo_neutral["freqs_cm"]
+                worst = int(np.argmin(freqs))
+                mode = np.asarray(thermo_neutral["norm_mode"])[worst]
+                log(f"허수 진동수 {freqs[worst]:.0f} cm⁻¹ 검출 — 해당 모드로 변위 후 재최적화")
+                disp_atoms = [(a[0], a[1] + 0.35 * mode[i][0],
+                               a[2] + 0.35 * mode[i][1], a[3] + 0.35 * mode[i][2])
+                              for i, a in enumerate(atoms)]
+                atoms = _optimize_state(disp_atoms, params, params["charge"],
+                                        params["multiplicity"], log, label=" (안장점 교정)")
+                thermo_neutral = _thermo_correction(
+                    atoms, params, params["charge"], params["multiplicity"], temperature, log)
+            if n_fix:
+                # 구조가 바뀌었으므로 최종 단일점·전자 기술자를 다시 계산
+                stage("교정 구조 재계산", 54)
+                mol = _build_mol(atoms, params["basis_sp"], params["charge"],
+                                 params["multiplicity"])
+                mf = _make_mf(mol, params["xc"], params["disp"], solvent_key,
+                              params["scf_tol"])
+                e_total = _run_scf(mf, "최종(교정 구조)", log)
+                homo, lumo = _frontier_orbitals(mf)
+                gap = (lumo - homo) if lumo is not None else None
+                dipole = float(np.linalg.norm(mf.dip_moment(unit="Debye", verbose=0)))
+                _, charges = mf.mulliken_pop(verbose=0)
+                descriptors.update({
+                    "total_energy_hartree": e_total,
+                    "homo_ev": round(homo, 3),
+                    "lumo_ev": round(lumo, 3) if lumo is not None else None,
+                    "gap_ev": round(gap, 3) if gap is not None else None,
+                    "dipole_debye": round(dipole, 3),
+                })
+                try:
+                    density_cloud = desc_mod.density_cloud(mf, mol)
+                except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
+                    density_cloud = None
+                notes.append(
+                    f"허수 진동수가 검출되어 해당 모드로 변위 후 {n_fix}회 재최적화했습니다 "
+                    "(안장점 → 극소점 교정)")
             g_corr = thermo_neutral["g_corr_hartree"]
             descriptors.update({
                 "zpe_kcal": round(thermo_neutral["zpe_hartree"] * HARTREE2KCAL, 2),
@@ -463,17 +596,18 @@ def run_job(job, update, is_cancelled=lambda: False):
             stage("상호작용 에너지 (조각 분해)", 62)
             e_frag_sum = 0.0
             for fi, frag in enumerate(fragments):
-                frag_atoms = atoms[frag["start"]:frag["end"]]
                 fq = params["charge"] if fi == 0 else 0
                 fm = params["multiplicity"] if fi == 0 else 1
-                mol_f = _build_mol(frag_atoms, params["basis_sp"], fq, fm)
-                mf_f = _make_mf(mol_f, params["xc"], params["disp"], solvent_key,
-                                params["scf_tol"])
-                e_frag_sum += _run_scf(mf_f, f"조각 {fi + 1}/{len(fragments)} ({frag['label']})", log)
+                # 전체 클러스터 basis(고스트 포함)에서 조각 에너지 → BSSE 보정
+                e_frag_sum += _counterpoise_energy(
+                    atoms, (frag["start"], frag["end"]), params["basis_sp"], fq, fm,
+                    params["xc"], params["disp"], solvent_key, params["scf_tol"],
+                    f"조각 {fi + 1}/{len(fragments)} ({frag['label']}, CP)", log)
             e_int = (e_total - e_frag_sum) * HARTREE2KCAL
             descriptors["interaction_energy_kcal"] = round(e_int, 2)
             notes.append(
-                "상호작용 에너지: 클러스터 구조 고정 조각 분해(변형·BSSE 보정 미포함) — "
+                "상호작용 에너지: 클러스터 구조 고정 조각 분해 · "
+                "BSSE counterpoise 보정 적용(변형 에너지는 미포함) — "
                 "음수일수록 주변 분자와의 결합이 안정함")
         elif fragments:
             log(f"분자 수 {len(fragments)} > {MAX_INTERACTION_FRAGMENTS} — 상호작용 에너지 분해 생략")
@@ -590,12 +724,16 @@ def run_job(job, update, is_cancelled=lambda: False):
                                    params["charge"] + charge, mult)
                 e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],
                                         solvent_key, params["scf_tol"]), label, log)
-                g_atoms = cl_atoms[frags[1]["start"]:frags[1]["end"]]
-                mol_g = _build_mol(g_atoms, params["basis_sp"], charge, mult)
-                e_g = _run_scf(_make_mf(mol_g, params["xc"], params["disp"],
-                                        solvent_key, params["scf_tol"]),
-                               f"{label} 단독", log)
-                return (e_c - e_total - e_g) * HARTREE2KJ, cl_atoms
+                # BSSE counterpoise: 두 조각 모두 복합체 basis에서 평가
+                e_host_cp = _counterpoise_energy(
+                    cl_atoms, (0, frags[0]["end"]), params["basis_sp"],
+                    params["charge"], params["multiplicity"], params["xc"], params["disp"],
+                    solvent_key, params["scf_tol"], f"{label} 호스트(CP)", log)
+                e_guest_cp = _counterpoise_energy(
+                    cl_atoms, (frags[1]["start"], frags[1]["end"]), params["basis_sp"],
+                    charge, mult, params["xc"], params["disp"],
+                    solvent_key, params["scf_tol"], f"{label} 게스트(CP)", log)
+                return (e_c - e_host_cp - e_guest_cp) * HARTREE2KJ, cl_atoms
 
             stage("MEP · 반응성 지표", 60)
             mep = desc_mod.mep_extremes(mf, mol)
@@ -616,11 +754,17 @@ def run_job(job, update, is_cancelled=lambda: False):
                 e_li_complex = _run_scf(
                     _make_mf(mol_li, params["xc"], params["disp"], solvent_key,
                              params["scf_tol"]), "Li⁺ 착물", log)
-                mol_ion = _build_mol([("Li", 0.0, 0.0, 0.0)], params["basis_sp"], 1, 1)
-                e_li = _run_scf(_make_mf(mol_ion, params["xc"], params["disp"],
-                                         solvent_key, params["scf_tol"]), "Li⁺ 단독", log)
+                n_host = len(atoms)
+                e_host_cp = _counterpoise_energy(
+                    li_atoms, (0, n_host), params["basis_sp"], params["charge"],
+                    params["multiplicity"], params["xc"], params["disp"], solvent_key,
+                    params["scf_tol"], "Li⁺ 착물 호스트(CP)", log)
+                e_li_cp = _counterpoise_energy(
+                    li_atoms, (n_host, n_host + 1), params["basis_sp"], 1, 1,
+                    params["xc"], params["disp"], solvent_key, params["scf_tol"],
+                    "Li⁺ 이온(CP)", log)
                 descriptors["li_binding_kj"] = round(
-                    (e_li_complex - e_total - e_li) * HARTREE2KJ, 1)
+                    (e_li_complex - e_host_cp - e_li_cp) * HARTREE2KJ, 1)
                 fingerprint_structures["li_complex"] = atoms_to_xyz_block(
                     li_atoms, "Li+ 착물")
 
@@ -646,8 +790,38 @@ def run_job(job, update, is_cancelled=lambda: False):
                 if ads:
                     descriptors["surface_adsorption"] = ads
                     notes.append(
+                        "결합·흡착 에너지는 모두 BSSE counterpoise 보정 적용 (변형 에너지 미포함)")
+                    notes.append(
                         "표면 흡착 에너지는 슬랩이 아닌 대용 클러스터 모델 기반 — "
                         "같은 모델끼리의 상대 경향만 유효하고 다른 표면 모델·문헌 절대값과는 비교 금지")
+
+            # 최약 결합 해리에너지 (BDE) — 균일 분해, 조각 구조 고정 근사
+            if closed_shell:
+                bonds = desc_mod.breakable_bonds(smiles)
+                bde_list = []
+                for bi, (label_b, f1, f2) in enumerate(bonds):
+                    try:
+                        stage(f"결합 해리에너지 {bi + 1}/{len(bonds)} ({label_b})", 90)
+                        e_f = 0.0
+                        for fidx in (f1, f2):
+                            frag_atoms = [atoms[i] for i in fidx]
+                            mol_f = _build_mol(frag_atoms, params["basis_sp"], 0, 2)
+                            e_f += _run_scf(
+                                _make_mf(mol_f, params["xc"], params["disp"],
+                                         solvent_key, params["scf_tol"]),
+                                f"라디칼 조각 ({label_b})", log)
+                        bde_list.append({"bond": label_b,
+                                         "bde_kj": round((e_f - e_total) * HARTREE2KJ, 1)})
+                    except Exception as exc:  # noqa: BLE001 — 개별 결합 실패는 건너뜀
+                        log(f"{label_b} 해리에너지 계산 실패: {exc}")
+                if bde_list:
+                    weakest = min(bde_list, key=lambda b: b["bde_kj"])
+                    descriptors["bde_min_kj"] = weakest["bde_kj"]
+                    descriptors["bde_weakest_bond"] = weakest["bond"]
+                    descriptors["bde_all"] = bde_list
+                    notes.append(
+                        "결합 해리에너지(BDE)는 균일 분해 후 조각 구조를 고정한 근사 — "
+                        "조각 완화가 빠져 실제보다 다소 크게 나오며, 결합 간 상대 비교에 사용")
 
             # UV-Vis λmax (TDDFT)
             try:
@@ -686,6 +860,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             "mulliken_charges": [round(float(c), 3) for c in charges],
             "notes": notes,
             "result_origin": "SERVER_CALCULATION(PySCF 실계산)",
+            "provenance": _provenance(params, settings, solvent_key),
             "wall_time_s": round(elapsed, 1),
         }
         update({"status": "PUBLISHED", "progress": 100, "stage": "완료",

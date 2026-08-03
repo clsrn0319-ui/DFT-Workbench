@@ -6,8 +6,12 @@
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+import csv
+import io
+import time
+
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,6 +35,7 @@ class ExpertSettings(BaseModel):
     redoxAdiabatic: Optional[bool] = None
     nonequilibriumSolvation: Optional[bool] = None
     boltzmannEnsemble: Optional[bool] = None
+    optimizeInSolvent: bool = False
     freqScale: Optional[float] = Field(None, gt=0.5, lt=1.5)
     scfTol: float = 1e-8
 
@@ -71,6 +76,7 @@ class CustomMaterial(BaseModel):
 
 
 class JobRequest(BaseModel):
+    compareFunctionals: list[str] = []  # 지정 시 범함수마다 작업을 만들어 비교
     materialIds: list[str] = []
     customMaterials: list[CustomMaterial] = []  # 물질 보관함 등 외부 등록 소재
     customSmiles: Optional[str] = None
@@ -154,12 +160,62 @@ def submit_jobs(req: JobRequest):
     if not targets:
         raise HTTPException(400, "계산할 소재를 선택하거나 SMILES를 입력하세요.")
 
+    functionals = req.compareFunctionals or [settings["expert"]["functional"]]
+    for f in functionals:
+        if f not in presets.FUNCTIONALS:
+            raise HTTPException(400, f"지원하지 않는 범함수: {f}")
+
     jobs = []
     for material in targets:
-        job = store.create_job(material, settings)
-        worker.submit(job["id"])
-        jobs.append(job)
+        for f in functionals:
+            job_settings = {**settings, "expert": {**settings["expert"], "functional": f}}
+            label = dict(material)
+            if len(functionals) > 1:
+                label["name"] = f"{material['name']} · {f}"
+            job = store.create_job(label, job_settings)
+            worker.submit(job["id"])
+            jobs.append(job)
     return {"jobs": jobs}
+
+
+CSV_COLUMNS = [
+    ("job_id", lambda j: j["id"]),
+    ("material", lambda j: j["material"]["name"]),
+    ("smiles", lambda j: j["material"].get("smiles", "")),
+    ("status", lambda j: j["status"]),
+    ("method", lambda j: (j.get("result") or {}).get("conditions", {}).get("method", "")),
+    ("solvent_model", lambda j: (j.get("result") or {}).get("conditions", {}).get("solvent_model", "")),
+    ("temperature_k", lambda j: (j.get("result") or {}).get("conditions", {}).get("temperature_k", "")),
+    ("wall_time_s", lambda j: (j.get("result") or {}).get("wall_time_s", "")),
+]
+
+
+@app.get("/api/export")
+def export_results(format: str = "json"):
+    """PUBLISHED 결과 일괄 내보내기 — 표 형식(csv) 또는 전체 원본(json)."""
+    jobs = [j for j in store.list_jobs() if j["status"] == "PUBLISHED" and j.get("result")]
+    if format == "json":
+        return JSONResponse(
+            content={"exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                     "n_results": len(jobs), "jobs": jobs},
+            headers={"Content-Disposition": 'attachment; filename="rhobench_results.json"'})
+
+    desc_keys = []
+    for j in jobs:
+        for k, v in j["result"]["descriptors"].items():
+            if isinstance(v, (int, float)) and k not in desc_keys:
+                desc_keys.append(k)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([c[0] for c in CSV_COLUMNS] + desc_keys)
+    for j in jobs:
+        d = j["result"]["descriptors"]
+        writer.writerow([c[1](j) for c in CSV_COLUMNS]
+                        + [d.get(k, "") for k in desc_keys])
+    return Response(
+        content="\ufeff" + buf.getvalue(),  # BOM — Excel 한글 깨짐 방지
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="rhobench_results.csv"'})
 
 
 @app.get("/api/jobs")

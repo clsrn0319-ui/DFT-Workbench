@@ -868,6 +868,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
             <option value="true">적용 (동결 용매장)</option>
             <option value="false">평형 용매화 사용</option>
           </select></div>
+        <div class="field"><span class="field-label">구조 최적화 환경</span>
+          <select class="input" id="opt-solvent">
+            <option value="false">기체상에서 최적화 (기본)</option>
+            <option value="true">용매(SMD) 안에서 최적화</option>
+          </select></div>
+        <div class="field"><span class="field-label">범함수 비교 실행</span>
+          <select class="input" id="cmp-functionals" multiple size="3"
+            title="Ctrl/⌘ 클릭으로 여러 개 선택 — 선택한 범함수마다 작업이 생성됩니다"></select></div>
         <div class="field"><span class="field-label">진동수 스케일 인자</span>
           <input class="input" id="freq-scale" type="number" step="0.001" min="0.5" max="1.5"
             placeholder="자동 (범함수별 문헌값)"></div>
@@ -889,7 +897,11 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
   <div class="card">
     <div class="card-head"><h2>작업 큐 / 결과 (실계산)</h2>
-      <span class="muted small">2초마다 자동 갱신 · PUBLISHED의 "결과 보기" 클릭 시 상세</span></div>
+      <div class="toolbar">
+        <a class="btn" href="/api/export?format=csv" download>CSV 내보내기</a>
+        <a class="btn" href="/api/export?format=json" download>JSON 내보내기</a>
+        <span class="muted small">2초마다 자동 갱신</span>
+      </div></div>
     <div id="job-list" class="empty small">작업이 없습니다.</div>
   </div>
 

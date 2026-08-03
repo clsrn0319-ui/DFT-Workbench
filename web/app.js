@@ -133,6 +133,7 @@ async function init() {
   fillSelect("purpose", PRESETS.purposes.map(p => [p, p]), PRESETS.defaults.purpose);
   fillSelect("functional", PRESETS.functionals.map(f => [f, f]), PRESETS.defaults.expert.functional);
   for (const b of PRESETS.basisSets) $("basis").add(new Option(b, b));
+  for (const f of PRESETS.functionals) $("cmp-functionals").add(new Option(f, f));
 
   $("accuracy").onchange = syncAccuracyDesc;
   syncAccuracyDesc();
@@ -204,7 +205,9 @@ async function submit() {
   $("form-error").textContent = "";
   const env = document.querySelector('input[name="env"]:checked')?.value;
   const chosen = [...selected.values()];
+  const cmpF = [...$("cmp-functionals").selectedOptions].map(o => o.value);
   const body = {
+    compareFunctionals: cmpF,
     materialIds: chosen.filter(c => c.dictId).map(c => c.dictId),
     customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name})),
     customSmiles: $("custom-smiles").value.trim() || null,
@@ -233,6 +236,7 @@ async function submit() {
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
         nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
+        optimizeInSolvent: $("opt-solvent").value === "true",
         freqScale: $("freq-scale").value ? parseFloat($("freq-scale").value) : null,
       },
     },
@@ -330,6 +334,7 @@ const DESC_LABELS = {
   softness_inv_ev: ["화학적 연성 S", "1/eV"],
   li_binding_kj: ["Li⁺ 결합 에너지", "kJ/mol"],
   dimer_binding_kj: ["이량체 결합 에너지 (바인더–바인더)", "kJ/mol"],
+  bde_min_kj: ["최약 결합 해리에너지 (BDE)", "kJ/mol"],
   uvvis_lambda_max_nm: ["UV-Vis 최대 흡수 λmax", "nm"],
   uvvis_osc_strength: ["진동자 세기 f", ""],
   uvvis_excitation_ev: ["수직 여기 에너지", "eV"],
@@ -724,7 +729,8 @@ function showResult(job) {
 
   const starKeys = new Set(FP_AXES.map(a => a.key));
   const shown = new Set(["potential_reference", "conformer_populations",
-                         "mep_points", "surface_adsorption"]);
+                         "mep_points", "surface_adsorption", "bde_all",
+                         "bde_weakest_bond"]);
   const ordered = [...FP_AXES.map(a => a.key),
                    ...KV_GROUPS.flatMap(g => g[1]),
                    ...Object.keys(d)];
@@ -752,9 +758,24 @@ function showResult(job) {
   for (const [k, v] of Object.entries(r.conditions)) {
     condRows += `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`;
   }
+  let provRows = "";
+  for (const [k, v] of Object.entries(r.provenance || {})) {
+    provRows += `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`;
+  }
+  if (d.bde_all) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        결합별 해리에너지 (BDE)</h3>
+      <div class="scroll-x"><table class="kv-table">
+        ${d.bde_all.map(bx => `<tr><th>${esc(bx.bond)}${bx.bond === d.bde_weakest_bond
+          ? ' <span class="badge failed">최약</span>' : ""}</th><td>${bx.bde_kj} kJ/mol</td></tr>`).join("")}
+      </table></div>`;
+  }
   html += `
     <details style="margin-top:14px"><summary class="small muted">계산 조건 전체</summary>
       <table class="kv-table" style="margin-top:6px">${condRows}</table></details>
+    ${provRows ? `<details style="margin-top:6px">
+      <summary class="small muted">재현성 정보 (엔진·버전·수렴 설정)</summary>
+      <table class="kv-table" style="margin-top:6px">${provRows}</table></details>` : ""}
     <h3 style="font-size:13px;color:var(--accent);margin-top:14px">주의사항</h3>
     <ul class="log-list">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>
     <details style="margin-top:8px"><summary class="small muted">XYZ 좌표 보기</summary>
