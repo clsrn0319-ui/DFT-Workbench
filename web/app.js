@@ -237,6 +237,7 @@ async function submit() {
         nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
         optimizeInSolvent: $("opt-solvent").value === "true",
+        bdeRelaxFragments: $("bde-relax").value === "" ? null : $("bde-relax").value === "true",
         freqScale: $("freq-scale").value ? parseFloat($("freq-scale").value) : null,
       },
     },
@@ -766,8 +767,12 @@ function showResult(job) {
     html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
         결합별 해리에너지 (BDE)</h3>
       <div class="scroll-x"><table class="kv-table">
+        <tr><th>결합</th><td>BDE (완화)</td><td>고정 구조</td><td>완화 에너지</td></tr>
         ${d.bde_all.map(bx => `<tr><th>${esc(bx.bond)}${bx.bond === d.bde_weakest_bond
-          ? ' <span class="badge failed">최약</span>' : ""}</th><td>${bx.bde_kj} kJ/mol</td></tr>`).join("")}
+          ? ' <span class="badge failed">최약</span>' : ""}</th>
+          <td><b>${bx.bde_kj}</b> kJ/mol</td>
+          <td class="muted">${bx.bde_frozen_kj ?? "—"}</td>
+          <td class="muted">${bx.relaxation_kj != null ? "−" + bx.relaxation_kj : "—"}</td></tr>`).join("")}
       </table></div>`;
   }
   html += `

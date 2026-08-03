@@ -112,6 +112,9 @@ def _resolve_params(settings):
         "freq_scale": (float(exp["freqScale"]) if exp.get("freqScale")
                        else presets.FREQ_SCALE.get(functional, 1.0)),
         "opt_in_solvent": bool(exp.get("optimizeInSolvent")),
+        # BDE 라디칼 조각 재최적화 (기본 활성 — 고정 구조는 BDE를 크게 과대평가)
+        "bde_relax": True if exp.get("bdeRelaxFragments") is None
+                     else bool(exp["bdeRelaxFragments"]),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
         "functional": functional,
@@ -231,6 +234,7 @@ def _provenance(params, settings, solvent_key):
         "thermochemistry": params["do_thermo"],
         "freq_scale_factor": params["freq_scale"],
         "nonequilibrium_solvation": params["noneq"],
+        "bde_fragment_relaxation": params["bde_relax"],
         "redox_adiabatic": params["redox_adiabatic"],
         "temperature_k": settings.get("temperature"),
         "pressure_pa": 101325,
@@ -795,23 +799,45 @@ def run_job(job, update, is_cancelled=lambda: False):
                         "표면 흡착 에너지는 슬랩이 아닌 대용 클러스터 모델 기반 — "
                         "같은 모델끼리의 상대 경향만 유효하고 다른 표면 모델·문헌 절대값과는 비교 금지")
 
-            # 최약 결합 해리에너지 (BDE) — 균일 분해, 조각 구조 고정 근사
+            # 최약 결합 해리에너지 (BDE) — 균일 분해 + 라디칼 조각 재최적화
             if closed_shell:
                 bonds = desc_mod.breakable_bonds(smiles)
                 bde_list = []
+                opt_solv = solvent_key if params["opt_in_solvent"] else None
                 for bi, (label_b, f1, f2) in enumerate(bonds):
                     try:
                         stage(f"결합 해리에너지 {bi + 1}/{len(bonds)} ({label_b})", 90)
-                        e_f = 0.0
-                        for fidx in (f1, f2):
+                        e_frozen = 0.0
+                        e_relaxed = 0.0
+                        for side, fidx in enumerate((f1, f2)):
                             frag_atoms = [atoms[i] for i in fidx]
-                            mol_f = _build_mol(frag_atoms, params["basis_sp"], 0, 2)
-                            e_f += _run_scf(
-                                _make_mf(mol_f, params["xc"], params["disp"],
+                            # (1) 모분자 구조를 고정한 수직 조각 에너지
+                            mol_v = _build_mol(frag_atoms, params["basis_sp"], 0, 2)
+                            e_v = _run_scf(
+                                _make_mf(mol_v, params["xc"], params["disp"],
                                          solvent_key, params["scf_tol"]),
-                                f"라디칼 조각 ({label_b})", log)
-                        bde_list.append({"bond": label_b,
-                                         "bde_kj": round((e_f - e_total) * HARTREE2KJ, 1)})
+                                f"라디칼 조각 {side + 1} 고정 ({label_b})", log)
+                            e_frozen += e_v
+                            # (2) 라디칼 구조 완화 후 조각 에너지 (원자 1개는 완화 불필요)
+                            if params["bde_relax"] and len(frag_atoms) > 1:
+                                rel_atoms = _optimize_state(
+                                    frag_atoms, params, 0, 2, log,
+                                    label=f" (라디칼 {label_b})", solvent_key=opt_solv)
+                                mol_r = _build_mol(rel_atoms, params["basis_sp"], 0, 2)
+                                e_relaxed += _run_scf(
+                                    _make_mf(mol_r, params["xc"], params["disp"],
+                                             solvent_key, params["scf_tol"]),
+                                    f"라디칼 조각 {side + 1} 완화 ({label_b})", log)
+                            else:
+                                e_relaxed += e_v
+                        entry = {
+                            "bond": label_b,
+                            "bde_kj": round((e_relaxed - e_total) * HARTREE2KJ, 1),
+                            "bde_frozen_kj": round((e_frozen - e_total) * HARTREE2KJ, 1),
+                        }
+                        entry["relaxation_kj"] = round(
+                            entry["bde_frozen_kj"] - entry["bde_kj"], 1)
+                        bde_list.append(entry)
                     except Exception as exc:  # noqa: BLE001 — 개별 결합 실패는 건너뜀
                         log(f"{label_b} 해리에너지 계산 실패: {exc}")
                 if bde_list:
@@ -819,9 +845,15 @@ def run_job(job, update, is_cancelled=lambda: False):
                     descriptors["bde_min_kj"] = weakest["bde_kj"]
                     descriptors["bde_weakest_bond"] = weakest["bond"]
                     descriptors["bde_all"] = bde_list
-                    notes.append(
-                        "결합 해리에너지(BDE)는 균일 분해 후 조각 구조를 고정한 근사 — "
-                        "조각 완화가 빠져 실제보다 다소 크게 나오며, 결합 간 상대 비교에 사용")
+                    if params["bde_relax"]:
+                        notes.append(
+                            "결합 해리에너지(BDE)는 균일 분해 후 각 라디칼 조각을 재최적화한 값 "
+                            "(완화 전 고정 구조 값과 완화 에너지도 함께 보고). "
+                            "0 K 전자에너지 차이이며 ZPE·열보정은 미포함")
+                    else:
+                        notes.append(
+                            "결합 해리에너지(BDE)는 조각 구조를 고정한 근사 — "
+                            "라디칼 완화가 빠져 실제보다 크게 나오며 결합 간 상대 비교에 사용")
 
             # UV-Vis λmax (TDDFT)
             try:
