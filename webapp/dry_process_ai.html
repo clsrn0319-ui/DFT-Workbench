@@ -1479,11 +1479,22 @@ function svgTrend(table){
 // ---------- SC-02 ----------
 let BACK_OPTS="";
 const OBJ_MAX=4;
+// 역방향 목표로 선택 가능한 항목 (라벨 고정). "conductivity"는 시트저항의 역수
+// 개념 — readObjectives 에서 sheet_resistance 로 방향을 뒤집어 매핑한다.
+const OBJ_CHOICES=[
+  ["sheet_resistance_ohm_sq","시트저항 (Ω/sq)"],
+  ["conductivity","전기전도도"],
+  ["cell_discharge_retention_pct","Retention (용량 유지율 %)"],
+  ["initial_coulombic_efficiency_pct","ICE (초기 쿨롱효율 %)"],
+  ["initial_discharge_capacity_mah_g","초기 방전용량 (mAh/g)"],
+  ["tensile_strength_mpa","인장강도 (MPa)"],
+];
 function fillTargetSelects(){
-  BACK_OPTS=[...FINAL_COLS.filter(c=>c!=="electrode_thickness_um"),...AUX_COLS,...PERF_COLS]
+  BACK_OPTS=OBJ_CHOICES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  const realOpts=[...FINAL_COLS.filter(c=>c!=="electrode_thickness_um"),...AUX_COLS,...PERF_COLS]
     .map(c=>`<option value="${c}">${COL_KO[c]||c}</option>`).join("");
-  ["i_target","r_target"].forEach(id=>$(id).innerHTML=BACK_OPTS);
-  if(!$("objList").querySelector(".objRow")){addObjRow({dir:"min",w:3});}  // 기본 목표 1개
+  ["i_target","r_target"].forEach(id=>$(id).innerHTML=realOpts);
+  if(!$("objList").querySelector(".objRow")){addObjRow({dir:"min",w:3});}  // 기본 목표 1개(시트저항 min)
 }
 // 목표 행 동적 추가/삭제 (FB-01)
 function addObjRow(preset){
@@ -1513,9 +1524,13 @@ function renumberObj(){
   $("btnAddObj").disabled=rows.length>=OBJ_MAX;
 }
 function readObjectives(){
-  return [...$("objList").querySelectorAll(".objRow")].map(r=>({
-    col:r.querySelector(".b_col").value,dir:r.querySelector(".b_dir").value,
-    w:+r.querySelector(".b_w").value,target:+r.querySelector(".b_t").value})).filter(o=>o.col);
+  return [...$("objList").querySelectorAll(".objRow")].map(r=>{
+    let col=r.querySelector(".b_col").value,dir=r.querySelector(".b_dir").value;
+    const w=+r.querySelector(".b_w").value,target=+r.querySelector(".b_t").value;
+    // 전기전도도 = 시트저항의 역방향 (전도도↑ ⇔ 저항↓)
+    if(col==="conductivity"){col="sheet_resistance_ohm_sq";dir=dir==="max"?"min":dir==="min"?"max":dir;}
+    return {col,dir,w,target};
+  }).filter(o=>o.col);
 }
 // 탐색 제약 (활·도·바 함량 + 합제밀도 + 면적당 용량 상·하한). 빈 칸은 null.
 // pfx: 자연어 섹션은 "nl_", 직접 설정은 "" (각자 독립된 칸).
