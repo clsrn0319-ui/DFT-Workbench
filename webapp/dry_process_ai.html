@@ -257,7 +257,15 @@ svg .axis{stroke:var(--line)}
       <div><label class="f" style="margin:0 0 3px">면적당 용량 (mAh/cm²)</label><input type="number" id="nl_cap" value="5.0" step="0.1" min="0.5"></div>
       <div><label class="f" style="margin:0 0 3px">합제밀도 (g/cc)</label><input type="number" id="nl_den" value="3.2" step="0.05" min="1"></div>
     </div>
-    <button class="act" id="btnNL">해석 후 탐색 실행</button>
+    <label class="f" style="margin-top:10px">탐색 제약 (선택 — 비우면 실측 범위)</label>
+    <div class="mini" style="display:flex;flex-direction:column;gap:5px">
+      <div class="conRow"><span>활물질 AM (wt%)</span><input type="number" id="nl_c_am_lo" placeholder="하한" step="0.1"><span>~</span><input type="number" id="nl_c_am_hi" placeholder="상한" step="0.1"></div>
+      <div class="conRow"><span>도전재 SC (wt%)</span><input type="number" id="nl_c_sc_lo" placeholder="하한" step="0.1"><span>~</span><input type="number" id="nl_c_sc_hi" placeholder="상한" step="0.1"></div>
+      <div class="conRow"><span>바인더 PTFE (wt%)</span><input type="number" id="nl_c_pt_lo" placeholder="하한" step="0.1"><span>~</span><input type="number" id="nl_c_pt_hi" placeholder="상한" step="0.1"></div>
+      <div class="conRow"><span>합제밀도 (g/cc)</span><input type="number" id="nl_c_den_lo" placeholder="하한" step="0.05"><span>~</span><input type="number" id="nl_c_den_hi" placeholder="상한" step="0.05"></div>
+      <div class="conRow"><span>면적당 용량 (mAh/cm²)</span><input type="number" id="nl_c_cap_lo" placeholder="하한" step="0.1"><span>~</span><input type="number" id="nl_c_cap_hi" placeholder="상한" step="0.1"></div>
+    </div>
+    <button class="act" id="btnNL" style="margin-top:10px">해석 후 탐색 실행</button>
     <div class="mini" id="nlNotes" style="margin-top:6px"></div>
     <h2 style="margin-top:16px">목표 직접 설정 <span class="fid">FB-01</span></h2>
     <div id="objList"></div>
@@ -1510,8 +1518,10 @@ function readObjectives(){
     w:+r.querySelector(".b_w").value,target:+r.querySelector(".b_t").value})).filter(o=>o.col);
 }
 // 탐색 제약 (활·도·바 함량 + 합제밀도 + 면적당 용량 상·하한). 빈 칸은 null.
-function readConstraints(){
-  const g=id=>{const v=$(id).value.trim();return v===""?null:+v;};
+// pfx: 자연어 섹션은 "nl_", 직접 설정은 "" (각자 독립된 칸).
+function readConstraints(pfx){
+  pfx=pfx||"";
+  const g=id=>{const el=$(pfx+id);if(!el)return null;const v=el.value.trim();return v===""?null:+v;};
   return {am:[g("c_am_lo"),g("c_am_hi")],c:[g("c_sc_lo"),g("c_sc_hi")],b:[g("c_pt_lo"),g("c_pt_hi")],
     den:[g("c_den_lo"),g("c_den_hi")],cap:[g("c_cap_lo"),g("c_cap_hi")]};
 }
@@ -1587,7 +1597,7 @@ $("btnNL").addEventListener("click",()=>{
   $("nlNotes").innerHTML=g.notes.map(n=>`· ${esc(n)}`).join("<br>");
   $("b_cap").value=targetCap;
   try{
-    const r=runBackward(objectives,targetCap,+$("b_n").value,11,readConstraints());
+    const r=runBackward(objectives,targetCap,+$("b_n").value,11,readConstraints("nl_"));
     const advice=adviseDensity(r.cands,r.objs,targetDen);
     st_renderBackward(r,g,advice);
   }catch(e){$("bwResult").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
