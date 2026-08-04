@@ -1612,7 +1612,7 @@ function st_renderBackward(response,parsedGoal,advice){
     box.innerHTML=`
       ${advHtml}
       ${r.excluded.map(e=>`<div class="note">⚠️ ${esc(e)}</div>`).join("")}
-      <h2>Pareto front <span class="fid">FB-05 — 유효 해 ${r.cands.length}건 / front ${r.cands.filter(c=>c.pareto).length}건</span></h2>
+      <h2><span id="paretoHelp" style="cursor:help;border-bottom:1px dotted var(--ink-3)">Pareto front</span> <span class="help" id="paretoHelp2">ⓘ</span> <span class="fid">FB-05 — 유효 해 ${r.cands.length}건 / front ${r.cands.filter(c=>c.pareto).length}건</span></h2>
       ${svgPareto(r)}
       <h2 style="margin-top:14px">추천 레시피 상위 5건 <span class="fid">FB-06</span></h2>
       <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}${r.objs[0].col===SR_COL?" (×10⁴)":""}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
@@ -1620,6 +1620,16 @@ function st_renderBackward(response,parsedGoal,advice){
         <td class="t"><span class="badge ${gB[t.grade]} almBadge" data-i="${i}" style="cursor:help">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span></td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
       <div class="note">알람 배지에 마우스를 올리면 등급 의미와 위반 항목이 표시됩니다. 각 후보의 갭 스케줄·단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 확인됩니다 (FV 재검증 포함).</div>
       <div class="mini" style="margin-top:8px">${parsedGoal?"자연어 해석 목표 적용 · ":""}모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot</div>`;
+    // Pareto front 제목 hover — 간략 설명
+    const pHelp=`<div style="font-weight:700;margin-bottom:3px">파레토 프론트란?</div>`+
+      `<div style="color:var(--ink-2)">두 목표가 상충할 때 <b>더 나은 대안이 없는</b> 최적 후보(<span style="color:var(--bad)">빨간 점</span>)들의 집합입니다.<br>`+
+      `· 가로 왼쪽 = 목적1 우수 / 세로 위 = 목적2 우수 → <b>왼쪽 위</b>로 갈수록 좋음<br>`+
+      `· <span style="color:var(--ink-3)">회색 점</span> = 다른 후보에 모든 면에서 밀려 탈락<br>`+
+      `정답이 하나가 아니라, 취향(무엇을 더 중시할지)에 따라 고르는 최적 집합입니다.</div>`;
+    ["paretoHelp","paretoHelp2"].forEach(id=>{const el=$(id);if(!el)return;
+      el.addEventListener("mouseover",e=>showHelp(e,pHelp));
+      el.addEventListener("mousemove",moveHelp);
+      el.addEventListener("mouseout",hideHelp);});
     // 알람 배지 hover — 등급 설명 + 위반 항목·근거
     box.querySelectorAll(".almBadge").forEach(el=>{
       const t=r.top[+el.dataset.i],html=alarmTip(t);
