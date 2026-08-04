@@ -1152,13 +1152,15 @@ const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",
 // 그래프 hover 툴팁 — 커서 옆에 면적당 용량·합제밀도를 함께 즉시 표시.
 // 배경은 반투명(frosted)으로 뒤 내용을 가리지 않게 한다.
 const chartTip=document.createElement("div");
-chartTip.style.cssText="position:fixed;z-index:9999;display:none;padding:5px 9px;border-radius:6px;background:rgba(140,140,150,.14);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);border:1px solid rgba(140,140,150,.32);font:12px/1.5 var(--mono);color:var(--ink);pointer-events:none;white-space:nowrap";
+chartTip.style.cssText="position:fixed;z-index:9999;display:none;padding:2px 4px;background:transparent;font:12px/1.5 var(--mono);color:var(--ink);pointer-events:none;white-space:nowrap";
 document.body.appendChild(chartTip);
+// 배경이 완전 투명이므로 글자 후광으로만 가독성 확보 (밝은·어두운 배경 모두)
+const tipHalo="text-shadow:0 0 3px var(--card),0 0 2px var(--card),0 0 6px var(--card)";
 window.moveTip=e=>{chartTip.style.left=(e.clientX+14)+"px";chartTip.style.top=(e.clientY-8)+"px";};
 window.showTip=(e,stage,q,d)=>{
-  chartTip.innerHTML=`<div style="font-weight:700;margin-bottom:2px">${stage}</div>`+
-    `<div style="color:var(--accent);text-shadow:0 0 2px var(--card)">면적당 용량 ${q} mAh/cm²</div>`+
-    `<div style="color:var(--warn);text-shadow:0 0 2px var(--card)">합제밀도 ${d} g/cc</div>`;
+  chartTip.innerHTML=`<div style="font-weight:700;margin-bottom:2px;${tipHalo}">${stage}</div>`+
+    `<div style="color:var(--accent);${tipHalo}">면적당 용량 ${q} mAh/cm²</div>`+
+    `<div style="color:var(--warn);${tipHalo}">합제밀도 ${d} g/cc</div>`;
   chartTip.style.display="block";window.moveTip(e);};
 window.hideTip=()=>{chartTip.style.display="none";};
 
