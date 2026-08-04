@@ -60,7 +60,8 @@ section.tab.on{display:block}
 label.f{display:block;font-size:12px;color:var(--ink-2);margin:8px 0 3px;font-weight:600}
 input[type=number],input[type=text],select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--inset);color:var(--ink);font:inherit;font-family:var(--mono);font-size:13px}
 input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
-.row{display:flex;gap:8px}
+.row{display:flex;gap:8px;align-items:flex-end}
+.row>div{flex:1;min-width:0}
 .row>*{flex:1;min-width:0}
 button.act{appearance:none;border:0;border-radius:7px;background:var(--accent);color:#fff;font:inherit;font-weight:700;padding:9px 16px;cursor:pointer;width:100%;margin-top:12px}
 :root[data-theme="dark"] button.act,@media (prefers-color-scheme:dark){button.act{color:#0E1513}}
