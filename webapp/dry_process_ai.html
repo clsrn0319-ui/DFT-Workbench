@@ -1053,7 +1053,8 @@ function runBackward(objectives,capT,nSamples,seed,con){
     const objVals=objs.map(sp=>sp.dir==="min"?o[sp.col]:sp.dir==="max"?-o[sp.col]:Math.abs(o[sp.col]-sp.target));
     const score=objs.reduce((a,sp,j)=>a+sp.w*objVals[j],0);
     const val=validateSpec(am,b,c,cap_i,den,cp);
-    cands.push({am,b,c,den,kt,cap:cap_i,gaps:sch.sched,pred:o,objVals,score,grade:val.grade});
+    cands.push({am,b,c,den,kt,cap:cap_i,gaps:sch.sched,pred:o,objVals,score,grade:val.grade,
+      alarmItems:val.violations.map(x=>({item:x.item,basis:x.basis,sev:x.sev}))});
   }
   // 비지배 정렬 (FB-05)
   for(const x of cands){x.pareto=!cands.some(y=>y!==x&&y.objVals.every((v,j)=>v<=x.objVals[j])&&y.objVals.some((v,j)=>v<x.objVals[j]));}
@@ -1616,7 +1617,7 @@ function st_renderBackward(response,parsedGoal,advice){
       <h2 style="margin-top:14px">추천 레시피 상위 5건 <span class="fid">FB-06</span></h2>
       <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}${r.objs[0].col===SR_COL?" (×10⁴)":""}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
       <tbody>${r.top.map((t,i)=>`<tr><td>${i+1}</td><td>${fmt(t.am,2)} / ${fmt(t.b,2)} / ${fmt(t.c,2)}</td><td>${fmt(t.den,2)}</td><td>${fmt(dispV(r.objs[0].col,t.pred[r.objs[0].col]),3)}</td>
-        <td class="t"><span class="badge ${gB[t.grade]}">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span></td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
+        <td class="t" style="white-space:normal"><span class="badge ${gB[t.grade]}">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span>${(t.alarmItems&&t.alarmItems.length)?`<div class="mini" style="margin-top:3px;color:var(--ink-2)">${t.alarmItems.map(a=>`<span title="${esc(a.basis)}">⚠ ${esc(a.item)}${a.sev==="critical"?" (치명)":""}</span>`).join("<br>")}</div>`:""}</td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
       <div class="note">각 후보의 갭 스케줄과 단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 동일 형식으로 확인됩니다 (FV 재검증 포함).</div>
       <div class="mini" style="margin-top:8px">${parsedGoal?"자연어 해석 목표 적용 · ":""}모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot</div>`;
   }
