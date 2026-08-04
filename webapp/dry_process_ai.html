@@ -1617,10 +1617,30 @@ function st_renderBackward(response,parsedGoal,advice){
       <h2 style="margin-top:14px">추천 레시피 상위 5건 <span class="fid">FB-06</span></h2>
       <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}${r.objs[0].col===SR_COL?" (×10⁴)":""}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
       <tbody>${r.top.map((t,i)=>`<tr><td>${i+1}</td><td>${fmt(t.am,2)} / ${fmt(t.b,2)} / ${fmt(t.c,2)}</td><td>${fmt(t.den,2)}</td><td>${fmt(dispV(r.objs[0].col,t.pred[r.objs[0].col]),3)}</td>
-        <td class="t" style="white-space:normal"><span class="badge ${gB[t.grade]}">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span>${(t.alarmItems&&t.alarmItems.length)?`<div class="mini" style="margin-top:3px;color:var(--ink-2)">${t.alarmItems.map(a=>`<span title="${esc(a.basis)}">⚠ ${esc(a.item)}${a.sev==="critical"?" (치명)":""}</span>`).join("<br>")}</div>`:""}</td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
-      <div class="note">각 후보의 갭 스케줄과 단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 동일 형식으로 확인됩니다 (FV 재검증 포함).</div>
+        <td class="t"><span class="badge ${gB[t.grade]} almBadge" data-i="${i}" style="cursor:help">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span></td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
+      <div class="note">알람 배지에 마우스를 올리면 등급 의미와 위반 항목이 표시됩니다. 각 후보의 갭 스케줄·단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 확인됩니다 (FV 재검증 포함).</div>
       <div class="mini" style="margin-top:8px">${parsedGoal?"자연어 해석 목표 적용 · ":""}모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot</div>`;
+    // 알람 배지 hover — 등급 설명 + 위반 항목·근거
+    box.querySelectorAll(".almBadge").forEach(el=>{
+      const t=r.top[+el.dataset.i],html=alarmTip(t);
+      el.addEventListener("mouseover",e=>showHelp(e,html));
+      el.addEventListener("mousemove",moveHelp);
+      el.addEventListener("mouseout",hideHelp);
+    });
   }
+}
+// 알람 등급 설명 + 위반 항목 툴팁
+function alarmTip(t){
+  const head={info:"🟢 정보 — 전 항목 통과",caution:"🟡 주의 — 경미한 우려",warning:"🔴 경고 — 심각/복수 우려"}[t.grade];
+  const desc={info:"물리·이력 검사를 모두 통과한 실현 가능한 스펙입니다.",
+    caution:"사소한 우려 1건이 있습니다 — 실물로 검증하며 진행하세요.",
+    warning:"치명적 위반 또는 위반 2건 이상 — 그대로 만들기 어려우니 스펙을 완화하세요."}[t.grade];
+  let h=`<div style="font-weight:700;margin-bottom:3px">${head}</div><div style="color:var(--ink-2)">${desc}</div>`;
+  if(t.alarmItems&&t.alarmItems.length){
+    h+=`<div style="font-weight:600;margin:5px 0 2px">위반 항목</div>`+
+      t.alarmItems.map(a=>`<div style="color:var(--ink-2);margin-bottom:2px">• <b>${esc(a.item)}</b>${a.sev==="critical"?' <span style="color:var(--bad)">(치명)</span>':""}<br><span style="font-size:11px">${esc(a.basis)}</span></div>`).join("");
+  }else h+=`<div style="color:var(--ink-3);margin-top:4px">위반 항목 없음</div>`;
+  return h;
 }
 $("btnBackward").addEventListener("click",()=>{
   try{
