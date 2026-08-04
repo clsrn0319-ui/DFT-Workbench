@@ -113,8 +113,11 @@ svg .axis{stroke:var(--line)}
 .objDel:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
 .objDel:disabled{opacity:.35;cursor:default}
 .collapseHead{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.collapseBtn{flex:0 0 auto;width:24px;height:22px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:5px;font-size:14px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.headBtns{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.collapseBtn{width:26px;height:24px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:5px;font-size:14px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .collapseBtn:hover{border-color:var(--accent);color:var(--accent)}
+.resetMini{height:24px;padding:0 9px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:5px;font:inherit;font-size:11.5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+.resetMini:hover{border-color:var(--accent);color:var(--accent)}
 .resetBtn{font-size:11.5px;padding:3px 9px}
 .conRow{display:flex;align-items:center;gap:6px}
 .conRow>span:first-child{flex:0 0 116px;color:var(--ink-2)}
@@ -255,8 +258,8 @@ svg .axis{stroke:var(--line)}
 <section class="tab" id="sc2">
 <div class="grid g2">
   <div class="card">
-    <button type="button" class="ghost resetBtn" id="btnResetBw" style="float:right">↺ 초기화</button>
-    <h2 class="collapseHead"><span>자연어 목표 입력 <span class="fid">FB-01 확장 · 오프라인 규칙 해석</span></span><button type="button" class="collapseBtn" data-target="secNL" aria-expanded="true" title="접기/펼치기">－</button></h2>
+    <h2 class="collapseHead"><span>자연어 목표 입력 <span class="fid">FB-01 확장 · 오프라인 규칙 해석</span></span>
+      <span class="headBtns"><button type="button" class="resetMini" id="btnResetNL">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secNL" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
     <div id="secNL">
     <input type="text" id="nl_goal" placeholder="의도 입력 — 예: 전기전도도 개선 전극" style="width:100%">
     <label class="f" style="margin-top:8px">Target 전극 스펙</label>
@@ -275,7 +278,8 @@ svg .axis{stroke:var(--line)}
     <button class="act" id="btnNL" style="margin-top:10px">해석 후 탐색 실행</button>
     <div class="mini" id="nlNotes" style="margin-top:6px"></div>
     </div>
-    <h2 class="collapseHead" style="margin-top:16px"><span>목표 직접 설정 <span class="fid">FB-01</span></span><button type="button" class="collapseBtn" data-target="secDirect" aria-expanded="true" title="접기/펼치기">－</button></h2>
+    <h2 class="collapseHead" style="margin-top:16px"><span>목표 직접 설정 <span class="fid">FB-01</span></span>
+      <span class="headBtns"><button type="button" class="resetMini" id="btnResetDirect">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secDirect" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
     <div id="secDirect">
     <div id="objList"></div>
     <button type="button" class="ghost" id="btnAddObj" style="margin-top:2px">＋ 목표 추가</button>
@@ -1564,14 +1568,18 @@ $("btnResetFw").addEventListener("click",()=>{
   $("f_am").dispatchEvent(new Event("input"));  // 조성합·파생값·심플렉스 갱신
   $("fwResult").innerHTML=`<div class="empty">조성과 목표를 입력하고 「예측 실행」.</div>`;$("fwAlarm").innerHTML="";
 });
-// 역방향 입력 초기화 (자연어 + 직접 설정 + 제약 전부)
-$("btnResetBw").addEventListener("click",()=>{
+// 자연어 목표 입력만 독립 초기화
+$("btnResetNL").addEventListener("click",()=>{
   $("nl_goal").value="";$("nl_cap").value="5.0";$("nl_den").value="3.2";$("nlNotes").innerHTML="";
-  ["nl_c_am_lo","nl_c_am_hi","nl_c_sc_lo","nl_c_sc_hi","nl_c_pt_lo","nl_c_pt_hi","nl_c_den_lo","nl_c_den_hi","nl_c_cap_lo","nl_c_cap_hi",
-   "c_am_lo","c_am_hi","c_sc_lo","c_sc_hi","c_pt_lo","c_pt_hi","c_den_lo","c_den_hi","c_cap_lo","c_cap_hi"].forEach(id=>$(id).value="");
+  ["nl_c_am_lo","nl_c_am_hi","nl_c_sc_lo","nl_c_sc_hi","nl_c_pt_lo","nl_c_pt_hi","nl_c_den_lo","nl_c_den_hi","nl_c_cap_lo","nl_c_cap_hi"]
+    .forEach(id=>$(id).value="");
+});
+// 목표 직접 설정만 독립 초기화
+$("btnResetDirect").addEventListener("click",()=>{
+  ["c_am_lo","c_am_hi","c_sc_lo","c_sc_hi","c_pt_lo","c_pt_hi","c_den_lo","c_den_hi","c_cap_lo","c_cap_hi"]
+    .forEach(id=>$(id).value="");
   $("b_cap").value="5.0";$("b_n").value=150;
   $("objList").innerHTML="";addObjRow({dir:"min",w:3});
-  $("bwResult").innerHTML=`<div class="empty">목표를 설정하고 탐색을 실행하세요.</div>`;
 });
 function st_renderBackward(response,parsedGoal,advice){
   {
