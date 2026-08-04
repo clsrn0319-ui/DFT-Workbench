@@ -1561,25 +1561,27 @@ document.querySelectorAll(".collapseBtn").forEach(b=>b.addEventListener("click",
   sec.style.display=open?"none":"";
   b.textContent=open?"＋":"－";b.setAttribute("aria-expanded",open?"false":"true");
 }));
-// 순방향 입력 초기화
+const bwEmpty=`<div class="empty">목표를 설정하고 탐색을 실행하세요.</div>`;
+// 순방향 입력 초기화 — 조성·목표값을 빈칸으로 비운다
 $("btnResetFw").addEventListener("click",()=>{
-  $("f_am").value=96;$("f_b").value=2;$("f_c").value=2;$("f_cap").value="5.0";$("f_den").value="3.2";
-  $("f_foil").value=16;$("f_side").value="single";$("f_mc").value=30;
-  $("f_am").dispatchEvent(new Event("input"));  // 조성합·파생값·심플렉스 갱신
+  ["f_am","f_b","f_c","f_cap","f_den"].forEach(id=>$(id).value="");
+  $("compSum").innerHTML="";$("derived").textContent="";
   $("fwResult").innerHTML=`<div class="empty">조성과 목표를 입력하고 「예측 실행」.</div>`;$("fwAlarm").innerHTML="";
+  drawTernary();
 });
-// 자연어 목표 입력만 독립 초기화
+// 자연어 목표 입력만 독립 초기화 — 전부 빈칸 + 결과 지움
 $("btnResetNL").addEventListener("click",()=>{
-  $("nl_goal").value="";$("nl_cap").value="5.0";$("nl_den").value="3.2";$("nlNotes").innerHTML="";
-  ["nl_c_am_lo","nl_c_am_hi","nl_c_sc_lo","nl_c_sc_hi","nl_c_pt_lo","nl_c_pt_hi","nl_c_den_lo","nl_c_den_hi","nl_c_cap_lo","nl_c_cap_hi"]
+  ["nl_goal","nl_cap","nl_den","nl_c_am_lo","nl_c_am_hi","nl_c_sc_lo","nl_c_sc_hi","nl_c_pt_lo","nl_c_pt_hi","nl_c_den_lo","nl_c_den_hi","nl_c_cap_lo","nl_c_cap_hi"]
     .forEach(id=>$(id).value="");
+  $("nlNotes").innerHTML="";$("bwResult").innerHTML=bwEmpty;
 });
-// 목표 직접 설정만 독립 초기화
+// 목표 직접 설정만 독립 초기화 — 전부 빈칸 + 결과 지움
 $("btnResetDirect").addEventListener("click",()=>{
-  ["c_am_lo","c_am_hi","c_sc_lo","c_sc_hi","c_pt_lo","c_pt_hi","c_den_lo","c_den_hi","c_cap_lo","c_cap_hi"]
+  ["b_cap","c_am_lo","c_am_hi","c_sc_lo","c_sc_hi","c_pt_lo","c_pt_hi","c_den_lo","c_den_hi","c_cap_lo","c_cap_hi"]
     .forEach(id=>$(id).value="");
-  $("b_cap").value="5.0";$("b_n").value=150;
+  $("b_n").value=150;
   $("objList").innerHTML="";addObjRow({dir:"min",w:3});
+  $("bwResult").innerHTML=bwEmpty;
 });
 function st_renderBackward(response,parsedGoal,advice){
   {
