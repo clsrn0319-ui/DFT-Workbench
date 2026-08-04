@@ -47,8 +47,8 @@ if recs:
     for r in recs:
         rows.append({
             "순위": r.rank,
-            "조성 (AM/PTFE/SC)": f"{r.features['active_material_content']:.1f} / "
-                               f"{r.features['binder_content']:.1f} / {r.features['conductive_content']:.1f}",
+            "조성 (AM/PTFE/SC)": f"{r.features['active_material_content']:.2f} / "
+                               f"{r.features['binder_content']:.2f} / {r.features['conductive_content']:.2f}",
             "불확실성": round(r.uncertainty, 3),
             "목표 근접도": round(r.goal_proximity, 3),
             "결합 점수": round(r.combined_score, 3),

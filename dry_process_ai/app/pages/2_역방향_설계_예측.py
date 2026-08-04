@@ -121,7 +121,7 @@ if response is not None:
                 x=[c.objectives[0] for c in result.pareto_front],
                 y=[c.objectives[1] for c in result.pareto_front],
                 mode="markers", marker=dict(size=10, color="crimson"), name="Pareto front",
-                text=[f"AM {c.active_material_wt:.1f} / PTFE {c.binder_wt:.1f} / SC {c.conductive_wt:.1f}"
+                text=[f"AM {c.active_material_wt:.2f} / PTFE {c.binder_wt:.2f} / SC {c.conductive_wt:.2f}"
                       for c in result.pareto_front],
             ))
             fig.update_layout(xaxis_title="목적 1 (작을수록 좋음)", yaxis_title="목적 2 (작을수록 좋음)",
@@ -133,7 +133,7 @@ if response is not None:
         for rank, c in enumerate(result.top, start=1):
             rows.append({
                 "순위": rank,
-                "조성 (AM/PTFE/SC wt%)": f"{c.active_material_wt:.1f} / {c.binder_wt:.1f} / {c.conductive_wt:.1f}",
+                "조성 (AM/PTFE/SC wt%)": f"{c.active_material_wt:.2f} / {c.binder_wt:.2f} / {c.conductive_wt:.2f}",
                 "목표 밀도 (g/cc)": round(c.target_density_gcc, 2),
                 "sheet_resistance": round(c.predictions.get("sheet_resistance_ohm_sq", float("nan")), 3),
                 "알람": ALARM_BADGE[c.alarm_grade],
