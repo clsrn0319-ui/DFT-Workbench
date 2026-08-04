@@ -1760,6 +1760,14 @@ $("btnImportance").addEventListener("click",()=>{
 });
 
 // ---------- SC-04 ----------
+// 탐색 모드에선 목표 변수·목표값이 무시되므로 비활성화 (사용자 혼동 방지)
+function updateRecTargetState(){
+  const off=$("r_mode").value==="exploration";
+  ["r_target","r_tval"].forEach(id=>{const el=$(id);el.disabled=off;el.style.opacity=off?"0.45":"";
+    const lb=el.previousElementSibling;if(lb&&lb.classList.contains("f"))lb.style.opacity=off?"0.45":"";});
+}
+$("r_mode").addEventListener("change",updateRecTargetState);
+updateRecTargetState();
 $("btnRecommend").addEventListener("click",()=>{
   try{
     const recs=runRecommend($("r_mode").value,+$("r_k").value,+$("r_pool").value,$("r_target").value,+$("r_tval").value,5);
