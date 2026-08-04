@@ -1283,6 +1283,9 @@ window.moveHelp=e=>{const pad=14,w=helpTip.offsetWidth,h=helpTip.offsetHeight;
   helpTip.style.left=Math.max(8,x)+"px";helpTip.style.top=Math.max(8,y)+"px";};
 window.showHelp=(e,html)=>{helpTip.innerHTML=html;helpTip.style.display="block";window.moveHelp(e);};
 window.hideHelp=()=>{helpTip.style.display="none";};
+window.HELP_UNC="<b>불확실성</b><br>모델이 그 후보를 얼마나 확신 못 하는가 (풀 내 0~1, 1=가장 불확실). 높을수록 찍었을 때 배울 게 많습니다.";
+window.HELP_PROX="<b>목표 근접</b><br>예측이 목표값에 얼마나 가까운가 (풀 내 0~1, 1=가장 가까움). 활용·균형 모드에서만 계산됩니다.";
+window.HELP_COMB="<b>결합 점수</b><br>불확실성과 목표 근접을 모드 가중치로 합친 최종 점수 (이 값으로 순위 결정). 탐색=불확실성, 활용=목표 근접, 균형=둘의 평균.";
 window.HELP_RK="<b>Top-K</b><br>추천받을 실험 개수입니다. 후보 풀 중 점수 상위 K건을 추천합니다.";
 window.HELP_RPOOL="<b>Pool 크기</b><br>내부에서 만들어 평가하는 후보 개수입니다. 이 풀에서 Top-K 를 골라냅니다. 클수록 좋은 후보를 찾을 확률↑, 계산은 느려집니다.";
 window.HELP_RTARGET="<b>목표 변수</b><br>어떤 물성을 목표로 삼을지입니다. 활용·균형 모드에서만 쓰이고, 순수 탐색 모드에선 무시됩니다.";
@@ -1773,7 +1776,7 @@ $("btnRecommend").addEventListener("click",()=>{
     const recs=runRecommend($("r_mode").value,+$("r_k").value,+$("r_pool").value,$("r_target").value,+$("r_tval").value,5);
     $("recResult").innerHTML=`
       <h2>추천 실험 조건 Top-${recs.length} <span class="fid">FR-03 · FR-05</span></h2>
-      <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>불확실성</th><th>목표 근접</th><th>결합 점수</th><th class="t">추천 사유 — 어떤 불확실성을 해소하는가</th></tr></thead>
+      <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>불확실성<span class="help" onmouseover="showHelp(event,HELP_UNC)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>목표 근접<span class="help" onmouseover="showHelp(event,HELP_PROX)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>결합 점수<span class="help" onmouseover="showHelp(event,HELP_COMB)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th class="t">추천 사유 — 어떤 불확실성을 해소하는가</th></tr></thead>
       <tbody>${recs.map((r,i)=>`<tr><td>${i+1}</td><td>${fmt(r.p.active_material_content,2)} / ${fmt(r.p.binder_content,2)} / ${fmt(r.p.conductive_content,2)}</td>
         <td>${fmt(r.uN,3)}</td><td>${fmt(r.pN,3)}</td><td>${fmt(r.combined,3)}</td>
         <td class="t" style="white-space:normal">${r.worst.map(w=>`${esc((COL_KO[w.c]||w.c).split(" (")[0])} (상대 σ ${w.r.toFixed(2)})`).join(", ")} 해소 — ${$("r_mode").value} 모드</td></tr>`).join("")}</tbody></table></div>
