@@ -283,6 +283,7 @@ svg .axis{stroke:var(--line)}
     <div id="secDirect">
     <div id="objList"></div>
     <button type="button" class="ghost" id="btnAddObj" style="margin-top:2px">＋ 목표 추가</button>
+    <div class="mini" style="color:var(--ink-3);margin-top:4px">기준값: <b>min</b>=이 값 <b>이하</b>만 · <b>max</b>=이 값 <b>이상</b>만 · <b>equal</b>=이 값에 맞춤 · 비우면 순수 최적화 (시트저항은 ×10⁴ 단위)</div>
     <label class="f" style="margin-top:12px">목표 면적당 용량 (mAh/cm²)</label><input type="number" id="b_cap" value="5.0" step="0.1">
     <label class="f" style="margin-top:12px">탐색 제약 (선택 — 비우면 실측 범위)</label>
     <div id="conBox" class="mini" style="display:flex;flex-direction:column;gap:5px">
@@ -1050,7 +1051,15 @@ function runBackward(objectives,capT,nSamples,seed,con){
     for(const [s,v] of Object.entries(sch.sched)){feat["gap_"+s]=v.gap;
       if(v.gapF!=null)feat["gap_front_"+s]=v.gapF;}
     const o=predictOnce(MODEL.net,MODEL.registry,feat,0,null);
-    const objVals=objs.map(sp=>sp.dir==="min"?o[sp.col]:sp.dir==="max"?-o[sp.col]:Math.abs(o[sp.col]-sp.target));
+    // 목표값 기준 필터 — min: 값 ≤ 기준, max: 값 ≥ 기준 (equal 은 거리 최소화). 빈 기준은 무시
+    let meets=true;
+    for(const sp of objs){
+      if(sp.target==null||sp.dir==="equal")continue;
+      if(sp.dir==="min"&&o[sp.col]>sp.target){meets=false;break;}
+      if(sp.dir==="max"&&o[sp.col]<sp.target){meets=false;break;}
+    }
+    if(!meets)continue;
+    const objVals=objs.map(sp=>sp.dir==="min"?o[sp.col]:sp.dir==="max"?-o[sp.col]:Math.abs(o[sp.col]-(sp.target??o[sp.col])));
     const score=objs.reduce((a,sp,j)=>a+sp.w*objVals[j],0);
     const val=validateSpec(am,b,c,cap_i,den,cp);
     cands.push({am,b,c,den,kt,cap:cap_i,gaps:sch.sched,pred:o,objVals,score,grade:val.grade,
@@ -1542,7 +1551,7 @@ function addObjRow(preset){
       <select class="b_col">${BACK_OPTS}</select>
       <select class="b_dir"><option value="min">min</option><option value="max">max</option><option value="equal">equal</option></select>
       <input type="number" class="b_w" value="${preset.w??2}" step="0.5" min="0.1" title="가중치">
-      <input type="number" class="b_t" value="${preset.target??3.2}" step="0.05" title="목표값 — equal 방향에서만 사용">
+      <input type="number" class="b_t" value="${preset.target??''}" step="0.05" placeholder="기준(선택)" title="기준값 — min: 이 값 이하만 / max: 이 값 이상만 / equal: 이 값에 맞춤. 비우면 순수 최적화. 시트저항은 ×10⁴ 단위">
     </div>`;
   $("objList").appendChild(div);
   if(preset.col)div.querySelector(".b_col").value=preset.col;
@@ -1552,16 +1561,19 @@ function addObjRow(preset){
 }
 function renumberObj(){
   const rows=$("objList").querySelectorAll(".objRow");
-  rows.forEach((r,i)=>{r.querySelector(".objTitle").textContent=`목표 ${i+1} — 변수 / 방향 / 가중치 / 목표값(equal 전용)`;
+  rows.forEach((r,i)=>{r.querySelector(".objTitle").textContent=`목표 ${i+1} — 변수 / 방향 / 가중치 / 기준값(min↓ max↑ equal=)`;
     r.querySelector(".objDel").disabled=rows.length<=1;});  // 최소 1개 유지
   $("btnAddObj").disabled=rows.length>=OBJ_MAX;
 }
 function readObjectives(){
   return [...$("objList").querySelectorAll(".objRow")].map(r=>{
     let col=r.querySelector(".b_col").value,dir=r.querySelector(".b_dir").value;
-    const w=+r.querySelector(".b_w").value,target=+r.querySelector(".b_t").value;
+    const w=+r.querySelector(".b_w").value;
+    const raw=r.querySelector(".b_t").value.trim();
+    let target=raw===""?null:+raw;   // 빈칸이면 기준 없음(순수 최적화)
     // 전기전도도 = 시트저항의 역방향 (전도도↑ ⇔ 저항↓)
     if(col==="conductivity"){col="sheet_resistance_ohm_sq";dir=dir==="max"?"min":dir==="min"?"max":dir;}
+    if(col==="sheet_resistance_ohm_sq"&&target!=null)target*=1e4;  // ×10⁴ 표시 입력 → Ω/sq 내부값
     return {col,dir,w,target};
   }).filter(o=>o.col);
 }
