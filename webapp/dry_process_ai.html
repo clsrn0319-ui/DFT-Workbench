@@ -109,6 +109,9 @@ svg .axis{stroke:var(--line)}
 .help:hover{border-color:var(--accent);color:var(--accent)}
 .hzoom{width:170px;max-width:100%;cursor:pointer;accent-color:var(--accent)}
 .vzoom{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;width:22px;height:150px;cursor:pointer;accent-color:var(--accent)}
+.objDel{width:22px;height:20px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:5px;font-size:13px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.objDel:hover:not(:disabled){border-color:var(--bad);color:var(--bad)}
+.objDel:disabled{opacity:.35;cursor:default}
 .legToggle{cursor:pointer;user-select:none;border-radius:4px;padding:1px 3px}
 .legToggle:hover{background:var(--inset)}
 .legToggle.off{opacity:.4;text-decoration:line-through}
@@ -253,21 +256,9 @@ svg .axis{stroke:var(--line)}
     <button class="act" id="btnNL">해석 후 탐색 실행</button>
     <div class="mini" id="nlNotes" style="margin-top:6px"></div>
     <h2 style="margin-top:16px">목표 직접 설정 <span class="fid">FB-01</span></h2>
-    <label class="f">목표 1 — 변수 / 방향 / 가중치 / 목표값(equal 전용)</label>
-    <div class="row">
-      <select id="b_col1"></select>
-      <select id="b_dir1"><option value="min">min</option><option value="max">max</option><option value="equal">equal</option></select>
-      <input type="number" id="b_w1" value="3" step="0.5" min="0.1" title="가중치">
-      <input type="number" id="b_t1" value="3.2" step="0.05" title="목표값 — equal 방향에서만 사용">
-    </div>
-    <label class="f">목표 2 — 변수 / 방향 / 가중치 / 목표값(equal 전용)</label>
-    <div class="row">
-      <select id="b_col2"></select>
-      <select id="b_dir2"><option value="max">max</option><option value="min">min</option><option value="equal">equal</option></select>
-      <input type="number" id="b_w2" value="2" step="0.5" min="0.1" title="가중치">
-      <input type="number" id="b_t2" value="3.2" step="0.05" title="목표값 — equal 방향에서만 사용">
-    </div>
-    <label class="f">목표 면적당 용량 (mAh/cm²)</label><input type="number" id="b_cap" value="5.0" step="0.1">
+    <div id="objList"></div>
+    <button type="button" class="ghost" id="btnAddObj" style="margin-top:2px">＋ 목표 추가</button>
+    <label class="f" style="margin-top:12px">목표 면적당 용량 (mAh/cm²)</label><input type="number" id="b_cap" value="5.0" step="0.1">
     <label class="f">탐색 샘플 수</label><input type="number" id="b_n" value="150" step="10" min="30" max="600">
     <button class="act" id="btnBackward">역방향 탐색 실행</button>
     <div class="note">간헐 측정 변수(인장강도·접착력)는 실측 건수가 임계(10건) 미만이면 제약이 아닌 참고 지표로만 사용됩니다 (FB-07).</div>
@@ -1459,12 +1450,47 @@ function svgTrend(table){
 }
 
 // ---------- SC-02 ----------
+let BACK_OPTS="";
+const OBJ_MAX=4;
 function fillTargetSelects(){
-  const opts=[...FINAL_COLS.filter(c=>c!=="electrode_thickness_um"),...AUX_COLS,...PERF_COLS]
+  BACK_OPTS=[...FINAL_COLS.filter(c=>c!=="electrode_thickness_um"),...AUX_COLS,...PERF_COLS]
     .map(c=>`<option value="${c}">${COL_KO[c]||c}</option>`).join("");
-  ["b_col1","b_col2","i_target","r_target"].forEach(id=>$(id).innerHTML=opts);
-  $("b_col2").value="initial_discharge_capacity_mah_g";
+  ["i_target","r_target"].forEach(id=>$(id).innerHTML=BACK_OPTS);
+  if(!$("objList").querySelector(".objRow")){addObjRow({dir:"min",w:3});}  // 기본 목표 1개
 }
+// 목표 행 동적 추가/삭제 (FB-01)
+function addObjRow(preset){
+  preset=preset||{};
+  if($("objList").querySelectorAll(".objRow").length>=OBJ_MAX)return;
+  const div=document.createElement("div");
+  div.className="objRow";div.style.marginBottom="8px";
+  div.innerHTML=`<label class="f" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span class="objTitle"></span>
+      <button type="button" class="objDel" title="이 목표 삭제">－</button></label>
+    <div class="row">
+      <select class="b_col">${BACK_OPTS}</select>
+      <select class="b_dir"><option value="min">min</option><option value="max">max</option><option value="equal">equal</option></select>
+      <input type="number" class="b_w" value="${preset.w??2}" step="0.5" min="0.1" title="가중치">
+      <input type="number" class="b_t" value="${preset.target??3.2}" step="0.05" title="목표값 — equal 방향에서만 사용">
+    </div>`;
+  $("objList").appendChild(div);
+  if(preset.col)div.querySelector(".b_col").value=preset.col;
+  if(preset.dir)div.querySelector(".b_dir").value=preset.dir;
+  div.querySelector(".objDel").addEventListener("click",()=>{div.remove();renumberObj();});
+  renumberObj();
+}
+function renumberObj(){
+  const rows=$("objList").querySelectorAll(".objRow");
+  rows.forEach((r,i)=>{r.querySelector(".objTitle").textContent=`목표 ${i+1} — 변수 / 방향 / 가중치 / 목표값(equal 전용)`;
+    r.querySelector(".objDel").disabled=rows.length<=1;});  // 최소 1개 유지
+  $("btnAddObj").disabled=rows.length>=OBJ_MAX;
+}
+function readObjectives(){
+  return [...$("objList").querySelectorAll(".objRow")].map(r=>({
+    col:r.querySelector(".b_col").value,dir:r.querySelector(".b_dir").value,
+    w:+r.querySelector(".b_w").value,target:+r.querySelector(".b_t").value})).filter(o=>o.col);
+}
+$("btnAddObj").addEventListener("click",()=>addObjRow({dir:"max",w:2}));
 function st_renderBackward(response,parsedGoal,advice){
   {
     const r=response;
@@ -1487,22 +1513,34 @@ function st_renderBackward(response,parsedGoal,advice){
 }
 $("btnBackward").addEventListener("click",()=>{
   try{
-    const objs=[{col:$("b_col1").value,dir:$("b_dir1").value,w:+$("b_w1").value,target:+$("b_t1").value},
-                {col:$("b_col2").value,dir:$("b_dir2").value,w:+$("b_w2").value,target:+$("b_t2").value}];
+    const objs=readObjectives();
+    if(!objs.length){$("bwResult").innerHTML=`<div class="empty">목표를 1개 이상 추가하세요.</div>`;return;}
     const r=runBackward(objs,+$("b_cap").value,+$("b_n").value,11);
     st_renderBackward(r,null);
   }catch(e){$("bwResult").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
 });
 function svgPareto(r){
+  const nm=i=>esc((COL_KO[r.objs[i].col]||r.objs[i].col).split(" (")[0]);
+  // 목표 1개면 산점도 대신 목표값 기준 1차원 분포로 표시
+  if(r.objs.length<2){
+    const W=620,H=120,pl=40,pr=16,pt=20,pb=34,iw=W-pl-pr;
+    const xs=r.cands.map(c=>c.objVals[0]);const xLo=Math.min(...xs),xHi=Math.max(...xs);
+    const X=v=>pl+iw*(v-xLo)/Math.max(xHi-xLo,1e-12);
+    return `<div style="overflow-x:auto"><svg width="${W}" height="${H}" role="img" aria-label="목표값 분포">
+      <line class="axis" x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}"/>
+      ${r.cands.map(c=>`<circle cx="${X(c.objVals[0]).toFixed(1)}" cy="${(pt+(H-pb-pt)/2).toFixed(1)}" r="${c.pareto?4.5:2.5}" fill="${c.pareto?"var(--bad)":"var(--ink-3)"}" opacity="${c.pareto?0.95:0.4}"/>`).join("")}
+      <text x="${(pl+W-pr)/2}" y="${H-6}" text-anchor="middle">목적 — ${nm(0)} ${r.objs[0].dir} (왼쪽일수록 우수)</text></svg></div>`;
+  }
   const W=620,H=230,pl=56,pr=16,pt=12,pb=34,iw=W-pl-pr,ih=H-pt-pb;
   const xs=r.cands.map(c=>c.objVals[0]),ys=r.cands.map(c=>c.objVals[1]);
   const xLo=Math.min(...xs),xHi=Math.max(...xs),yLo=Math.min(...ys),yHi=Math.max(...ys);
   const X=v=>pl+iw*(v-xLo)/Math.max(xHi-xLo,1e-12),Y=v=>pt+ih*(1-(v-yLo)/Math.max(yHi-yLo,1e-12));
+  const moreNote=r.objs.length>2?`<text x="${W-pr}" y="${pt+10}" text-anchor="end" fill="var(--ink-3)">목표 ${r.objs.length}개 중 1·2번 축 표시</text>`:"";
   return `<div style="overflow-x:auto"><svg width="${W}" height="${H}" role="img" aria-label="Pareto front 산점도">
     <line class="axis" x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}"/><line class="axis" x1="${pl}" y1="${pt}" x2="${pl}" y2="${H-pb}"/>
     ${r.cands.map(c=>`<circle cx="${X(c.objVals[0]).toFixed(1)}" cy="${Y(c.objVals[1]).toFixed(1)}" r="${c.pareto?4.5:2.5}" fill="${c.pareto?"var(--bad)":"var(--ink-3)"}" opacity="${c.pareto?0.95:0.4}"/>`).join("")}
-    <text x="${(pl+W-pr)/2}" y="${H-6}" text-anchor="middle">목적 1 (작을수록 좋음) — ${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])} ${r.objs[0].dir}</text>
-    <text x="12" y="${pt+10}">목적 2 — ${esc((COL_KO[r.objs[1].col]||"").split(" (")[0])} ${r.objs[1].dir}</text></svg></div>`;
+    <text x="${(pl+W-pr)/2}" y="${H-6}" text-anchor="middle">목적 1 (작을수록 좋음) — ${nm(0)} ${r.objs[0].dir}</text>
+    <text x="12" y="${pt+10}">목적 2 — ${nm(1)} ${r.objs[1].dir}</text>${moreNote}</svg></div>`;
 }
 
 $("btnNL").addEventListener("click",()=>{
