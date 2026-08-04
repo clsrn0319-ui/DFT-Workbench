@@ -734,7 +734,7 @@ function mcPredict(net,reg,feat,nSamples,seed){ // MC Dropout — mean/std (FF-0
 }
 
 // ---------- 공정 능력 — 실측 이력에서 동적 산출 (FV-04, 규칙 R6) ----------
-function capability(condC,condB){
+function capability(condC,condB,condCap){
   const meas=DB.lots.filter(l=>l.source==="measured");
   const pool=meas.length?meas:DB.lots;   // 실측 전무 시 전체 이력으로 완화(화면에 병기)
   const cap={maxD:null,minD:null,maxRed:0.55,spring:0.05,minGap:null,binderRange:null,refC:null,
@@ -759,8 +759,16 @@ function capability(condC,condB){
   if(gaps.length)cap.minGap=Math.min(...gaps);
   // 단계 프로파일 — 갭 계획(FF-03)을 실제 공정 경로에 앵커 (FV-04 동적 산출).
   // 실측은 M1 로딩이 최종의 수 배(트리밍·전개)이고 스프링백이 단계별로 크게 다르다.
+  // 프로파일 Lot 을 목표 용량 근방(±35%)으로 좁힌다 — 로딩 배율은 용량에
+  // 따라 다르므로(고용량일수록 M1/L2 배율↓), 목표와 먼 Lot 을 섞으면 밀링
+  // 단계가 왜곡된다. 근방 Lot 이 2건 미만이면 전체로 완화.
+  let profPool=pool;
+  if(condCap!=null){
+    const near2=pool.filter(l=>{const q=l.stages?.L2?.q;return q>0&&Math.abs(q-condCap)/condCap<=0.35;});
+    if(near2.length>=2)profPool=near2;
+  }
   const acc={};STAGES.forEach(s=>acc[s]={lr:[],dr:[],sb:[],fr:[]});
-  for(const l of pool){
+  for(const l of profPool){
     const L2s=l.stages?.L2;if(!L2s||!(L2s.loading>0)||!(L2s.d>0))continue;
     for(const s of STAGES){const st=l.stages?.[s];if(!st)continue;
       if(st.loading>0)acc[s].lr.push(st.loading/L2s.loading);
@@ -976,7 +984,7 @@ let MODELCAP={maxD:null};  // 학습 시점 밀도 이력 (필터용)
 
 // ---------- 순방향 서비스 (FF 전체 조립) ----------
 function runForward(inp){
-  const cp=capability(inp.c,inp.b); MODELCAP=cp;
+  const cp=capability(inp.c,inp.b,inp.cap); MODELCAP=cp;
   const val=validateSpec(inp.am,inp.b,inp.c,inp.cap,inp.den,cp);
   let schedule=null,schedErr=null;
   try{schedule=gapSchedule(inp.am/100,inp.cap,inp.den,cp);}catch(e){schedErr=e.message;}
@@ -988,11 +996,18 @@ function runForward(inp){
     for(const [s,v] of Object.entries(schedule.sched)){feat["gap_"+s]=v.gap;
       if(v.gapF!=null)feat["gap_front_"+s]=v.gapF;}
     const {mean,std}=mcPredict(MODEL.net,MODEL.registry,feat,inp.mc,inp.seed??1);
-    // 용량·로딩은 두께·밀도·조성에 종속 → 물리식 정합화 (R5)
+    // 단계별 두께·밀도·로딩은 실측 단계 프로파일 앵커 계획값을 사용한다.
+    // (소수 실측으로 학습한 모델의 단계 출력은 라미네이팅에서 크게 과소적합 —
+    //  갭 스케줄 계획이 실측 궤적을 재현하고 스프링백 등 물리 제약도 만족)
+    // 용량·로딩은 두께·밀도·조성에 종속 → 물리식으로 정합화 (R5).
     const amF=inp.am/100, table=ACTIVE_STAGES.map(s=>{
-      const t=mean[s+"_t"],d=mean[s+"_d"],loading=phys.loading(t,d);
-      return {s,gap:schedule.sched[s].gap,gapF:schedule.sched[s].gapF??null,t,d,loading,q:phys.arealCap(loading,amF),
+      const sc=schedule.sched[s];
+      const t=sc.t,d=sc.d,loading=phys.loading(t,d);
+      return {s,gap:sc.gap,gapF:sc.gapF??null,t,d,loading,q:phys.arealCap(loading,amF),
         tStd:std[s+"_t"],dStd:std[s+"_d"],total:(s==="L1"||s==="L2")?t+inp.foil:null};});
+    // 최종 물성 두께·밀도는 L2 계획값으로 정합화(시트저항·성능은 모델 예측 유지)
+    const scL2=schedule.sched.L2;
+    if(scL2){mean.electrode_thickness_um=scL2.t;mean.electrode_density_gcc=scL2.d;}
     const sv={};table.forEach(r=>sv[r.s]={t:r.t,d:r.d,q:r.q,loading:r.loading});
     viol=checkStages(sv,Object.fromEntries(table.map(r=>[r.s,r.gap])),cp.maxD!=null?cp.maxD+DENSITY_HEADROOM:null,amF);
     prediction={table,mean,std};
