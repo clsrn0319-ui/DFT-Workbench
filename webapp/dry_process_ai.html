@@ -1555,13 +1555,26 @@ function addObjRow(preset){
       <select class="b_dir"><option value="min">min</option><option value="max">max</option><option value="equal">equal</option></select>
       <input type="number" class="b_w" value="${preset.w??2}" step="0.5" min="0.1" title="가중치">
       <input type="number" class="b_t" value="${preset.target??''}" step="0.05" placeholder="기준(선택)" title="기준값 — min: 이 값 이하만 / max: 이 값 이상만 / equal: 이 값에 맞춤. 비우면 순수 최적화. 시트저항은 ×10⁴ 단위">
-    </div>`;
+    </div>
+    <div class="objDesc mini" style="color:var(--accent-ink);margin-top:2px"></div>`;
   $("objList").appendChild(div);
   if(preset.col)div.querySelector(".b_col").value=preset.col;
   if(preset.dir)div.querySelector(".b_dir").value=preset.dir;
   div.querySelector(".objDel").addEventListener("click",()=>{div.remove();renumberObj();});
+  div.querySelectorAll(".b_col,.b_dir,.b_w,.b_t").forEach(el=>el.addEventListener("input",()=>updateObjDesc(div)));
+  updateObjDesc(div);
   renumberObj();
 }
+// 목표 행의 자연어 설명 (실시간)
+function objDescText(row){
+  const sel=row.querySelector(".b_col"),label=sel.options[sel.selectedIndex].textContent.split(" (")[0];
+  const col=sel.value,dir=row.querySelector(".b_dir").value,raw=row.querySelector(".b_t").value.trim();
+  const unit=col==="sheet_resistance_ohm_sq"?" ×10⁴":"";
+  if(dir==="equal")return raw===""?`${label}을(를) 특정 값에 맞춤 — 기준값을 입력하세요`:`${label}을(를) ${raw}${unit} 에 맞춤`;
+  if(raw==="")return dir==="min"?`${label}을(를) 최대한 낮게 (기준 없음)`:`${label}을(를) 최대한 높게 (기준 없음)`;
+  return dir==="min"?`${label} ${raw}${unit} 이하 전극만 추천`:`${label} ${raw}${unit} 이상 전극만 추천`;
+}
+function updateObjDesc(row){const el=row.querySelector(".objDesc");if(el)el.textContent="→ "+objDescText(row);}
 function renumberObj(){
   const rows=$("objList").querySelectorAll(".objRow");
   rows.forEach((r,i)=>{r.querySelector(".objTitle").textContent=`목표 ${i+1} — 변수 / 방향 / 가중치 / 기준값(min↓ max↑ equal=)`;
