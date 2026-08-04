@@ -107,7 +107,8 @@ svg .axis{stroke:var(--line)}
 .themeBtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .help{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--ink-3);color:var(--ink-3);font-size:10px;font-weight:700;cursor:help;margin-left:5px;vertical-align:middle;font-family:var(--sans)}
 .help:hover{border-color:var(--accent);color:var(--accent)}
-.hzoom{width:180px;max-width:72%;cursor:pointer;accent-color:var(--accent)}
+.hzoom{width:170px;max-width:100%;cursor:pointer;accent-color:var(--accent)}
+.vzoom{-webkit-appearance:slider-vertical;appearance:slider-vertical;writing-mode:vertical-lr;width:22px;height:150px;cursor:pointer;accent-color:var(--accent)}
 .legToggle{cursor:pointer;user-select:none;border-radius:4px;padding:1px 3px}
 .legToggle:hover{background:var(--inset)}
 .legToggle.off{opacity:.4;text-decoration:line-through}
@@ -162,19 +163,33 @@ svg .axis{stroke:var(--line)}
       <div><label class="f">Super C (wt%)</label><input type="number" id="f_c" value="2" step="0.1" min="0.5" max="10"></div>
     </div>
     <div class="mini" id="compSum" style="margin-top:4px"></div>
-    <div class="ternwrap"><svg id="ternary" width="230" height="200" role="img" aria-label="조성 심플렉스"></svg></div>
-    <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-top:6px">
-      <span class="mini" style="color:var(--ink-3)">－</span>
-      <input type="range" id="ternZoom" class="hzoom" min="0" max="15" step="1" value="0" aria-label="확대 슬라이더" title="오른쪽으로 밀면 확대">
-      <span class="mini" style="color:var(--ink-3)">＋</span>
+    <div class="ternwrap" style="align-items:center;gap:6px">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+        <svg id="ternary" width="230" height="200" role="img" aria-label="조성 심플렉스"></svg>
+        <div style="display:flex;align-items:center;gap:6px;justify-content:center">
+          <span class="mini" style="color:var(--ink-3)">◀</span>
+          <input type="range" id="ternPanXSlider" class="hzoom" min="0" max="100" step="1" value="50" aria-label="가로 이동" title="가로(X) 이동">
+          <span class="mini" style="color:var(--ink-3)">▶</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+        <span class="mini" style="color:var(--ink-3)">▲</span>
+        <input type="range" id="ternPanYSlider" class="vzoom" min="0" max="100" step="1" value="50" orient="vertical" aria-label="세로 이동" title="세로(Y) 이동">
+        <span class="mini" style="color:var(--ink-3)">▼</span>
+      </div>
     </div>
-    <div class="mini" style="text-align:center;margin-top:4px;font-family:var(--mono)">확대 범위 <span id="ternRange">NCM811 80–100%</span></div>
+    <div style="display:flex;align-items:center;gap:8px;justify-content:center;margin-top:8px">
+      <span class="mini" style="color:var(--ink-3)">확대 －</span>
+      <input type="range" id="ternZoomSlider" class="hzoom" min="0" max="100" step="1" value="0" aria-label="확대" title="확대">
+      <span class="mini" style="color:var(--ink-3)">＋</span>
+      <span id="ternRange" class="mini" style="font-family:var(--mono);margin-left:4px">확대 1.0×</span>
+    </div>
     <div class="mini" id="ternLegend" style="display:flex;gap:10px;justify-content:center;margin-top:3px">
       <span data-k="measured" class="legToggle"><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="4" fill="var(--warn)"/></svg> 실측(실제 실험)</span>
       <span data-k="generated" class="legToggle"><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="3.5" fill="var(--ink-3)" opacity="0.5"/></svg> 생성(더미)</span>
       <span data-k="input" class="legToggle"><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="4" fill="var(--accent)"/></svg> 현재 입력</span>
     </div>
-    <div class="mini" style="text-align:center;color:var(--ink-3);margin-top:2px">막대를 오른쪽으로 밀거나 삼각형 위에서 휠을 굴리면 확대·축소돼요 · 범례를 클릭해 켜고 끌 수 있어요</div>
+    <div class="mini" style="text-align:center;color:var(--ink-3);margin-top:2px">확대 막대(또는 휠)로 키운 뒤, 가로(◀▶)·세로(▲▼) 막대로 상하좌우 이동 · 범례를 클릭해 켜고 끌 수 있어요</div>
     <div class="row">
       <div><label class="f">목표 면적당 용량 (mAh/cm²)</label><input type="number" id="f_cap" value="5.0" step="0.1" min="0.5"></div>
       <div><label class="f">목표 합제밀도 (g/cc)</label><input type="number" id="f_den" value="3.2" step="0.05" min="1"></div>
@@ -1255,21 +1270,23 @@ function renderVersions(){
 }
 
 // 심플렉스 (확대 영역: AM 80~100)
-// 심플렉스 기본 표시 범위(꼭짓점 최대 wt%), 돋보기·범례 On/Off 상태
-let ternSpan=20;                // 심플렉스 확대 배율(꼭짓점 최대 wt%) — 휠로 5~20 조절
+// 심플렉스 확대/이동 상태 — 확대(휠) + X·Y 이동(가로·세로 막대)
+const TERN_W=230,TERN_H=200,TERN_SPAN=20;  // 기본 뷰: NCM811 80~100 삼각형(고정)
+let ternZoom=1;                 // 1(전체)~4(확대)
+let ternPanX=0.5,ternPanY=0.5;  // 0~1 막대 위치 (0.5=중앙)
 const ternShow={measured:true,generated:true,input:true};
 function drawTernary(){
-  const svg=$("ternary");const W=230,H=200,pad=16;
+  const svg=$("ternary");const W=TERN_W,H=TERN_H,pad=16;
   const A=[W/2,pad],B=[pad,H-pad],C=[W-pad,H-pad]; // A=AM100, B=PTFE, C=SC
-  const floor=100-ternSpan;  // 확대: AM 하한을 올려 고함량 구간을 확대 (span=꼭짓점 최대 wt%)
-  const toXY=(am,b,c)=>{const a2=(am-floor)/ternSpan,b2=b/ternSpan,c2=c/ternSpan,s=a2+b2+c2;
+  const floor=100-TERN_SPAN;  // 삼각형 자체는 고정 — 확대·이동은 그룹 transform 으로 처리
+  const toXY=(am,b,c)=>{const a2=(am-floor)/TERN_SPAN,b2=b/TERN_SPAN,c2=c/TERN_SPAN,s=a2+b2+c2;
     return [(A[0]*a2+B[0]*b2+C[0]*c2)/s,(A[1]*a2+B[1]*b2+C[1]*c2)/s];};
   // 실측(실제 실험)은 주황·크게, 생성(더미)은 회색·작게 구분. 실측을 위에
   // 그려 같은 조성에 겹칠 때 실측 툴팁이 우선 뜨게 한다.
   // 범례 On/Off(ternShow) 및 확대 창 밖(am<floor) 점은 제외한다.
   let genPts="",measPts="",genHits="",measHits="";
   DB.lots.forEach((l,i)=>{
-    if(l.comp.am<floor||l.comp.b>ternSpan||l.comp.c>ternSpan)return; // 확대 창 밖
+    if(l.comp.am<floor||l.comp.b>TERN_SPAN||l.comp.c>TERN_SPAN)return; // 삼각형 밖
     const isM=l.source==="measured";
     if(isM&&!ternShow.measured)return;
     if(!isM&&!ternShow.generated)return;
@@ -1282,15 +1299,17 @@ function drawTernary(){
       genHits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="transparent" style="cursor:pointer"/>`;
     }});
   const am=+$("f_am").value||96,b=+$("f_b").value||2,c=+$("f_c").value||2;
-  const inWin=am>=floor&&b<=ternSpan&&c<=ternSpan;
+  const inWin=am>=floor&&b<=TERN_SPAN&&c<=TERN_SPAN;
   const[cx,cy]=toXY(am,b,c);
   const curVis=(ternShow.input&&inWin)?`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="var(--accent)"/>`:"";
   const curHit=(ternShow.input&&inWin)?`<circle class="thit cur" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`:"";
   const polygon=`<polygon points="${A}, ${B}, ${C}" fill="var(--inset)" stroke="var(--line)"/>`;
-  svg.innerHTML=polygon+genPts+measPts+genHits+measHits+curVis+curHit+
+  // 확대·이동은 콘텐츠 그룹(ternView)에만 적용 — 축 라벨은 고정
+  svg.innerHTML=`<g id="ternView">${polygon}${genPts}${measPts}${genHits}${measHits}${curVis}${curHit}</g>`+
    `<text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">NCM811 100</text>
-   <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE ${ternSpan}</text>
-   <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC ${ternSpan}</text>`;
+   <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE ${TERN_SPAN}</text>
+   <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC ${TERN_SPAN}</text>`;
+  applyTernView();
   // 점 hover 툴팁 — Lot 이름·실측/생성 구분·조성 표시 (매 렌더마다 재바인딩)
   const tipComp=c2=>`<div style="font-family:var(--mono);color:var(--ink-2)">NCM811 ${c2.am.toFixed(1)} / PTFE ${c2.b.toFixed(1)} / SuperC ${c2.c.toFixed(1)} wt%</div>`;
   svg.querySelectorAll(".thit").forEach(h=>{
@@ -1307,21 +1326,29 @@ function drawTernary(){
     h.addEventListener("mouseout",hideHelp);
   });
 }
-// 스크롤(휠) 확대 — 심플렉스 위에서 휠을 굴리면 NCM811 고함량 구간을 확대/축소.
-// ternSpan(꼭짓점 최대 wt%)을 5~20 범위로 조절한다.
-const TERN_SPAN_MIN=5,TERN_SPAN_MAX=20;
-function updateTernRange(){const el=$("ternRange");if(el)el.textContent=`NCM811 ${(100-ternSpan).toFixed(0)}–100%`;}
-function setTernSpan(ns){
-  ns=Math.min(TERN_SPAN_MAX,Math.max(TERN_SPAN_MIN,ns));
-  const sl=$("ternZoom");if(sl)sl.value=String(TERN_SPAN_MAX-ns);  // 슬라이더 위치 동기화
-  if(ns===ternSpan){updateTernRange();return;}
-  ternSpan=ns;updateTernRange();drawTernary();
+// 확대(zoom) + X·Y 이동(pan) — 콘텐츠 그룹 transform 으로 처리.
+// 확대는 휠, 이동은 가로(X)·세로(Y) 막대. 축소 상태(zoom=1)에선 이동 여백이 0.
+const TERN_ZOOM_MIN=1,TERN_ZOOM_MAX=4;
+function updateTernRange(){const el=$("ternRange");if(el)el.textContent=`확대 ${ternZoom.toFixed(1)}×`;}
+function applyTernView(){
+  const g=document.getElementById("ternView");if(!g)return;
+  const mpx=TERN_W*(1-1/ternZoom),mpy=TERN_H*(1-1/ternZoom);  // 이동 가능 여백
+  const px=ternPanX*mpx,py=ternPanY*mpy;
+  g.setAttribute("transform",`translate(${(-ternZoom*px).toFixed(2)},${(-ternZoom*py).toFixed(2)}) scale(${ternZoom.toFixed(3)})`);
 }
-// 슬라이더: 위로 올리면 값↑ → span↓ → 확대
-$("ternZoom").addEventListener("input",e=>setTernSpan(TERN_SPAN_MAX-(+e.target.value)));
-// 휠: 위로 굴리면 확대(슬라이더와 연동)
-$("ternary").addEventListener("wheel",e=>{e.preventDefault();setTernSpan(ternSpan+(e.deltaY<0?-1:1));},{passive:false});
-setTernSpan(ternSpan);
+function setTernZoom(z){
+  z=Math.min(TERN_ZOOM_MAX,Math.max(TERN_ZOOM_MIN,z));
+  ternZoom=z;const sl=$("ternZoomSlider");if(sl)sl.value=String(Math.round((z-1)/(TERN_ZOOM_MAX-1)*100));
+  updateTernRange();applyTernView();
+}
+// 가로(X) 막대: 왼쪽↔오른쪽 이동
+$("ternPanXSlider").addEventListener("input",e=>{ternPanX=(+e.target.value)/100;applyTernView();});
+// 세로(Y) 막대: 위↔아래 이동 (위로 올리면 삼각형 위쪽을 봄)
+$("ternPanYSlider").addEventListener("input",e=>{ternPanY=1-(+e.target.value)/100;applyTernView();});
+// 확대 막대 + 휠
+$("ternZoomSlider").addEventListener("input",e=>setTernZoom(1+(+e.target.value)/100*(TERN_ZOOM_MAX-1)));
+$("ternary").addEventListener("wheel",e=>{e.preventDefault();setTernZoom(ternZoom+(e.deltaY<0?0.3:-0.3));},{passive:false});
+updateTernRange();
 // 범례 클릭 On/Off
 document.querySelectorAll("#ternLegend .legToggle").forEach(el=>{
   el.addEventListener("click",()=>{const k=el.dataset.k;ternShow[k]=!ternShow[k];
