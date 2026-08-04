@@ -1424,9 +1424,13 @@ $("btnForward").addEventListener("click",()=>{
     <div class="mini" style="margin-top:6px">⚙️ 미지정 조건 ${r.filled.length}건을 조성 근방 실측 중앙값으로 자동 보완 (FF-06 — 리포트 명시)</div>
     <h2 style="margin-top:16px">최종 물성 · 성능 예측 <span class="fid">FF-05 · FS-01 등급 배지</span></h2>
     <div class="tblwrap"><table><thead><tr><th>항목</th><th>예측</th><th>95% 신뢰구간</th><th>확보 등급</th></tr></thead><tbody>${finals}</tbody></table></div>
-    <div class="row" style="margin-top:10px"><button class="ghost" id="btnExportPred">📄 조건표·예측 JSON 내보내기 (FS-04)</button></div>
+    <div class="row" style="margin-top:10px"><button class="ghost" id="btnExportPred">📄 조건표·예측 DOCX 내보내기 (FS-04)</button></div>
     <div class="mini" style="margin-top:8px">모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot · MC ${+$("f_mc").value}회 (FS-02)</div>`;
-  $("btnExportPred")?.addEventListener("click",()=>download(`pred_${MODEL.version}.json`,JSON.stringify({model_version:MODEL.version,train_lot_count:MODEL.trainLots,input:{am,b,c},alarm:r.val.grade,stage_table:p.table,conditions:r.fill},null,2)));
+  $("btnExportPred")?.addEventListener("click",()=>{
+    const d=new Date(),pad=n=>String(n).padStart(2,"0");
+    const ts=`${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+    downloadBlob(`pred_${ts}_${MODEL.version}.docx`,buildPredictionDocx(r,p,{am,b,c}));
+  });
 });
 function renderScheduleOnly(r){
   return `<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>단계</th><th>전단 M12</th><th>후단 M23·롤</th><th>계획 두께</th><th>계획 밀도</th></tr></thead><tbody>${ACTIVE_STAGES.map(s=>{const x=r.schedule.sched[s];return `<tr><td class="t">${s}</td><td>${x.gapF!=null?fmt(x.gapF,0):"—"}</td><td>${fmt(x.gap,1)}</td><td>${fmt(x.t,1)}</td><td>${fmt(x.d,2)}</td></tr>`;}).join("")}</tbody></table></div>`;
@@ -1669,6 +1673,81 @@ function download(name,text){
   const a=document.createElement("a");
   a.href=URL.createObjectURL(new Blob([text],{type:"application/json"}));a.download=name;a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+function downloadBlob(name,blob){
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+
+// ===== 순수 JS ZIP(store) + DOCX 생성 — 오프라인, 외부 라이브러리 없음 (R7) =====
+const _crcTable=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();
+function _crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=_crcTable[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function _utf8(s){return new TextEncoder().encode(s);}
+function _zipStore(files){ // files: [{name, data:Uint8Array}] — 무압축 저장 방식
+  const u16=n=>[n&0xFF,(n>>8)&0xFF],u32=n=>[n&0xFF,(n>>8)&0xFF,(n>>16)&0xFF,(n>>24)&0xFF];
+  const parts=[],central=[];let offset=0;
+  files.forEach(f=>{
+    const name=_utf8(f.name),data=f.data,crc=_crc32(data);
+    const local=[].concat([0x50,0x4B,0x03,0x04],u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(data.length),u32(data.length),u16(name.length),u16(0));
+    parts.push(new Uint8Array(local),name,data);
+    central.push({name,crc,size:data.length,offset});
+    offset+=local.length+name.length+data.length;
+  });
+  let cdSize=0;const cd=[];
+  central.forEach(c=>{
+    const rec=[].concat([0x50,0x4B,0x01,0x02],u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),u32(c.crc),u32(c.size),u32(c.size),u16(c.name.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(c.offset));
+    const b=new Uint8Array(rec.length+c.name.length);b.set(rec,0);b.set(c.name,rec.length);
+    cd.push(b);cdSize+=b.length;
+  });
+  const end=[].concat([0x50,0x4B,0x05,0x06],u16(0),u16(0),u16(central.length),u16(central.length),u32(cdSize),u32(offset),u16(0));
+  return new Blob([...parts,...cd,new Uint8Array(end)],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+}
+// WordprocessingML 조각
+function _wPara(text,o){o=o||{};const rpr=`<w:rPr>${o.bold?"<w:b/>":""}${o.size?`<w:sz w:val="${o.size}"/>`:""}${o.color?`<w:color w:val="${o.color}"/>`:""}</w:rPr>`;
+  const ppr=o.heading?`<w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr>`:"";
+  return `<w:p>${ppr}<w:r>${rpr}<w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>`;}
+function _wTable(headers,rows){
+  const bd=`<w:tblBorders>${["top","left","bottom","right","insideH","insideV"].map(s=>`<w:${s} w:val="single" w:sz="4" w:color="CCCCCC"/>`).join("")}</w:tblBorders>`;
+  const cell=(t,o)=>{o=o||{};return `<w:tc><w:tcPr>${o.shade?`<w:shd w:val="clear" w:color="auto" w:fill="${o.shade}"/>`:""}</w:tcPr><w:p><w:r><w:rPr>${o.bold?"<w:b/>":""}<w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p></w:tc>`;};
+  const hrow=`<w:tr>${headers.map(h=>cell(h,{bold:true,shade:"F0F0F0"})).join("")}</w:tr>`;
+  const brows=rows.map(r=>`<w:tr>${r.map(c=>cell(c)).join("")}</w:tr>`).join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${bd}</w:tblPr>${hrow}${brows}</w:tbl>`;
+}
+// 순방향 예측 → DOCX Blob (FS-04)
+function buildPredictionDocx(r,p,comp){
+  const dpf=cn=>cn==="electrode_density_gcc"?2:3;
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  const stamp=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const stageRows=p.table.map(row=>[row.s,row.gapF!=null?fmt(row.gapF,0):"—",fmt(row.gap,1),fmt(row.q,2),fmt(row.d,2),fmt(row.loading,1),fmt(row.t,1),"±"+fmt(1.96*row.tStd,1),row.total?fmt(row.total,1):"—"]);
+  const stageTbl=_wTable(["단계","전단 갭 M12(μm)","후단 갭 M23·롤(μm)","면적당 용량(mAh/cm²)","합제밀도(g/cc)","L/L(mg/cm²)","합제층 두께(μm)","±95%","전체 두께(집전체 포함)"],stageRows);
+  const finalRows=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{const g=GRADE(cn),m=p.mean[cn],s=p.std[cn],dp=dpf(cn);return [COL_KO[cn]||cn,fmt(m,dp),fmt(m-1.96*s,dp)+" ~ "+fmt(m+1.96*s,dp),g];});
+  const finalTbl=_wTable(["항목","예측","95% 신뢰구간","확보 등급"],finalRows);
+  const condRows=[
+    ["Mixing",["mixing_mass","mixing_rpm","mixing_temp","mixing_time","mixing_repeat"].map(f=>f.split("_")[1]+" "+fmt(r.fill[f],0)).join(" · ")],
+    ["Kneading","screw "+fmt(r.fill.kneader_screw_speed,0)+" rpm · barrel "+fmt(r.fill.kneader_barrel_temp,0)+" °C · time "+fmt(r.fill.kneader_time,1)+" min"],
+    ["Cutting",["cutting_mass","cutting_speed","cutting_temp","cutting_time","cutting_repeat"].map(f=>f.split("_")[1]+" "+fmt(r.fill[f],0)).join(" · ")],
+    ["Rolling","line pressure "+fmt(r.fill.rolling_line_pressure,0)+" kN"],
+    ["Laminating","pressure "+fmt(r.fill.laminating_pressure,1)+" MPa"],
+  ];
+  const condTbl=_wTable(["공정","조건"],condRows);
+  const alarmTxt=({info:"정보 — 전 항목 통과",caution:"주의 — 검증 실험 권장",warning:"경고 — 대안 스펙 검토"})[r.val.grade]||r.val.grade;
+  const body=
+    _wPara("AI 기반 건식 전극 공정 최적화 — 순방향 예측 리포트",{bold:true,size:32})+
+    _wPara(`모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot · MC ${+$("f_mc").value}회 · 생성 ${stamp}`,{size:18,color:"666666"})+
+    _wPara(`입력 조성:  NCM811 ${fmt(comp.am,2)} / PTFE ${fmt(comp.b,2)} / Super C ${fmt(comp.c,2)} wt%`,{size:20})+
+    _wPara(`타당성 알람:  ${alarmTxt}`,{size:20})+
+    _wPara("공정 캐스케이드 — 단계별 예측표 (FF-03·04·07)",{bold:true,size:24,heading:true})+stageTbl+
+    _wPara("공정 조건표 — FF-06 자동 보완 포함",{bold:true,size:24,heading:true})+condTbl+
+    _wPara("최종 물성 · 성능 예측 (등급 A 상시측정 / B 간헐 / C 준지도)",{bold:true,size:24,heading:true})+finalTbl+
+    _wPara("※ 신뢰구간은 모델 추정 불확실성(MC Dropout)이며, 실측 30 Lot 확보 전까지 참고용입니다. (FS-04 · NFR-08)",{size:16,color:"888888"});
+  const documentXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const ct=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+  const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  return _zipStore([
+    {name:"[Content_Types].xml",data:_utf8(ct)},
+    {name:"_rels/.rels",data:_utf8(rels)},
+    {name:"word/document.xml",data:_utf8(documentXml)},
+  ]);
 }
 
 // ---------- 초기화 ----------
