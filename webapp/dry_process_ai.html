@@ -489,9 +489,12 @@ const PERF_COLS = ["initial_discharge_capacity_mah_g","initial_coulombic_efficie
 const TARGETS = [...STAGE_COLS,...FINAL_COLS,...AUX_COLS,...PERF_COLS];
 // 시트 저항은 간헐 측정으로 재분류 → 확보 등급 B (모델 출력 구조는 FINAL 유지)
 const GRADE = c => c==="sheet_resistance_ohm_sq" ? "B" : STAGE_COLS.includes(c)||FINAL_COLS.includes(c) ? "A" : AUX_COLS.includes(c) ? "B" : "C";
-const COL_KO = {sheet_resistance_ohm_sq:"시트 저항 (Ω/sq)",electrode_density_gcc:"전극 합제밀도 (g/cc)",electrode_thickness_um:"전극 두께 (μm)",
+const COL_KO = {sheet_resistance_ohm_sq:"시트 저항 (×10⁴ Ω/□)",electrode_density_gcc:"전극 합제밀도 (g/cc)",electrode_thickness_um:"전극 두께 (μm)",
   tensile_strength_mpa:"인장강도 (MPa)",electrode_adhesion_n_cm:"접착력 (N/cm)",initial_discharge_capacity_mah_g:"초기 방전 용량 (mAh/g)",
   initial_coulombic_efficiency_pct:"ICE (%)",interface_resistance_ohm:"계면 저항 (Ω)",cell_discharge_retention_pct:"용량 유지율 (%)"};
+// 시트 저항 표시 단위 변환 — 저장은 Ω/sq, 화면은 ×10⁴ Ω/□ (실측 데이터 관례)
+const SR_COL="sheet_resistance_ohm_sq";
+const dispV=(col,v)=>(col===SR_COL&&v!=null&&!Number.isNaN(v))?v/1e4:v;
 
 // 성능 변수 물리 범위 (출력 제약층 고정 범위)
 const PHYS_RANGE = {initial_coulombic_efficiency_pct:[80,100],cell_discharge_retention_pct:[0,100],
@@ -1058,7 +1061,7 @@ function runBackward(objectives,capT,nSamples,seed,con){
   for(const t of top){ // FB-06 추천 근거
     const parts=[];
     if(cp.refC!=null&&Math.abs(t.c-cp.refC)>0.1)parts.push(`도전재 ${Math.abs(t.c-cp.refC).toFixed(1)} wt% ${t.c>cp.refC?"증량":"감량"}`);
-    objs.forEach(sp=>parts.push(`${(COL_KO[sp.col]||sp.col).split(" (")[0]} ${t.pred[sp.col].toFixed(3)} (${sp.dir})`));
+    objs.forEach(sp=>parts.push(`${(COL_KO[sp.col]||sp.col).split(" (")[0]} ${dispV(sp.col,t.pred[sp.col]).toFixed(3)} (${sp.dir})`));
     if(t.b<2)parts.push(`바인더 ${t.b.toFixed(1)} wt% — 시트 강도 저하 대가 유의`);
     t.reason=parts.join(" · ");
   }
@@ -1306,7 +1309,7 @@ function renderLotTable(){
     const l2=l.stages?.L2;
     return `<tr><td class="t">${esc(l.lot_id)}</td><td class="t">${l.source==="measured"?'<span class="badge A">실측</span>':'<span class="badge C">생성</span>'}</td>
     <td>${fmt(l.comp.am,2)} / ${fmt(l.comp.b,2)} / ${fmt(l.comp.c,2)}</td><td>${fmt(l.area,0)}</td>
-    <td>${fmt(l2?.t,1)}</td><td>${fmt(l2?.d,3)}</td><td>${fmt(l.ep?.sheet_resistance_ohm_sq,2)}</td>
+    <td>${fmt(l2?.t,1)}</td><td>${fmt(l2?.d,3)}</td><td>${fmt(dispV(SR_COL,l.ep?.sheet_resistance_ohm_sq),3)}</td>
     <td class="t">${l.ec?"완료":"미완(결측 유지)"}</td></tr>`;}).join("")||`<tr><td colspan="8" class="t empty">데이터 없음</td></tr>`;
 }
 function renderVersions(){
@@ -1450,7 +1453,7 @@ $("btnForward").addEventListener("click",()=>{
   if(!r.prediction){box.innerHTML=`<div class="empty">갭 스케줄이 없어 예측을 수행하지 못했습니다.</div>`;return;}
   const p=r.prediction;
   const finals=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{
-    const g=GRADE(cn),m=p.mean[cn],s=p.std[cn];
+    const g=GRADE(cn),m=dispV(cn,p.mean[cn]),s=dispV(cn,p.std[cn]);
     const dp=cn==="electrode_density_gcc"?2:3;  // 합제밀도는 2자리 표기
     return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,dp)}</td><td>${fmt(m-1.96*s,dp)} ~ ${fmt(m+1.96*s,dp)}</td>
      <td class="t"><span class="badge ${g}">${g}</span>${g==="B"?` <span class="mini">간헐 측정 — 참고</span>`:g==="C"?` <span class="mini">준지도 — 신뢰 구간 필수</span>`:""}</td></tr>`;}).join("");
@@ -1611,8 +1614,8 @@ function st_renderBackward(response,parsedGoal,advice){
       <h2>Pareto front <span class="fid">FB-05 — 유효 해 ${r.cands.length}건 / front ${r.cands.filter(c=>c.pareto).length}건</span></h2>
       ${svgPareto(r)}
       <h2 style="margin-top:14px">추천 레시피 상위 5건 <span class="fid">FB-06</span></h2>
-      <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
-      <tbody>${r.top.map((t,i)=>`<tr><td>${i+1}</td><td>${fmt(t.am,2)} / ${fmt(t.b,2)} / ${fmt(t.c,2)}</td><td>${fmt(t.den,2)}</td><td>${fmt(t.pred[r.objs[0].col],3)}</td>
+      <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}${r.objs[0].col===SR_COL?" (×10⁴)":""}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
+      <tbody>${r.top.map((t,i)=>`<tr><td>${i+1}</td><td>${fmt(t.am,2)} / ${fmt(t.b,2)} / ${fmt(t.c,2)}</td><td>${fmt(t.den,2)}</td><td>${fmt(dispV(r.objs[0].col,t.pred[r.objs[0].col]),3)}</td>
         <td class="t"><span class="badge ${gB[t.grade]}">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span></td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
       <div class="note">각 후보의 갭 스케줄과 단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 동일 형식으로 확인됩니다 (FV 재검증 포함).</div>
       <div class="mini" style="margin-top:8px">${parsedGoal?"자연어 해석 목표 적용 · ":""}모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot</div>`;
@@ -1866,7 +1869,7 @@ function buildPredictionDocx(r,p,comp){
   const stamp=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const stageRows=p.table.map(row=>[row.s,row.gapF!=null?fmt(row.gapF,0):"—",fmt(row.gap,1),fmt(row.q,2),fmt(row.d,2),fmt(row.loading,1),fmt(row.t,1),"±"+fmt(1.96*row.tStd,1),row.total?fmt(row.total,1):"—"]);
   const stageTbl=_wTable(["단계","전단 갭 M12(μm)","후단 갭 M23·롤(μm)","면적당 용량(mAh/cm²)","합제밀도(g/cc)","L/L(mg/cm²)","합제층 두께(μm)","±95%","전체 두께(집전체 포함)"],stageRows);
-  const finalRows=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{const g=GRADE(cn),m=p.mean[cn],s=p.std[cn],dp=dpf(cn);return [COL_KO[cn]||cn,fmt(m,dp),fmt(m-1.96*s,dp)+" ~ "+fmt(m+1.96*s,dp),g];});
+  const finalRows=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{const g=GRADE(cn),m=dispV(cn,p.mean[cn]),s=dispV(cn,p.std[cn]),dp=dpf(cn);return [COL_KO[cn]||cn,fmt(m,dp),fmt(m-1.96*s,dp)+" ~ "+fmt(m+1.96*s,dp),g];});
   const finalTbl=_wTable(["항목","예측","95% 신뢰구간","확보 등급"],finalRows);
   const condRows=[
     ["Mixing",["mixing_mass","mixing_rpm","mixing_temp","mixing_time","mixing_repeat"].map(f=>f.split("_")[1]+" "+fmt(r.fill[f],0)).join(" · ")],
