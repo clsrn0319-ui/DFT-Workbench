@@ -144,7 +144,7 @@ if response is not None:
                 dp = 2 if col == "electrode_density_gcc" else 4  # 합제밀도 2자리 표기
                 rows.append({
                     "항목": col, "예측": round(iv.mean, dp),
-                    "95% 신뢰구간": f"[{round(iv.lower, dp)}, {round(iv.upper, dp)}]",
+                    "95% 신뢰구간": f"{round(iv.lower, dp)} ~ {round(iv.upper, dp)}",
                     "확보 등급": GRADE_BADGE[iv.grade],
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)

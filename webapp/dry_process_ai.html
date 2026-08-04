@@ -1404,7 +1404,7 @@ $("btnForward").addEventListener("click",()=>{
   const finals=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{
     const g=GRADE(cn),m=p.mean[cn],s=p.std[cn];
     const dp=cn==="electrode_density_gcc"?2:3;  // 합제밀도는 2자리 표기
-    return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,dp)}</td><td>[${fmt(m-1.96*s,dp)}, ${fmt(m+1.96*s,dp)}]</td>
+    return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,dp)}</td><td>${fmt(m-1.96*s,dp)} ~ ${fmt(m+1.96*s,dp)}</td>
      <td class="t"><span class="badge ${g}">${g}</span>${g==="B"?` <span class="mini">간헐 측정 — 참고</span>`:g==="C"?` <span class="mini">준지도 — 신뢰 구간 필수</span>`:""}</td></tr>`;}).join("");
   box.innerHTML=`
     <h2>공정 캐스케이드 — 단계별 예측표 <span class="fid">FF-03 · FF-04 · FF-07</span></h2>
