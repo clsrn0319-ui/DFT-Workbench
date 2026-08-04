@@ -262,7 +262,7 @@ svg .axis{stroke:var(--line)}
 <div class="grid g2">
   <div class="card">
     <h2 class="collapseHead"><span>자연어 목표 입력 <span class="fid">FB-01 확장 · 오프라인 규칙 해석</span></span>
-      <span class="headBtns"><button type="button" class="resetMini" id="btnResetNL">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secNL" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
+      <span class="headBtns"><button type="button" class="resetMini" id="btnResetNL" title="자연어 목표 입력 칸만 초기화 (아래 목표 직접 설정은 그대로)">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secNL" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
     <div id="secNL">
     <input type="text" id="nl_goal" placeholder="의도 입력 — 예: 전기전도도 개선 전극" style="width:100%">
     <label class="f" style="margin-top:8px">Target 전극 스펙</label>
@@ -282,7 +282,7 @@ svg .axis{stroke:var(--line)}
     <div class="mini" id="nlNotes" style="margin-top:6px"></div>
     </div>
     <h2 class="collapseHead" style="margin-top:16px"><span>목표 직접 설정 <span class="fid">FB-01</span></span>
-      <span class="headBtns"><button type="button" class="resetMini" id="btnResetDirect">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secDirect" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
+      <span class="headBtns"><button type="button" class="resetMini" id="btnResetDirect" title="목표 행(변수·방향·가중치·기준값)·목표 용량·탐색 제약을 모두 초기화">↺ 초기화</button><button type="button" class="collapseBtn" data-target="secDirect" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
     <div id="secDirect">
     <div id="objList"></div>
     <button type="button" class="ghost" id="btnAddObj" style="margin-top:2px">＋ 목표 추가</button>
