@@ -134,7 +134,7 @@ if response is not None:
             rows.append({
                 "순위": rank,
                 "조성 (AM/PTFE/SC wt%)": f"{c.active_material_wt:.1f} / {c.binder_wt:.1f} / {c.conductive_wt:.1f}",
-                "목표 밀도 (g/cc)": round(c.target_density_gcc, 3),
+                "목표 밀도 (g/cc)": round(c.target_density_gcc, 2),
                 "sheet_resistance": round(c.predictions.get("sheet_resistance_ohm_sq", float("nan")), 3),
                 "알람": ALARM_BADGE[c.alarm_grade],
                 "가중 점수": round(c.weighted_score, 4),

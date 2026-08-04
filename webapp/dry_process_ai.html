@@ -1227,12 +1227,13 @@ $("btnForward").addEventListener("click",()=>{
   const p=r.prediction;
   const finals=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{
     const g=GRADE(cn),m=p.mean[cn],s=p.std[cn];
-    return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,3)}</td><td>[${fmt(m-1.96*s,3)}, ${fmt(m+1.96*s,3)}]</td>
+    const dp=cn==="electrode_density_gcc"?2:3;  // 합제밀도는 2자리 표기
+    return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,dp)}</td><td>[${fmt(m-1.96*s,dp)}, ${fmt(m+1.96*s,dp)}]</td>
      <td class="t"><span class="badge ${g}">${g}</span>${g==="B"?` <span class="mini">간헐 측정 — 참고</span>`:g==="C"?` <span class="mini">준지도 — 신뢰 구간 필수</span>`:""}</td></tr>`;}).join("");
   box.innerHTML=`
     <h2>공정 캐스케이드 — 단계별 예측표 <span class="fid">FF-03 · FF-04 · FF-07</span></h2>
     <div class="tblwrap"><table><thead><tr><th>단계</th><th>전단 갭 M12 (μm)</th><th>후단 갭 M23·롤 (μm)</th><th>면적당 용량 (mAh/cm²)</th><th>합제밀도 (g/cc)</th><th>L/L (mg/cm²)</th><th>합제층 두께 (μm)</th><th>±95%</th><th>전체 두께·집전체 포함</th></tr></thead>
-    <tbody>${p.table.map(row=>`<tr class="${row.s[0]==="L"?"lam":""}"><td class="t">${row.s}</td><td>${row.gapF!=null?fmt(row.gapF,0):"—"}</td><td>${fmt(row.gap,1)}</td><td>${fmt(row.q,2)}</td><td>${fmt(row.d,3)}</td><td>${fmt(row.loading,1)}</td><td>${fmt(row.t,1)}</td><td>±${fmt(1.96*row.tStd,1)}</td><td>${row.total?fmt(row.total,1):"—"}</td></tr>`).join("")}</tbody></table></div>
+    <tbody>${p.table.map(row=>`<tr class="${row.s[0]==="L"?"lam":""}"><td class="t">${row.s}</td><td>${row.gapF!=null?fmt(row.gapF,0):"—"}</td><td>${fmt(row.gap,1)}</td><td>${fmt(row.q,2)}</td><td>${fmt(row.d,2)}</td><td>${fmt(row.loading,1)}</td><td>${fmt(row.t,1)}</td><td>±${fmt(1.96*row.tStd,1)}</td><td>${row.total?fmt(row.total,1):"—"}</td></tr>`).join("")}</tbody></table></div>
     ${svgTrend(p.table)}
     ${r.viol.length?`<div class="alarm warning" style="margin-top:10px"><b>정합성 검사 위반 (FF-08 — 이중 방어)</b><ul>${r.viol.map(v=>`<li>${esc(v)}</li>`).join("")}</ul></div>`
       :`<div class="note">정합성 검사 통과 (FF-08): 질량 보존 · 용량-로딩 연동 · 두께 단조 감소 · 밀도 단조 증가 · 스프링백 — 위반 0건 (NFR-04)</div>`}
@@ -1252,7 +1253,7 @@ $("btnForward").addEventListener("click",()=>{
   $("btnExportPred")?.addEventListener("click",()=>download(`pred_${MODEL.version}.json`,JSON.stringify({model_version:MODEL.version,train_lot_count:MODEL.trainLots,input:{am,b,c},alarm:r.val.grade,stage_table:p.table,conditions:r.fill},null,2)));
 });
 function renderScheduleOnly(r){
-  return `<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>단계</th><th>전단 M12</th><th>후단 M23·롤</th><th>계획 두께</th><th>계획 밀도</th></tr></thead><tbody>${ACTIVE_STAGES.map(s=>{const x=r.schedule.sched[s];return `<tr><td class="t">${s}</td><td>${x.gapF!=null?fmt(x.gapF,0):"—"}</td><td>${fmt(x.gap,1)}</td><td>${fmt(x.t,1)}</td><td>${fmt(x.d,3)}</td></tr>`;}).join("")}</tbody></table></div>`;
+  return `<div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>단계</th><th>전단 M12</th><th>후단 M23·롤</th><th>계획 두께</th><th>계획 밀도</th></tr></thead><tbody>${ACTIVE_STAGES.map(s=>{const x=r.schedule.sched[s];return `<tr><td class="t">${s}</td><td>${x.gapF!=null?fmt(x.gapF,0):"—"}</td><td>${fmt(x.gap,1)}</td><td>${fmt(x.t,1)}</td><td>${fmt(x.d,2)}</td></tr>`;}).join("")}</tbody></table></div>`;
 }
 function svgTrend(table){
   // 면적당 용량(단조 감소)과 합제밀도(단조 증가) 두 곡선 — 단위가 달라 각자
@@ -1458,14 +1459,14 @@ $("btnPunch").addEventListener("click",()=>{
   const ceil=cp.maxD!=null?cp.maxD+DENSITY_HEADROOM:null;
   const densityNote=ceil!=null&&d>ceil
     ?`<div class="alarm warning" style="margin-top:8px"><b>밀도 이력 상한 초과</b>계산 밀도 ${d.toFixed(3)} g/cc &gt; 실측 최대 ${cp.maxD.toFixed(2)} + 여유 ${DENSITY_HEADROOM} — 무게/두께 계측 재확인 권장</div>`
-    :`<div class="note">밀도 ${d.toFixed(3)} g/cc — 실측 이력 범위 내 (최대 ${ceil!=null?cp.maxD.toFixed(2):"이력 없음"})</div>`;
+    :`<div class="note">밀도 ${d.toFixed(2)} g/cc — 실측 이력 범위 내 (최대 ${ceil!=null?cp.maxD.toFixed(2):"이력 없음"})</div>`;
   box.innerHTML=`
     <h3>최종 전극 스펙 (합제층 기준)</h3>
     <div class="kv">
       <dt>합제 질량</dt><dd>${m.toFixed(2)} mg (= ${W} − ${foilW})</dd>
       <dt>합제층 두께</dt><dd>${t.toFixed(1)} μm (= ${T} − ${foilT})</dd>
       <dt>로딩 L/L</dt><dd>${loading.toFixed(2)} mg/cm²</dd>
-      <dt>합제밀도</dt><dd>${d.toFixed(3)} g/cc</dd>
+      <dt>합제밀도</dt><dd>${d.toFixed(2)} g/cc</dd>
       <dt>면적당 용량</dt><dd>${q.toFixed(3)} mAh/cm² <span class="mini">(× 활물질 ${(amF*100).toFixed(1)}% × 210 mAh/g)</span></dd>
       <dt>전극 총 용량</dt><dd>${phys.totalCap(q,area).toFixed(3)} mAh <span class="mini">(× ${area.toFixed(4)} cm²)</span></dd>
     </div>${densityNote}`;

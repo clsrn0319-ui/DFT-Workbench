@@ -104,7 +104,9 @@ if response is not None:
                 "composite_thickness_um": "합제층 두께 (μm)",
                 "total_thickness_um": "전체 두께·집전체 포함 (μm)",
             })
-            st.dataframe(pretty.round(3), use_container_width=True, hide_index=True)
+            pretty = pretty.round(3)
+            pretty["합제밀도 (g/cc)"] = pretty["합제밀도 (g/cc)"].round(2)  # 합제밀도 2자리 표기
+            st.dataframe(pretty, use_container_width=True, hide_index=True)
 
             # 단계별 추이 그래프 — 면적당 용량(감소)·합제밀도(증가) 두 곡선
             fig = go.Figure()
@@ -137,9 +139,10 @@ if response is not None:
             for col, iv in response.prediction.values.items():
                 if col.split("_")[0] in STAGES:
                     continue
+                dp = 2 if col == "electrode_density_gcc" else 4  # 합제밀도 2자리 표기
                 rows.append({
-                    "항목": col, "예측": round(iv.mean, 4),
-                    "95% 신뢰구간": f"[{iv.lower:.4g}, {iv.upper:.4g}]",
+                    "항목": col, "예측": round(iv.mean, dp),
+                    "95% 신뢰구간": f"[{round(iv.lower, dp)}, {round(iv.upper, dp)}]",
                     "확보 등급": GRADE_BADGE[iv.grade],
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
