@@ -155,7 +155,6 @@ svg .axis{stroke:var(--line)}
       <div><label class="f">집전체 두께 (μm)</label><input type="number" id="f_foil" value="16" step="0.5" min="5"></div>
       <div><label class="f">도포</label><select id="f_side"><option value="single">단면</option><option value="double">양면</option></select></div>
     </div>
-    <label class="f">전극 면적 (cm² · 절대량 환산 전용, 모델 입력 아님)</label><input type="number" id="f_area" value="25" step="1" min="0">
     <label class="f">MC Dropout 반복</label><input type="number" id="f_mc" value="30" step="5" min="5" max="100">
     <button class="act" id="btnForward">예측 실행</button>
   </div>
@@ -1215,7 +1214,7 @@ $("btnForward").addEventListener("click",()=>{
   const am=+$("f_am").value,b=+$("f_b").value,c=+$("f_c").value;
   if(Math.abs(am+b+c-100)>0.01){alert("조성 합계가 100 wt% 가 아닙니다");return;}
   const r=runForward({am,b,c,cap:+$("f_cap").value,den:+$("f_den").value,foil:+$("f_foil").value,
-    side:$("f_side").value,area:+$("f_area").value,mc:+$("f_mc").value,seed:1});
+    side:$("f_side").value,area:0,mc:+$("f_mc").value,seed:1});
   const alarmBox=$("fwAlarm");
   const gLabel={info:"✅ 정보 — 전 항목 통과",caution:"🟡 주의 — 검증 실험 권장",warning:"🔴 경고 — 대안 스펙 검토"}[r.val.grade];
   alarmBox.innerHTML=`<div class="alarm ${r.val.grade}"><b>스펙 타당성 (FV-01·02): ${gLabel} <span class="mini">— 판정 근거 ${r.cp.lots} Lot ${r.cp.fromMeasured?"(실측)":"(생성 포함 — 실측 축적 전 임시)"}</span></b>
@@ -1225,8 +1224,7 @@ $("btnForward").addEventListener("click",()=>{
   const box=$("fwResult");
   if(!MODEL){box.innerHTML=`<div class="empty">모델 미학습 — 갭 스케줄·역산 결과만 표시합니다. SC-05 에서 학습을 실행하세요.${r.schedule?renderScheduleOnly(r):""}</div>`;return;}
   if(!r.prediction){box.innerHTML=`<div class="empty">갭 스케줄이 없어 예측을 수행하지 못했습니다.</div>`;return;}
-  const p=r.prediction,area=+$("f_area").value,faces=$("f_side").value==="double"?2:1;
-  const last=p.table[p.table.length-1];
+  const p=r.prediction;
   const finals=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{
     const g=GRADE(cn),m=p.mean[cn],s=p.std[cn];
     return `<tr><td class="t">${esc(COL_KO[cn]||cn)}</td><td>${fmt(m,3)}</td><td>[${fmt(m-1.96*s,3)}, ${fmt(m+1.96*s,3)}]</td>
@@ -1249,7 +1247,6 @@ $("btnForward").addEventListener("click",()=>{
     <div class="mini" style="margin-top:6px">⚙️ 미지정 조건 ${r.filled.length}건을 조성 근방 실측 중앙값으로 자동 보완 (FF-06 — 리포트 명시)</div>
     <h2 style="margin-top:16px">최종 물성 · 성능 예측 <span class="fid">FF-05 · FS-01 등급 배지</span></h2>
     <div class="tblwrap"><table><thead><tr><th>항목</th><th>예측</th><th>95% 신뢰구간</th><th>확보 등급</th></tr></thead><tbody>${finals}</tbody></table></div>
-    ${area>0?`<div class="note"><b>절대량 환산 (FD-08 — 면적은 모델 입력이 아님):</b> 총 합제 질량 ${fmt(phys.totalMass(last.loading,area,faces),2)} g · 총 용량 ${fmt(phys.totalCap(last.q,area,faces),1)} mAh (면적 ${area} cm² × ${faces}면)</div>`:""}
     <div class="row" style="margin-top:10px"><button class="ghost" id="btnExportPred">📄 조건표·예측 JSON 내보내기 (FS-04)</button></div>
     <div class="mini" style="margin-top:8px">모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot · MC ${+$("f_mc").value}회 (FS-02)</div>`;
   $("btnExportPred")?.addEventListener("click",()=>download(`pred_${MODEL.version}.json`,JSON.stringify({model_version:MODEL.version,train_lot_count:MODEL.trainLots,input:{am,b,c},alarm:r.val.grade,stage_table:p.table,conditions:r.fill},null,2)));

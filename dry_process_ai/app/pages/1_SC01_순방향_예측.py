@@ -58,7 +58,6 @@ with left:
     den = st.number_input("목표 합제밀도 (g/cc)", 1.0, 4.5, 3.2, 0.05)
     foil = st.number_input("집전체 두께 (μm)", 5.0, 50.0, 16.0, 0.5)
     side = st.selectbox("도포", ["single", "double"])
-    area = st.number_input("전극 면적 (cm², 절대량 환산용 — 선택)", 0.0, 10000.0, 0.0, 1.0)
     mc = st.slider("MC Dropout 반복", 10, 100, 30)
     run = st.button("예측 실행", type="primary", use_container_width=True)
 
@@ -69,7 +68,6 @@ if run and abs(total - 100.0) <= 0.01:
         target_areal_capacity_mah_cm2=cap,
         target_density_gcc=den,
         collector=CollectorInput(foil_thickness_um=foil, coating_side=side),
-        electrode_area_cm2=area or None,
         mc_samples=mc,
     )
     with st.spinner("갭 스케줄 탐색 및 단계별 예측 중..."):
@@ -148,15 +146,6 @@ if response is not None:
             if not response.prediction.consistency.passed:
                 st.error("정합성 검사 위반 항목 존재 (FF-08): " + "; ".join(
                     v.message for v in response.prediction.consistency.violations))
-
-        if response.absolute_quantities:
-            st.markdown("### 절대량 환산 (FD-08)")
-            aq = response.absolute_quantities
-            st.markdown(
-                f"- 총 합제 질량: **{aq['total_composite_mass_g']:.2f} g** · "
-                f"총 용량: **{aq['total_capacity_mah']:.1f} mAh** "
-                f"(면적 {aq['electrode_area_cm2']} cm² × {aq['coated_face_count']}면)"
-            )
 
         if st.button("📄 조건표 내보내기 (JSON)"):
             path = export_prediction_json(response)
