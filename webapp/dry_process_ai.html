@@ -1244,16 +1244,33 @@ function drawTernary(){
   const A=[W/2,pad],B=[pad,H-pad],C=[W-pad,H-pad]; // A=AM100, B=PTFE20, C=SC20 (확대)
   const toXY=(am,b,c)=>{const a2=(am-80)/20,b2=b/20,c2=c/20,s=a2+b2+c2;
     return [(A[0]*a2+B[0]*b2+C[0]*c2)/s,(A[1]*a2+B[1]*b2+C[1]*c2)/s];};
-  let pts="";
-  DB.lots.forEach(l=>{const[x,y]=toXY(l.comp.am,l.comp.b,l.comp.c);
-    pts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="var(--ink-3)" opacity="0.55"/>`;});
+  let pts="",hits="";
+  DB.lots.forEach((l,i)=>{const[x,y]=toXY(l.comp.am,l.comp.b,l.comp.c);
+    pts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="var(--ink-3)" opacity="0.55"/>`;
+    hits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`;});
   const am=+$("f_am").value||96,b=+$("f_b").value||2,c=+$("f_c").value||2;
   const[cx,cy]=toXY(am,b,c);
   svg.innerHTML=`<polygon points="${A}, ${B}, ${C}" fill="var(--inset)" stroke="var(--line)"/>
    ${pts}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="var(--accent)"/>
+   ${hits}<circle class="thit cur" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>
    <text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">NCM811 100</text>
    <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE 20</text>
    <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC 20</text>`;
+  // 점 hover 툴팁 — Lot 이름·실측/생성 구분·조성 표시 (매 렌더마다 재바인딩)
+  const tipComp=c2=>`<div style="font-family:var(--mono);color:var(--ink-2)">NCM811 ${c2.am.toFixed(1)} / PTFE ${c2.b.toFixed(1)} / SuperC ${c2.c.toFixed(1)} wt%</div>`;
+  svg.querySelectorAll(".thit").forEach(h=>{
+    let html;
+    if(h.classList.contains("cur")){
+      html=`<div style="font-weight:700;margin-bottom:3px;color:var(--accent)">현재 입력 조성</div>`+tipComp({am,b,c});
+    }else{
+      const l=DB.lots[+h.dataset.i];
+      const badge=l.source==="measured"?'<span style="color:var(--accent);font-weight:700">실측</span>':'<span style="color:var(--ink-3);font-weight:700">생성</span>';
+      html=`<div style="font-weight:700;margin-bottom:3px">${esc(l.lot_id)} · ${badge}</div>`+tipComp(l.comp);
+    }
+    h.addEventListener("mouseover",e=>showHelp(e,html));
+    h.addEventListener("mousemove",moveHelp);
+    h.addEventListener("mouseout",hideHelp);
+  });
 }
 ["f_am","f_b","f_c","f_cap","f_den"].forEach(id=>$(id).addEventListener("input",()=>{
   const am=+$("f_am").value,b=+$("f_b").value,c=+$("f_c").value,sum=am+b+c;
