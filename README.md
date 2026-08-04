@@ -119,16 +119,29 @@ RHOBENCH_ACCESS_PASSWORD='연구실에_공유할_비밀번호' RHOBENCH_WORKERS=
 > ⚠️ 사내망 밖(인터넷)에 공개하려면 HTTPS(리버스 프록시)를 반드시 앞에 두세요.
 > 현재 세션 쿠키는 평문 HTTP에서도 전송되므로 사내망 전용을 권장합니다.
 
-## 결과를 HTML 한 파일로 공유
+## 공유용 웹앱 페이지 (HTML 한 장)
 
-「DFT 계산 결과」 화면의 **`HTML로 공유`** 버튼을 누르면 `rhobench_results.html`
-한 개가 내려받아집니다. **서버도 인터넷도 없이** 더블클릭만으로 열립니다 —
-메일 첨부나 구글 드라이브 업로드로 그대로 공유할 수 있습니다.
+결과를 담은 **자체 완결형 웹앱 페이지**를 한 파일로 뽑을 수 있습니다.
+서버도 인터넷도 없이 동작하므로 웹 호스팅에 올리거나, 구글 드라이브에 두거나,
+메일에 첨부해 그대로 공유할 수 있습니다.
+
+만드는 방법은 세 가지이고 결과물은 같습니다:
 
 ```bash
-# 명령으로 만들 수도 있습니다 (선택 없이 = 전체)
+# 1) 화면에서 — 「DFT 계산 결과」의 [HTML로 공유] 버튼
+# 2) 명령으로 (서버가 꺼져 있어도 됨)
+python -m scripts.build_webapp                     # 완료된 결과 전체
+python -m scripts.build_webapp --list              # 무엇이 담길지 확인
+python -m scripts.build_webapp --ids JOB-A,JOB-B --out 공유.html
+# 3) API로
 curl -b cookie.txt "http://localhost:8000/api/export?format=html" -o results.html
-curl -b cookie.txt "http://localhost:8000/api/export?format=html&ids=JOB-...,JOB-..." -o results.html
+```
+
+정적 파일 한 개이므로 어디에 올려도 링크가 됩니다:
+
+```bash
+python -m http.server 8080 -d build     # 사내 서버에서 바로 링크 공유
+# GitHub Pages · Netlify · S3 등 정적 호스팅에 그대로 업로드해도 동작
 ```
 
 | 사본에서 되는 것 | 사본에서 안 되는 것 |
@@ -142,6 +155,9 @@ curl -b cookie.txt "http://localhost:8000/api/export?format=html&ids=JOB-...,JOB
 동작 방식: `web/index.html`과 `web/app.js`를 그대로 담고, 그 앞에 `fetch` 가로채기
 계층을 넣어 API 호출을 파일에 심어 둔 결과로 되돌려 줍니다. 화면 코드가 하나뿐이라
 서버에서 보던 것과 **똑같은** 차트·표가 나옵니다. 파일 크기는 결과 14건 기준 약 1 MB.
+
+외부 요청이 0건이라 폐쇄망·오프라인에서도 동작하고, `<!doctype>`·`<head>`·`<body>`
+래퍼가 없는 조각이라 다른 페이지 안에 그대로 넣거나 아티팩트로 발행해도 깨지지 않습니다.
 
 > ⚠️ **사본에는 접속 비밀번호가 걸리지 않습니다.** 파일을 받은 사람은 누구나
 > 그 안의 결과를 볼 수 있으니, 공유 범위를 정한 뒤 보내세요.

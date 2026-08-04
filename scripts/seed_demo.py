@@ -14,11 +14,27 @@
 """
 
 import argparse
+import socket
 import sys
 import time
 
 from server import presets, store
 from server.engine import run_job
+
+
+def _server_running(port=8000) -> bool:
+    """같은 data/jobs.json 을 쓰는 서버가 떠 있는지 확인.
+
+    서버와 이 스크립트는 각자 메모리에 작업 목록을 들고 있다가 파일에 통째로
+    덮어쓰므로, 동시에 돌리면 서로의 작업을 지우거나 실행 중인 작업을
+    '서버 재시작으로 중단됨'으로 만들어 버린다.
+    """
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        try:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+        except OSError:
+            return False
 
 # 바인더 후보 3종 + 전해액 용매 2종 — 비교 화면에서 성격 차이가 뚜렷하게 보인다.
 DEMO_SET = [
@@ -48,7 +64,19 @@ def main(argv=None):
                     help="정확도 프리셋 (기본: 빠름)")
     ap.add_argument("--only", default="", help="쉼표로 구분한 약어 (예: EC,AN)")
     ap.add_argument("--list", action="store_true", help="계산 대상만 출력하고 종료")
+    ap.add_argument("--force", action="store_true",
+                    help="서버가 떠 있어도 진행 (작업 이력이 서로 덮어써질 수 있음)")
     args = ap.parse_args(argv)
+
+    if not args.list and not args.force and _server_running():
+        print("RhoBench 서버가 실행 중입니다 (127.0.0.1:8000).", file=sys.stderr)
+        print("서버와 이 스크립트가 같은 data/jobs.json 을 각자 덮어쓰기 때문에,",
+              file=sys.stderr)
+        print("동시에 돌리면 계산 중이던 작업이 '서버 재시작으로 중단됨'으로 실패합니다.",
+              file=sys.stderr)
+        print("\n서버를 멈춘 뒤 다시 실행하세요. 서버에서 계산하려면 화면에서 제출하면 됩니다.",
+              file=sys.stderr)
+        return 1
 
     wanted = {a.strip().upper() for a in args.only.split(",") if a.strip()}
     targets = [d for d in DEMO_SET if not wanted or d[0].upper() in wanted]
