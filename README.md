@@ -144,13 +144,21 @@ python -m http.server 8080 -d build     # 사내 서버에서 바로 링크 공�
 # GitHub Pages · Netlify · S3 등 정적 호스팅에 그대로 업로드해도 동작
 ```
 
-| 사본에서 되는 것 | 사본에서 안 되는 것 |
+| 페이지에서 되는 것 | 페이지에서 안 되는 것 |
 |---|---|
 | 결과 상세 · 3D 구조 · 전자구름 · MEP | 새 계산 제출 (PySCF 서버 필요) |
 | 물성 지문 레이더 (축 변경 포함) | 화학물질 조회 (인터넷·RDKit 필요) |
 | 물질 비교 · 지표 선택 · 그래프 종류 변경 | 작업 재시도 · 취소 · 삭제 |
 | 전기화학 안정성(ESW) 판정 | |
-| CSV · JSON 내려받기 (파일 안 데이터로) | |
+| CSV · JSON 내려받기 (페이지 안 데이터로) | |
+
+공유 전에는 시험 삼아 돌린 작업을 정리하세요 — 완료된 결과가 **전부** 담깁니다:
+
+```bash
+python -m scripts.prune_jobs --list                  # 현재 작업 확인
+python -m scripts.prune_jobs --match 테스트 --failed   # 지울 대상 미리보기
+python -m scripts.prune_jobs --match 테스트 --failed --yes
+```
 
 동작 방식: `web/index.html`과 `web/app.js`를 그대로 담고, 그 앞에 `fetch` 가로채기
 계층을 넣어 API 호출을 파일에 심어 둔 결과로 되돌려 줍니다. 화면 코드가 하나뿐이라
@@ -171,7 +179,7 @@ python -m http.server 8080 -d build     # 사내 서버에서 바로 링크 공�
 
 | 방법 | 준비 | 접속 주소 | 적합한 경우 |
 |---|---|---|---|
-| **HTML 사본** | `HTML로 공유` 버튼 | 파일 (주소 없음) | **결과만 보여주면 될 때 — 가장 간단** |
+| **웹앱 페이지 (HTML 한 장)** | `scripts/build_webapp.py` | 정적 호스팅에 올리면 고정 주소 | **결과만 보여주면 될 때 — 가장 간단** |
 | **내 PC + 같은 네트워크** | `./scripts/start.sh` | `http://<내 IP>:8000` (HTTP) | 같은 공간에서의 시연 — 가장 안정적 |
 | **내 PC + Cloudflare 터널** | `cloudflared tunnel --url http://localhost:8000` | 임시 `https://...trycloudflare.com` | 원격 참석자에게 잠깐 보여줄 때 |
 | **Google Colab** | `notebooks/RhoBench_Colab.ipynb` 실행 | 임시 `https://...trycloudflare.com` | 내 PC를 켜 두지 않고 무료로 공개 |
