@@ -1258,6 +1258,7 @@ function renderVersions(){
 // 심플렉스 기본 표시 범위(꼭짓점 최대 wt%), 돋보기·범례 On/Off 상태
 const ternSpan=20;              // 기본 뷰는 AM 80~100 고정 — 확대는 돋보기(루페)로 처리
 let magnifierOn=false;
+let ternPlot="";                // 돋보기(루페)가 확대할 심플렉스 콘텐츠 캐시
 const ternShow={measured:true,generated:true,input:true};
 function drawTernary(){
   const svg=$("ternary");const W=230,H=200,pad=16;
