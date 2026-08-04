@@ -462,7 +462,8 @@ const FINAL_COLS = ["electrode_thickness_um","electrode_density_gcc","sheet_resi
 const AUX_COLS = ["tensile_strength_mpa","electrode_adhesion_n_cm"];      // B등급 간헐
 const PERF_COLS = ["initial_discharge_capacity_mah_g","initial_coulombic_efficiency_pct","interface_resistance_ohm","cell_discharge_retention_pct"]; // C등급
 const TARGETS = [...STAGE_COLS,...FINAL_COLS,...AUX_COLS,...PERF_COLS];
-const GRADE = c => STAGE_COLS.includes(c)||FINAL_COLS.includes(c) ? "A" : AUX_COLS.includes(c) ? "B" : "C";
+// 시트 저항은 간헐 측정으로 재분류 → 확보 등급 B (모델 출력 구조는 FINAL 유지)
+const GRADE = c => c==="sheet_resistance_ohm_sq" ? "B" : STAGE_COLS.includes(c)||FINAL_COLS.includes(c) ? "A" : AUX_COLS.includes(c) ? "B" : "C";
 const COL_KO = {sheet_resistance_ohm_sq:"시트 저항 (Ω/sq)",electrode_density_gcc:"전극 합제밀도 (g/cc)",electrode_thickness_um:"전극 두께 (μm)",
   tensile_strength_mpa:"인장강도 (MPa)",electrode_adhesion_n_cm:"접착력 (N/cm)",initial_discharge_capacity_mah_g:"초기 방전 용량 (mAh/g)",
   initial_coulombic_efficiency_pct:"ICE (%)",interface_resistance_ohm:"계면 저항 (Ω)",cell_discharge_retention_pct:"용량 유지율 (%)"};

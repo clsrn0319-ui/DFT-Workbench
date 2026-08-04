@@ -30,6 +30,8 @@ GRADE_BY_COLUMN: dict[str, str] = {
     **{c: "A" for c in FINAL_OUTPUT_COLUMNS},
     **{c: "B" for c in AUX_OUTPUT_COLUMNS},
     **{c: "C" for c in PERF_OUTPUT_COLUMNS},
+    # 시트 저항은 간헐 측정으로 재분류 → 확보 등급 B (모델 출력 구조는 FINAL 유지)
+    "sheet_resistance_ohm_sq": "B",
 }
 
 
