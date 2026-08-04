@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="SC-05 모델 관리", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="5. 모델 관리", page_icon="🤖", layout="wide")
 
 from dry_process_ai.app.common import data_status_footer, db_session, load_predictor  # noqa: E402
 from dry_process_ai.core.train.trainer import TeacherRejected  # noqa: E402
@@ -12,7 +12,7 @@ from dry_process_ai.data_access.db import Evaluation, ModelVersion  # noqa: E402
 from dry_process_ai.services.evaluation_service import run_evaluation  # noqa: E402
 from dry_process_ai.services.training_service import run_training_pipeline  # noqa: E402
 
-st.title("SC-05 모델 관리 — 학습·버전·평가")
+st.title("5. 모델 관리 — 학습·버전·평가")
 
 c1, c2 = st.columns(2)
 with c1:

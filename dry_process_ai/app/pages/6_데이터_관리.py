@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="SC-06 데이터 관리", page_icon="🗄️", layout="wide")
+st.set_page_config(page_title="6. 데이터 관리", page_icon="🗄️", layout="wide")
 
 from dry_process_ai.app.common import data_status_footer, db_session, load_train_df  # noqa: E402
 from dry_process_ai.data_access.db import VariableDict  # noqa: E402
@@ -12,7 +12,7 @@ from dry_process_ai.data_access.repository import fetch_stage_long, register_lot
 from dry_process_ai.data_access.sample_data import generate_lot_payloads  # noqa: E402
 from dry_process_ai.rules.outliers import detect_stage_outliers  # noqa: E402
 
-st.title("SC-06 데이터 관리 — Lot 등록·가져오기·변수 사전·이상치 검토")
+st.title("6. 데이터 관리 — Lot 등록·가져오기·변수 사전·이상치 검토")
 
 tab_list, tab_import, tab_dict, tab_outlier = st.tabs(
     ["Lot 목록·합성 데이터", "CSV/Excel 가져오기 (FD-02)", "변수 사전 (FD-03)", "이상치 검토 (FP-01)"]

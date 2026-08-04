@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="SC-01 순방향 예측", page_icon="➡️", layout="wide")
+st.set_page_config(page_title="1. 순방향 예측", page_icon="➡️", layout="wide")
 
 from dry_process_ai.app.common import (  # noqa: E402
     ALARM_BADGE, GRADE_BADGE, data_status_footer, db_session, load_train_df, require_model,
@@ -17,7 +17,7 @@ from dry_process_ai.config import STAGES  # noqa: E402
 from dry_process_ai.services.forward_service import export_prediction_json, run_forward  # noqa: E402
 from dry_process_ai.services.schemas import CollectorInput, CompositionInput, ForwardRequest  # noqa: E402
 
-st.title("SC-01 순방향 예측 — 조성 → 공정 조건 + 단계별 예측")
+st.title("1. 순방향 예측 — 조성 → 공정 조건 + 단계별 예측")
 
 predictor, train_lot_count = require_model()
 train_df = load_train_df()

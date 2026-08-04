@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="SC-04 실험 추천", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="4. AI 강화 실험 추천", page_icon="🧪", layout="wide")
 
 from dry_process_ai.app.common import data_status_footer, db_session, require_model  # noqa: E402
 from dry_process_ai.services.recommend_service import (  # noqa: E402
@@ -11,7 +11,7 @@ from dry_process_ai.services.recommend_service import (  # noqa: E402
 )
 from dry_process_ai.services.schemas import RecommendRequest  # noqa: E402
 
-st.title("SC-04 실험 추천 — 능동학습 기반 다음 실험 조건")
+st.title("4. AI 강화 실험 추천 — 능동학습 기반 다음 실험 조건")
 
 predictor, train_lot_count = require_model()
 
@@ -83,7 +83,7 @@ with st.form("experiment_result"):
         }
         with db_session() as session:
             lot, retrain = register_experiment_result(session, payload)
-        st.success(f"Lot {lot} 등록 완료 — 재학습이 필요합니다 (SC-05 에서 실행). 캐시를 새로고침하세요.")
+        st.success(f"Lot {lot} 등록 완료 — 재학습이 필요합니다 (「5. 모델 관리」에서 실행). 캐시를 새로고침하세요.")
         st.cache_resource.clear()
 
 data_status_footer()

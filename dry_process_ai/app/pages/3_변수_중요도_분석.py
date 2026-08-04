@@ -3,14 +3,14 @@
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="SC-03 변수 중요도", page_icon="📊", layout="wide")
+st.set_page_config(page_title="3. 변수 중요도 분석", page_icon="📊", layout="wide")
 
 from dry_process_ai.app.common import data_status_footer, load_train_df, require_model  # noqa: E402
 from dry_process_ai.core.analyze.importance import (  # noqa: E402
     composition_process_interaction, permutation_importance,
 )
 
-st.title("SC-03 변수 중요도 — Permutation Importance")
+st.title("3. 변수 중요도 분석 — Permutation Importance")
 
 predictor, train_lot_count = require_model()
 train_df = load_train_df()

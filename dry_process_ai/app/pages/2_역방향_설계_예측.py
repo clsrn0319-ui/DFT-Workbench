@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="SC-02 역방향 설계", page_icon="⬅️", layout="wide")
+st.set_page_config(page_title="2. 역방향 설계 예측", page_icon="⬅️", layout="wide")
 
 from dry_process_ai.app.common import (  # noqa: E402
     ALARM_BADGE, data_status_footer, db_session, load_train_df, require_model,
@@ -15,7 +15,7 @@ from dry_process_ai.app.common import (  # noqa: E402
 from dry_process_ai.services.backward_service import run_backward  # noqa: E402
 from dry_process_ai.services.schemas import BackwardObjective, BackwardRequest  # noqa: E402
 
-st.title("SC-02 역방향 설계 — 목표 성능 → 조성·공정 역추천")
+st.title("2. 역방향 설계 예측 — 목표 성능 → 조성·공정 역추천")
 
 predictor, train_lot_count = require_model()
 train_df = load_train_df()
@@ -145,7 +145,7 @@ if response is not None:
         pick = st.selectbox("상세 확인할 후보", range(1, len(result.top) + 1))
         c = result.top[pick - 1]
         st.markdown(f"**갭 스케줄 (μm)**: {c.gaps_um}")
-        st.markdown("**단계별 예측** — SC-01 과 동일 형식으로 확인하려면 이 조성을 순방향 화면에 입력하세요.")
+        st.markdown("**단계별 예측** — 「1. 순방향 예측」과 동일 형식으로 확인하려면 이 조성을 순방향 화면에 입력하세요.")
         st.json({k: round(v, 4) for k, v in c.predictions.items() if not pd.isna(v)}, expanded=False)
 
 data_status_footer()

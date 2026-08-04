@@ -126,12 +126,12 @@ svg .axis{stroke:var(--line)}
 </header>
 
 <nav class="tabs" role="tablist">
-  <button class="on" data-tab="sc1">SC-01 순방향 예측</button>
-  <button data-tab="sc2">SC-02 역방향 설계</button>
-  <button data-tab="sc3">SC-03 변수 중요도</button>
-  <button data-tab="sc4">SC-04 실험 추천</button>
-  <button data-tab="sc5">SC-05 모델 관리</button>
-  <button data-tab="sc6">SC-06 데이터 관리</button>
+  <button class="on" data-tab="sc1">1. 순방향 예측</button>
+  <button data-tab="sc2">2. 역방향 설계 예측</button>
+  <button data-tab="sc3">3. 변수 중요도 분석</button>
+  <button data-tab="sc4">4. AI 강화 실험 추천</button>
+  <button data-tab="sc5">5. 모델 관리</button>
+  <button data-tab="sc6">6. 데이터 관리</button>
 </nav>
 
 <!-- ============ SC-01 ============ -->
@@ -160,7 +160,7 @@ svg .axis{stroke:var(--line)}
   </div>
   <div>
     <div id="fwAlarm"></div>
-    <div class="card" id="fwResult"><div class="empty">조성과 목표를 입력하고 「예측 실행」— 학습된 모델이 없으면 SC-05에서 먼저 학습하세요.</div></div>
+    <div class="card" id="fwResult"><div class="empty">조성과 목표를 입력하고 「예측 실행」— 학습된 모델이 없으면 「5. 모델 관리」에서 먼저 학습하세요.</div></div>
   </div>
 </div>
 <div class="card" style="margin-top:14px">
@@ -851,7 +851,7 @@ function checkStages(stageVals,gaps,ceilD,amF,tol){
 // ---------- 학습 파이프라인 (FT-02~05 Teacher/Student) ----------
 async function trainPipeline(epochs,seed,onProgress){
   const rows=dataset();
-  if(!rows.length)throw new Error("적재된 Lot 이 없습니다 — SC-06 에서 데이터를 먼저 등록하세요");
+  if(!rows.length)throw new Error("적재된 Lot 이 없습니다 — 「6. 데이터 관리」에서 데이터를 먼저 등록하세요");
   const verNum=DB.versions.length?Math.max(...DB.versions.map(v=>+v.version.slice(1).split(".")[1]))+1:0;
   const version=`v1.${verNum}`;
   const reg=fitRegistry(rows,version);
@@ -1222,7 +1222,7 @@ $("btnForward").addEventListener("click",()=>{
     ${r.val.alternatives.length?`<div style="margin-top:6px"><b>대안 스펙 제안 (FV-03) — 1차 목표 고정:</b><ul>${r.val.alternatives.map(a=>`<li>${esc(a)}</li>`).join("")}</ul></div>`:""}
   </div>${r.schedErr?`<div class="alarm warning"><b>갭 스케줄 실현 불가 (FF-03)</b>${esc(r.schedErr)}</div>`:""}`;
   const box=$("fwResult");
-  if(!MODEL){box.innerHTML=`<div class="empty">모델 미학습 — 갭 스케줄·역산 결과만 표시합니다. SC-05 에서 학습을 실행하세요.${r.schedule?renderScheduleOnly(r):""}</div>`;return;}
+  if(!MODEL){box.innerHTML=`<div class="empty">모델 미학습 — 갭 스케줄·역산 결과만 표시합니다. 「5. 모델 관리」에서 학습을 실행하세요.${r.schedule?renderScheduleOnly(r):""}</div>`;return;}
   if(!r.prediction){box.innerHTML=`<div class="empty">갭 스케줄이 없어 예측을 수행하지 못했습니다.</div>`;return;}
   const p=r.prediction;
   const finals=[...FINAL_COLS,...AUX_COLS,...PERF_COLS].map(cn=>{
@@ -1296,7 +1296,7 @@ function st_renderBackward(response,parsedGoal,advice){
       <div class="tblwrap"><table><thead><tr><th>순위</th><th>AM/PTFE/SC (wt%)</th><th>목표 밀도</th><th>${esc((COL_KO[r.objs[0].col]||"").split(" (")[0])}</th><th>알람</th><th class="t">추천 근거</th></tr></thead>
       <tbody>${r.top.map((t,i)=>`<tr><td>${i+1}</td><td>${fmt(t.am,1)} / ${fmt(t.b,1)} / ${fmt(t.c,1)}</td><td>${fmt(t.den,2)}</td><td>${fmt(t.pred[r.objs[0].col],3)}</td>
         <td class="t"><span class="badge ${gB[t.grade]}">${{info:"정보",caution:"주의",warning:"경고"}[t.grade]}</span></td><td class="t" style="white-space:normal">${esc(t.reason)}</td></tr>`).join("")}</tbody></table></div>
-      <div class="note">각 후보의 갭 스케줄과 단계별 예측표는 해당 조성을 SC-01 에 입력하면 동일 형식으로 확인됩니다 (FV 재검증 포함).</div>
+      <div class="note">각 후보의 갭 스케줄과 단계별 예측표는 해당 조성을 「1. 순방향 예측」에 입력하면 동일 형식으로 확인됩니다 (FV 재검증 포함).</div>
       <div class="mini" style="margin-top:8px">${parsedGoal?"자연어 해석 목표 적용 · ":""}모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot</div>`;
   }
 }
@@ -1371,7 +1371,7 @@ $("btnRecommend").addEventListener("click",()=>{
       <tbody>${recs.map((r,i)=>`<tr><td>${i+1}</td><td>${fmt(r.p.active_material_content,1)} / ${fmt(r.p.binder_content,1)} / ${fmt(r.p.conductive_content,1)}</td>
         <td>${fmt(r.uN,3)}</td><td>${fmt(r.pN,3)}</td><td>${fmt(r.combined,3)}</td>
         <td class="t" style="white-space:normal">${r.worst.map(w=>`${esc((COL_KO[w.c]||w.c).split(" (")[0])} (상대 σ ${w.r.toFixed(2)})`).join(", ")} 해소 — ${$("r_mode").value} 모드</td></tr>`).join("")}</tbody></table></div>
-      <div class="note">실험 완료 후 SC-06 「실험 결과 등록」으로 입력하면 후보가 train set 으로 이동하고 재학습 트리거가 발생합니다 (FR-06).</div>
+      <div class="note">실험 완료 후 「6. 데이터 관리」의 「실험 결과 등록」으로 입력하면 후보가 train set 으로 이동하고 재학습 트리거가 발생합니다 (FR-06).</div>
       <div class="mini" style="margin-top:8px">모델 ${MODEL.version} · 학습 ${MODEL.trainLots} Lot · MC Dropout 15회/후보</div>`;
   }catch(e){$("recResult").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
 });
@@ -1413,7 +1413,7 @@ $("btnGen").addEventListener("click",()=>{
   // 실측이 있으면 실측 앵커 부트스트랩(1순위 원칙), 없으면 일반 합성 생성으로 대체
   const lots=hasMeasured?generateFromMeasured(n,seed):generateLots(n,seed);
   DB.lots.push(...lots);saveDB();refreshStatus();
-  alert(hasMeasured?`실측 앵커 부트스트랩 ${n}건 생성 (가중 ${GEN_WEIGHT} 로 학습 기여 — SC-05 재학습 필요)`
+  alert(hasMeasured?`실측 앵커 부트스트랩 ${n}건 생성 (가중 ${GEN_WEIGHT} 로 학습 기여 — 「5. 모델 관리」재학습 필요)`
     :`일반 합성 ${n}건 생성 (실측 부재 — 실측 등록 후 부트스트랩 권장)`);
 });
 $("btnRegister").addEventListener("click",()=>{
@@ -1423,7 +1423,7 @@ $("btnRegister").addEventListener("click",()=>{
     comp:{am,b,c},proc:{},stages:{},
     ep:{electrode_thickness_um:+$("e_t").value,electrode_density_gcc:+$("e_d").value,sheet_resistance_ohm_sq:+$("e_r").value,tensile_strength_mpa:null,electrode_adhesion_n_cm:null},ec:null});
   saveDB();refreshStatus();
-  alert("실측 Lot 등록 완료 — 신규 실측 등록은 재학습 트리거입니다 (FT-08). SC-05 에서 재학습을 실행하세요.");
+  alert("실측 Lot 등록 완료 — 신규 실측 등록은 재학습 트리거입니다 (FT-08). 「5. 모델 관리」에서 재학습을 실행하세요.");
 });
 $("btnLoadReal").addEventListener("click",()=>{restoreRealState(true);refreshStatus();
   alert(`KETI 실측 ${REAL_LOTS.length} Lot 적재 완료`+(PRETRAINED?` · 사전학습 모델 ${PRETRAINED.version} 복원`:""));});
