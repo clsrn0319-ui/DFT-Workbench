@@ -159,6 +159,11 @@ svg .axis{stroke:var(--line)}
     </div>
     <div class="mini" id="compSum" style="margin-top:4px"></div>
     <div class="ternwrap"><svg id="ternary" width="230" height="200" role="img" aria-label="조성 심플렉스"></svg></div>
+    <div class="mini" style="display:flex;gap:12px;justify-content:center;margin-top:2px">
+      <span><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="4" fill="var(--warn)"/></svg> 실측(실제 실험)</span>
+      <span><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="3.5" fill="var(--ink-3)" opacity="0.5"/></svg> 생성(더미)</span>
+      <span><svg width="9" height="9" style="vertical-align:middle"><circle cx="4.5" cy="4.5" r="4" fill="var(--accent)"/></svg> 현재 입력</span>
+    </div>
     <div class="row">
       <div><label class="f">목표 면적당 용량 (mAh/cm²)</label><input type="number" id="f_cap" value="5.0" step="0.1" min="0.5"></div>
       <div><label class="f">목표 합제밀도 (g/cc)</label><input type="number" id="f_den" value="3.2" step="0.05" min="1"></div>
@@ -1244,15 +1249,22 @@ function drawTernary(){
   const A=[W/2,pad],B=[pad,H-pad],C=[W-pad,H-pad]; // A=AM100, B=PTFE20, C=SC20 (확대)
   const toXY=(am,b,c)=>{const a2=(am-80)/20,b2=b/20,c2=c/20,s=a2+b2+c2;
     return [(A[0]*a2+B[0]*b2+C[0]*c2)/s,(A[1]*a2+B[1]*b2+C[1]*c2)/s];};
-  let pts="",hits="";
+  // 실측(실제 실험)은 주황·크게, 생성(더미)은 회색·작게 구분. 실측을 위에
+  // 그려 같은 조성에 겹칠 때 실측 툴팁이 우선 뜨게 한다.
+  let genPts="",measPts="",genHits="",measHits="";
   DB.lots.forEach((l,i)=>{const[x,y]=toXY(l.comp.am,l.comp.b,l.comp.c);
-    pts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="var(--ink-3)" opacity="0.55"/>`;
-    hits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`;});
+    if(l.source==="measured"){
+      measPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.1" fill="var(--warn)" opacity="0.9"/>`;
+      measHits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`;
+    }else{
+      genPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" fill="var(--ink-3)" opacity="0.45"/>`;
+      genHits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="transparent" style="cursor:pointer"/>`;
+    }});
   const am=+$("f_am").value||96,b=+$("f_b").value||2,c=+$("f_c").value||2;
   const[cx,cy]=toXY(am,b,c);
   svg.innerHTML=`<polygon points="${A}, ${B}, ${C}" fill="var(--inset)" stroke="var(--line)"/>
-   ${pts}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="var(--accent)"/>
-   ${hits}<circle class="thit cur" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>
+   ${genPts}${measPts}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="var(--accent)"/>
+   ${genHits}${measHits}<circle class="thit cur" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>
    <text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">NCM811 100</text>
    <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE 20</text>
    <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC 20</text>`;
