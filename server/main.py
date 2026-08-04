@@ -279,7 +279,7 @@ def _js_literal(value) -> str:
 SNAPSHOT_SHIM_JS = r"""
 (function () {
   var D = window.__RB_SNAPSHOT__;
-  var DENY = {detail: "이 파일은 결과 보기 전용 사본입니다 — 새 계산·조회는 RhoBench 서버에서 하세요."};
+  var DENY = {detail: "결과 보기 전용 페이지입니다 — 새 계산·조회는 RhoBench 서버에서 하세요."};
 
   function reply(body, ok) {
     return Promise.resolve({
@@ -331,18 +331,19 @@ SNAPSHOT_SHIM_JS = r"""
   var timer = setInterval(function () {
     if (done || !document.getElementById("rbv-results")) return;
 
-    var label = "결과 보기 전용 사본 — " + D.jobs.length + "건 · 내보낸 시각 " +
-      D.exported_at + " · 계산 결과와 그래프는 모두 그대로 보실 수 있습니다.";
+    var label = "결과 보기 전용 페이지 — 계산 " + D.jobs.length + "건 · " +
+      D.exported_at + " 기준 · 결과·그래프·3D 구조는 모두 그대로 보실 수 있습니다.";
     prependNote("rbv-results", label);
     prependNote("rbv-compare", label);
-    prependNote("rbv-calc", "이 사본에서는 새 계산을 제출할 수 없습니다. " +
-      "계산하려면 RhoBench 서버에서 실행하세요.");
-    prependNote("rbv-lookup", "이 사본에서는 물질 조회를 할 수 없습니다 " +
+    prependNote("rbv-calc", "이 페이지에서는 새 계산을 제출할 수 없습니다 " +
+      "(DFT 계산에는 PySCF 서버가 필요합니다). 아래 설정은 어떤 조건으로 " +
+      "계산했는지 보여 주기 위해 그대로 두었습니다.");
+    prependNote("rbv-lookup", "이 페이지에서는 물질 조회를 할 수 없습니다 " +
       "(인터넷 조회와 RDKit이 필요합니다).");
 
     ["submit-btn", "lookup-btn", "add-explicit"].forEach(function (id) {
       var b = document.getElementById(id);
-      if (b) { b.disabled = true; b.title = "결과 보기 전용 사본입니다"; }
+      if (b) { b.disabled = true; b.title = "결과 보기 전용 페이지입니다"; }
     });
 
     var csv = document.getElementById("export-csv");
@@ -361,7 +362,7 @@ SNAPSHOT_SHIM_JS = r"""
     var out = document.getElementById("rb-logout");
     if (out) out.style.display = "none";
     var who = document.getElementById("rb-whoami");
-    if (who) who.textContent = "결과 사본";
+    if (who) who.textContent = "결과 보기";
 
     // 원본 부트 스크립트가 뒤늦게 계산 화면을 열므로, 그 뒤에 결과 화면으로 되돌린다
     [300, 900, 1800, 3200].forEach(function (ms) {
