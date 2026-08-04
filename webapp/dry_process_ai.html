@@ -1274,6 +1274,7 @@ function renderVersions(){
 const TERN_W=230,TERN_H=200,TERN_SPAN=20;  // 기본 뷰: NCM811 80~100 삼각형(고정)
 let ternZoom=1;                 // 1(전체)~4(확대)
 let ternPanX=0.5,ternPanY=0.5;  // 0~1 막대 위치 (0.5=중앙)
+let ternDots=[];                // 화면에 그려진 점들의 로컬 좌표+Lot (최근접 툴팁용)
 const ternShow={measured:true,generated:true,input:true};
 function drawTernary(){
   const svg=$("ternary");const W=TERN_W,H=TERN_H,pad=16;
@@ -1284,47 +1285,49 @@ function drawTernary(){
   // 실측(실제 실험)은 주황·크게, 생성(더미)은 회색·작게 구분. 실측을 위에
   // 그려 같은 조성에 겹칠 때 실측 툴팁이 우선 뜨게 한다.
   // 범례 On/Off(ternShow) 및 확대 창 밖(am<floor) 점은 제외한다.
-  let genPts="",measPts="",genHits="",measHits="";
-  DB.lots.forEach((l,i)=>{
+  // 점 좌표는 ternDots 에 모아 두고, 커서 최근접 탐색으로 툴팁을 띄운다.
+  // (히트영역 방식은 확대 시 영역까지 커져 겹친 점 중 하나만 잡히는 문제가 있었음)
+  let genPts="",measPts="";
+  ternDots=[];
+  DB.lots.forEach(l=>{
     if(l.comp.am<floor||l.comp.b>TERN_SPAN||l.comp.c>TERN_SPAN)return; // 삼각형 밖
     const isM=l.source==="measured";
     if(isM&&!ternShow.measured)return;
     if(!isM&&!ternShow.generated)return;
     const[x,y]=toXY(l.comp.am,l.comp.b,l.comp.c);
-    if(isM){
-      measPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.1" fill="var(--warn)" opacity="0.9"/>`;
-      measHits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`;
-    }else{
-      genPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" fill="var(--ink-3)" opacity="0.45"/>`;
-      genHits+=`<circle class="thit" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="transparent" style="cursor:pointer"/>`;
-    }});
+    if(isM)measPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.1" fill="var(--warn)" opacity="0.9"/>`;
+    else   genPts+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" fill="var(--ink-3)" opacity="0.45"/>`;
+    ternDots.push({x,y,measured:isM,lot_id:l.lot_id,comp:l.comp});
+  });
   const am=+$("f_am").value||96,b=+$("f_b").value||2,c=+$("f_c").value||2;
   const inWin=am>=floor&&b<=TERN_SPAN&&c<=TERN_SPAN;
   const[cx,cy]=toXY(am,b,c);
   const curVis=(ternShow.input&&inWin)?`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="var(--accent)"/>`:"";
-  const curHit=(ternShow.input&&inWin)?`<circle class="thit cur" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" fill="transparent" style="cursor:pointer"/>`:"";
+  if(ternShow.input&&inWin)ternDots.push({x:cx,y:cy,cur:true,comp:{am,b,c}});
   const polygon=`<polygon points="${A}, ${B}, ${C}" fill="var(--inset)" stroke="var(--line)"/>`;
   // 확대·이동은 콘텐츠 그룹(ternView)에만 적용 — 축 라벨은 고정
-  svg.innerHTML=`<g id="ternView">${polygon}${genPts}${measPts}${genHits}${measHits}${curVis}${curHit}</g>`+
+  svg.innerHTML=`<g id="ternView">${polygon}${genPts}${measPts}${curVis}</g>`+
    `<text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">NCM811 100</text>
    <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE ${TERN_SPAN}</text>
    <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC ${TERN_SPAN}</text>`;
   applyTernView();
-  // 점 hover 툴팁 — Lot 이름·실측/생성 구분·조성 표시 (매 렌더마다 재바인딩)
-  const tipComp=c2=>`<div style="font-family:var(--mono);color:var(--ink-2)">NCM811 ${c2.am.toFixed(1)} / PTFE ${c2.b.toFixed(1)} / SuperC ${c2.c.toFixed(1)} wt%</div>`;
-  svg.querySelectorAll(".thit").forEach(h=>{
-    let html;
-    if(h.classList.contains("cur")){
-      html=`<div style="font-weight:700;margin-bottom:3px;color:var(--accent)">현재 입력 조성</div>`+tipComp({am,b,c});
-    }else{
-      const l=DB.lots[+h.dataset.i];
-      const badge=l.source==="measured"?'<span style="color:var(--accent);font-weight:700">실측</span>':'<span style="color:var(--ink-3);font-weight:700">생성</span>';
-      html=`<div style="font-weight:700;margin-bottom:3px">${esc(l.lot_id)} · ${badge}</div>`+tipComp(l.comp);
-    }
-    h.addEventListener("mouseover",e=>showHelp(e,html));
-    h.addEventListener("mousemove",moveHelp);
-    h.addEventListener("mouseout",hideHelp);
-  });
+}
+// 겹친 점 묶음 툴팁 — 같은(가까운) 좌표의 모든 Lot 을 함께 표시
+function ternTip(dots){
+  const cs=c=>`NCM811 ${c.am.toFixed(1)} / PTFE ${c.b.toFixed(1)} / SuperC ${c.c.toFixed(1)} wt%`;
+  if(dots.length===1){
+    const d=dots[0];
+    if(d.cur)return `<div style="font-weight:700;margin-bottom:3px;color:var(--accent)">현재 입력 조성</div><div style="font-family:var(--mono);color:var(--ink-2)">${cs(d.comp)}</div>`;
+    const badge=d.measured?'<span style="color:var(--accent);font-weight:700">실측</span>':'<span style="color:var(--ink-3);font-weight:700">생성</span>';
+    return `<div style="font-weight:700;margin-bottom:3px">${esc(d.lot_id)} · ${badge}</div><div style="font-family:var(--mono);color:var(--ink-2)">${cs(d.comp)}</div>`;
+  }
+  const cap=8,rows=dots.slice(0,cap).map(d=>{
+    if(d.cur)return `<div style="color:var(--accent)">• 현재 입력 · ${cs(d.comp)}</div>`;
+    const tag=d.measured?'<span style="color:var(--accent)">실측</span>':'<span style="color:var(--ink-3)">생성</span>';
+    return `<div style="font-family:var(--mono);color:var(--ink-2)">• ${esc(d.lot_id)} <span style="font-family:var(--sans)">${tag}</span> · ${cs(d.comp)}</div>`;
+  }).join("");
+  const more=dots.length>cap?`<div style="color:var(--ink-3)">…외 ${dots.length-cap}건</div>`:"";
+  return `<div style="font-weight:700;margin-bottom:3px">겹친 지점 · ${dots.length}건</div>${rows}${more}`;
 }
 // 확대(zoom) + X·Y 이동(pan) — 콘텐츠 그룹 transform 으로 처리.
 // 확대는 휠, 이동은 가로(X)·세로(Y) 막대. 축소 상태(zoom=1)에선 이동 여백이 0.
@@ -1348,6 +1351,23 @@ $("ternPanYSlider").addEventListener("input",e=>{ternPanY=1-(+e.target.value)/10
 // 확대 막대 + 휠
 $("ternZoomSlider").addEventListener("input",e=>setTernZoom(1+(+e.target.value)/100*(TERN_ZOOM_MAX-1)));
 $("ternary").addEventListener("wheel",e=>{e.preventDefault();setTernZoom(ternZoom+(e.deltaY<0?0.3:-0.3));},{passive:false});
+// 최근접 점 툴팁 — 커서에서 가장 가까운(그리고 겹친) 점들을 찾아 함께 표시.
+// 근접 임계는 화면 기준 고정(≈7px) → 확대할수록 개별 점이 분리된다.
+(function(){const svg=$("ternary");
+  svg.addEventListener("mousemove",e=>{
+    if(!ternDots.length){hideHelp();return;}
+    const rect=svg.getBoundingClientRect();
+    const sx=(e.clientX-rect.left)*(TERN_W/rect.width);
+    const sy=(e.clientY-rect.top)*(TERN_H/rect.height);
+    const px=ternPanX*TERN_W*(1-1/ternZoom),py=ternPanY*TERN_H*(1-1/ternZoom);
+    const lx=sx/ternZoom+px,ly=sy/ternZoom+py;      // 화면 → 로컬 좌표
+    const thr=7/ternZoom;                            // 화면 7px 상당
+    const near=ternDots.map(d=>({d,dist:Math.hypot(d.x-lx,d.y-ly)}))
+      .filter(o=>o.dist<=thr).sort((a,b)=>a.dist-b.dist).map(o=>o.d);
+    if(!near.length){hideHelp();return;}
+    showHelp(e,ternTip(near));
+  });
+  svg.addEventListener("mouseleave",hideHelp);})();
 updateTernRange();
 // 범례 클릭 On/Off
 document.querySelectorAll("#ternLegend .legToggle").forEach(el=>{
