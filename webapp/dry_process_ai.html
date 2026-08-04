@@ -102,8 +102,18 @@ svg .axis{stroke:var(--line)}
 .split2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:900px){.split2{grid-template-columns:1fr}}
 .ternwrap{display:flex;justify-content:center;margin-top:8px}
+.themeBtn{position:fixed;top:14px;right:16px;z-index:200;width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 5px rgba(0,0,0,.14)}
+.themeBtn:hover{border-color:var(--accent)}
+.themeBtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
+<script>
+// 테마 조기 적용 — 저장값 우선, 없으면 OS 설정. 렌더 전에 실행해 깜빡임 방지.
+(function(){try{var t=localStorage.getItem("dry_process_theme");
+  if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+  document.documentElement.setAttribute("data-theme",t);}catch(e){}})();
+</script>
 
+<button id="themeToggle" class="themeBtn" type="button" aria-label="다크/라이트 모드 전환">🌙</button>
 <div class="wrap">
 <header class="app">
   <div class="eyebrow">KETI 차세대전지연구센터 · NCM811 / PTFE / Super C 고정 소재계</div>
@@ -1163,6 +1173,21 @@ window.showTip=(e,stage,q,d)=>{
     `<div style="color:var(--warn);${tipHalo}">합제밀도 ${d} g/cc</div>`;
   chartTip.style.display="block";window.moveTip(e);};
 window.hideTip=()=>{chartTip.style.display="none";};
+
+// 테마 토글 — data-theme 전환 + localStorage 저장 (조기 스크립트가 초기값 설정)
+function syncThemeIcon(){
+  const dark=document.documentElement.getAttribute("data-theme")==="dark";
+  const b=$("themeToggle");
+  b.textContent=dark?"☀️":"🌙";
+  b.setAttribute("title",dark?"라이트 모드로 전환":"다크 모드로 전환");
+}
+$("themeToggle").addEventListener("click",()=>{
+  const next=document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark";
+  document.documentElement.setAttribute("data-theme",next);
+  try{localStorage.setItem("dry_process_theme",next);}catch(e){}
+  syncThemeIcon();
+});
+syncThemeIcon();
 
 // 탭
 document.querySelectorAll("nav.tabs button").forEach(b=>b.addEventListener("click",()=>{
