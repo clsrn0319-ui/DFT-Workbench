@@ -112,11 +112,13 @@ if response is not None:
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=table["stage_index"], y=table["areal_capacity_mah_cm2"],
-                name="면적당 용량 (mAh/cm²)", mode="lines+markers"))
+                name="면적당 용량 (mAh/cm²)", mode="lines+markers",
+                hovertemplate="%{x} · 면적당 용량 %{y:.2f} mAh/cm²<extra></extra>"))
             fig.add_trace(go.Scatter(
                 x=table["stage_index"], y=table["composite_density_gcc"],
                 name="합제밀도 (g/cc)", mode="lines+markers", yaxis="y2",
-                line=dict(dash="dash")))
+                line=dict(dash="dash"),
+                hovertemplate="%{x} · 합제밀도 %{y:.2f} g/cc<extra></extra>"))
             fig.update_layout(
                 yaxis=dict(title="면적당 용량 (mAh/cm²)"),
                 yaxis2=dict(title="합제밀도 (g/cc)", overlaying="y", side="right"),

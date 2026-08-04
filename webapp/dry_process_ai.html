@@ -1270,7 +1270,10 @@ function svgTrend(table){
     <line class="axis" x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}"/>
     <polyline points="${pQ}" fill="none" stroke="var(--accent)" stroke-width="2"/>
     <polyline points="${pD}" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 3"/>
-    ${table.map((r,i)=>`<circle cx="${x(i)}" cy="${yQ(r.q)}" r="3" fill="var(--accent)"/><circle cx="${x(i)}" cy="${yD(r.d)}" r="3" fill="var(--warn)"/><text x="${x(i)}" y="${H-8}" text-anchor="middle">${r.s}</text>`).join("")}
+    ${table.map((r,i)=>`<circle cx="${x(i)}" cy="${yQ(r.q)}" r="3" fill="var(--accent)"/><circle cx="${x(i)}" cy="${yD(r.d)}" r="3" fill="var(--warn)"/>
+      <circle cx="${x(i)}" cy="${yQ(r.q)}" r="9" fill="transparent" style="cursor:pointer"><title>${r.s} · 면적당 용량 ${r.q.toFixed(2)} mAh/cm²</title></circle>
+      <circle cx="${x(i)}" cy="${yD(r.d)}" r="9" fill="transparent" style="cursor:pointer"><title>${r.s} · 합제밀도 ${r.d.toFixed(2)} g/cc</title></circle>
+      <text x="${x(i)}" y="${H-8}" text-anchor="middle">${r.s}</text>`).join("")}
     <text x="${pl}" y="${pt+8}" fill="var(--accent)">면적당 용량 mAh/cm² ↓</text>
     <text x="${W-pr}" y="${pt+8}" text-anchor="end" fill="var(--warn)">밀도 g/cc ↑</text></svg></div>`;
 }
