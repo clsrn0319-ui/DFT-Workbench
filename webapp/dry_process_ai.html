@@ -1283,6 +1283,8 @@ window.moveHelp=e=>{const pad=14,w=helpTip.offsetWidth,h=helpTip.offsetHeight;
   helpTip.style.left=Math.max(8,x)+"px";helpTip.style.top=Math.max(8,y)+"px";};
 window.showHelp=(e,html)=>{helpTip.innerHTML=html;helpTip.style.display="block";window.moveHelp(e);};
 window.hideHelp=()=>{helpTip.style.display="none";};
+window.HELP_RMSE="<b>RMSE (평균 제곱근 오차)</b><br>예측이 실제값에서 평균 얼마나 벗어났는가 (원래 단위 그대로). 작을수록 정확.<br>예: 전극 두께 RMSE 2.961 → 두께 예측이 평균 ±약 3 μm 틀린다.";
+window.HELP_MAPE="<b>MAPE (평균 절대 백분율 오차)</b><br>예측이 실제값 대비 평균 몇 % 틀렸나. 단위가 달라도 %로 비교 가능, 작을수록 정확.<br>예: 두께 MAPE 2.56% → 두께를 평균 2.56% 오차로 맞힌다.";
 window.HELP_EPOCHS="<b>Epochs</b><br>학습 데이터를 몇 번 반복해서 익힐지입니다. 클수록 더 학습하지만, 너무 크면 과적합(외우기)·시간↑. 보통 수백 회.";
 window.HELP_SEED="<b>난수 seed</b><br>학습의 무작위성(초기값·데이터 섞기)을 고정하는 값입니다. 같은 seed면 결과가 똑같이 재현됩니다 (재현성 규칙 R8). 값 자체엔 좋고 나쁨이 없습니다.";
 window.HELP_UNC="<b>불확실성</b><br>모델이 그 후보를 얼마나 확신 못 하는가 (풀 내 0~1, 1=가장 불확실). 높을수록 찍었을 때 배울 게 많습니다.";
@@ -1809,8 +1811,8 @@ $("btnEval").addEventListener("click",()=>{
       <td class="t">${r.measured>=30?(ok?'<span class="badge A">달성</span>':'<span class="badge C">미달</span>'):'<span class="badge B">유예</span>'}</td></tr>`;}).join("");
     const bRows=Object.entries(r.b).map(([c,m])=>`<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${m.hold?"—":fmt(m.rmse,3)}</td><td>${m.hold?"—":fmt(m.mape,2)+"%"}</td><td>${m.count}</td><td class="t">${m.hold?`실측 ${m.count}건 &lt; 5건 — 평가 유보 (FE-03)`:"조건부 산출"}</td></tr>`).join("");
     $("evalResult").innerHTML=`
-      <div class="tblwrap"><table><thead><tr><th>A등급 변수 (FE-01)</th><th>RMSE</th><th>MAPE</th><th>N</th><th>NFR-03</th></tr></thead><tbody>${aRows}</tbody></table></div>
-      <div class="tblwrap" style="margin-top:8px"><table><thead><tr><th>B등급 (FE-03)</th><th>RMSE</th><th>MAPE</th><th>실측</th><th>상태</th></tr></thead><tbody>${bRows}</tbody></table></div>
+      <div class="tblwrap"><table><thead><tr><th>A등급 변수 (FE-01)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>N</th><th>NFR-03</th></tr></thead><tbody>${aRows}</tbody></table></div>
+      <div class="tblwrap" style="margin-top:8px"><table><thead><tr><th>B등급 (FE-03)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>실측</th><th>상태</th></tr></thead><tbody>${bRows}</tbody></table></div>
       <div class="note" style="margin-top:8px"><b>정합성·제약 준수 (FE-04):</b> 검사 ${r.consist.total}건 중 위반 없음 ${r.consist.free}건 — 정합률 ${fmt(r.consist.rate,1)}% (목표 100%) · 위반율 ${fmt(100-r.consist.rate,1)}% (목표 0%)</div>
       ${r.notes.map(n=>`<div class="mini" style="margin-top:6px">※ ${esc(n)}</div>`).join("")}
       <div class="mini" style="margin-top:6px">모델 ${MODEL.version} · 학습 Lot ${r.lots}건 (실측 ${r.measured}) — 리포트에 학습 Lot 수 필수 기록 (NFR-08)</div>`;
