@@ -383,17 +383,17 @@ svg .axis{stroke:var(--line)}
 <div class="split2">
   <div class="card">
     <h2>실측 데이터 (내장) <span class="fid">FD-02 · KETI 건식 실험 1~10</span></h2>
-    <p class="mini" style="margin:0 0 8px">실험 Lot Excel <b>실측 10건(1순위, 가중 1.0)</b>과 실측 앵커 부트스트랩 <b>생성 40건(2순위, 가중 0.3)</b>이 내장되어 있으며 최초 실행 시 자동 적재됩니다. 초기화했거나 이전 데이터가 남아 있으면 아래 버튼으로 복원하세요.</p>
+    <p class="mini" style="margin:0 0 8px">실험 Lot Excel <b>실측 10건(1순위, 가중 1.0)</b>과 실측을 닮은 <b>학습 보조 데이터 40건(2순위, 가중 0.3)</b>이 내장되어 있으며 최초 실행 시 자동 적재됩니다. 초기화했거나 이전 데이터가 남아 있으면 아래 버튼으로 복원하세요.</p>
     <label class="f">복원할 모델 버전</label>
     <select id="restoreVer" style="margin-bottom:6px"></select>
     <button class="ghost" id="btnLoadReal" style="width:100%">KETI 실측 10 + 생성 40 Lot · 선택 버전 모델 복원</button>
-    <h3 style="margin-top:14px">생성 데이터 추가 <span class="fid">FD-04 · 규칙 R3</span></h3>
-    <p class="mini" style="margin:0 0 8px">실측 Lot 을 앵커로 부트스트랩 — 실측의 공정 경로·스프링백·결측 패턴을 계승하고 조성·목표만 소폭 섭동합니다. 학습에는 가중 0.3 으로만 기여하며(실측 1순위), 정확도 평가·중요도 해석에서는 출처 플래그로 자동 제외됩니다.</p>
+    <h3 style="margin-top:14px">실측을 닮은 학습 데이터 늘리기 <span class="fid">FD-04 · 규칙 R3</span></h3>
+    <p class="mini" style="margin:0 0 8px">실측 Lot의 공정 흐름·스프링백·결측 패턴을 그대로 물려받고 조성·목표만 살짝 바꿔 비슷한 Lot을 만듭니다. 적은 실측을 보완하는 <b>학습 보조용</b>이라 실측보다 낮은 비중(가중 0.3)으로만 반영되고, 정확도 평가·중요도 분석에서는 자동 제외됩니다.</p>
     <div class="row">
-      <div><label class="f">생성 Lot 수</label><input type="number" id="d_n" value="40" min="10" max="200"></div>
-      <div><label class="f">생성 seed</label><input type="number" id="d_seed" value="7" min="0"></div>
+      <div><label class="f">만들 개수</label><input type="number" id="d_n" value="40" min="10" max="200"></div>
+      <div><label class="f">난수 seed (같은 값=같은 결과)</label><input type="number" id="d_seed" value="7" min="0"></div>
     </div>
-    <button class="act" id="btnGen">실측 앵커 부트스트랩 생성·적재</button>
+    <button class="act" id="btnGen">실측 닮은 학습 데이터 만들기</button>
     <h3>실험 결과 등록 (FR-06 → 재학습 트리거)</h3>
     <label class="f">Lot ID</label><input type="text" id="e_lot" value="EXP-0001">
     <div class="row">
@@ -1837,7 +1837,7 @@ $("btnGen").addEventListener("click",()=>{
   // 실측이 있으면 실측 앵커 부트스트랩(1순위 원칙), 없으면 일반 합성 생성으로 대체
   const lots=hasMeasured?generateFromMeasured(n,seed):generateLots(n,seed);
   DB.lots.push(...lots);saveDB();refreshStatus();
-  alert(hasMeasured?`실측 앵커 부트스트랩 ${n}건 생성 (가중 ${GEN_WEIGHT} 로 학습 기여 — 「5. 모델 관리」재학습 필요)`
+  alert(hasMeasured?`실측을 닮은 학습 데이터 ${n}건을 만들었습니다 (학습 보조용, 비중 ${GEN_WEIGHT}) — 「5. 모델 관리」에서 재학습해야 예측에 반영됩니다`
     :`일반 합성 ${n}건 생성 (실측 부재 — 실측 등록 후 부트스트랩 권장)`);
 });
 $("btnRegister").addEventListener("click",()=>{
