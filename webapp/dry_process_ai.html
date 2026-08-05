@@ -390,7 +390,7 @@ svg .axis{stroke:var(--line)}
     <h3 style="margin-top:14px">실측을 닮은 학습 데이터 늘리기 <span class="fid">FD-04 · 규칙 R3</span></h3>
     <p class="mini" style="margin:0 0 8px">실측 Lot의 공정 흐름·스프링백·결측 패턴을 그대로 물려받고 조성·목표만 살짝 바꿔 비슷한 Lot을 만듭니다. 적은 실측을 보완하는 <b>학습 보조용</b>이라 실측보다 낮은 비중(가중 0.3)으로만 반영되고, 정확도 평가·중요도 분석에서는 자동 제외됩니다.</p>
     <div class="row">
-      <div><label class="f">만들 개수</label><input type="number" id="d_n" value="40" min="10" max="200"></div>
+      <div><label class="f">가상 생성 Lot 수</label><input type="number" id="d_n" value="40" min="10" max="200"></div>
       <div><label class="f">난수 seed (같은 값=같은 결과)</label><input type="number" id="d_seed" value="7" min="0"></div>
     </div>
     <button class="act" id="btnGen">실측 닮은 학습 데이터 만들기</button>
