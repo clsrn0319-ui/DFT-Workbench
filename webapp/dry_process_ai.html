@@ -55,6 +55,8 @@ section.tab.on{display:block}
 .card h2{font-size:14px;font-weight:800;margin:0 0 10px;letter-spacing:-.01em}
 .card h2 .fid{font-family:var(--mono);font-weight:500;font-size:10.5px;color:var(--ink-3);margin-left:6px}
 .card h3{font-size:12.5px;font-weight:700;margin:14px 0 6px;color:var(--ink-2)}
+.card .secTitle{font-size:14px;font-weight:800;color:var(--ink);margin:16px 0 8px;letter-spacing:-.01em}
+.card .secTitle .fid{font-family:var(--mono);font-weight:500;font-size:10.5px;color:var(--ink-3);margin-left:6px}
 label.f{display:block;font-size:12px;color:var(--ink-2);margin:8px 0 3px;font-weight:600}
 input[type=number],input[type=text],select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--inset);color:var(--ink);font:inherit;font-family:var(--mono);font-size:13px}
 input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
@@ -382,15 +384,15 @@ svg .axis{stroke:var(--line)}
 <section class="tab" id="sc6">
 <div class="split2">
   <div class="card">
-    <h2 class="collapseHead"><span>실측 데이터 (내장) <span class="fid">FD-02 · KETI 건식 실험 1~10</span></span>
-      <span class="headBtns"><button type="button" class="collapseBtn" data-target="secRestore" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
+    <h3 class="collapseHead secTitle" style="margin-top:0"><span>실측 데이터 (내장) <span class="fid">FD-02 · KETI 건식 실험 1~10</span></span>
+      <span class="headBtns"><button type="button" class="collapseBtn" data-target="secRestore" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secRestore">
       <p class="mini" style="margin:0 0 8px">실험 Lot Excel <b>실측 10건(1순위, 가중 1.0)</b>과 실측을 닮은 <b>학습 보조 데이터 40건(2순위, 가중 0.3)</b>이 내장되어 있으며 최초 실행 시 자동 적재됩니다. 초기화했거나 이전 데이터가 남아 있으면 아래 버튼으로 복원하세요.</p>
       <label class="f">복원할 모델 버전</label>
       <select id="restoreVer" style="margin-bottom:6px"></select>
       <button class="ghost" id="btnLoadReal" style="width:100%">KETI 실측 10 + 생성 40 Lot · 선택 버전 모델 복원</button>
     </div>
-    <h3 class="collapseHead" style="margin-top:14px"><span>실측을 닮은 학습 데이터 늘리기 <span class="fid">FD-04 · 규칙 R3</span></span>
+    <h3 class="collapseHead secTitle"><span>실측을 닮은 학습 데이터 늘리기 <span class="fid">FD-04 · 규칙 R3</span></span>
       <span class="headBtns"><button type="button" class="collapseBtn" data-target="secGen" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secGen">
       <p class="mini" style="margin:0 0 8px">실측 Lot의 공정 흐름·스프링백·결측 패턴을 그대로 물려받고 조성·목표만 살짝 바꿔 비슷한 Lot을 만듭니다. 적은 실측을 보완하는 <b>학습 보조용</b>이라 실측보다 낮은 비중(가중 0.3)으로만 반영되고, 정확도 평가·중요도 분석에서는 자동 제외됩니다.</p>
@@ -400,7 +402,7 @@ svg .axis{stroke:var(--line)}
       </div>
       <button class="act" id="btnGen">실측 닮은 학습 데이터 만들기</button>
     </div>
-    <h3 class="collapseHead"><span>실험 결과 등록 <span class="fid">FR-06 → 재학습 트리거</span></span>
+    <h3 class="collapseHead secTitle"><span>실험 결과 등록 <span class="fid">FR-06 → 재학습 트리거</span></span>
       <span class="headBtns"><button type="button" class="collapseBtn" data-target="secRegister" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secRegister">
       <label class="f">Lot ID</label><input type="text" id="e_lot" value="EXP-0001">
@@ -416,12 +418,15 @@ svg .axis{stroke:var(--line)}
       </div>
       <button class="act" id="btnRegister">실측 Lot 등록</button>
     </div>
-    <h3>데이터 입출력</h3>
-    <div class="row">
-      <button class="ghost" id="btnExport">JSON 내보내기</button>
-      <button class="ghost" id="btnClear">전체 삭제</button>
+    <h3 class="collapseHead secTitle"><span>데이터 입출력</span>
+      <span class="headBtns"><button type="button" class="collapseBtn" data-target="secIO" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
+    <div id="secIO">
+      <div class="row">
+        <button class="ghost" id="btnExport">JSON 내보내기</button>
+        <button class="ghost" id="btnClear">전체 삭제</button>
+      </div>
+      <div class="mini" style="margin-top:6px">데이터와 모델은 브라우저 localStorage 에 저장되어 오프라인·새로고침 후에도 유지됩니다.</div>
     </div>
-    <div class="mini" style="margin-top:6px">데이터와 모델은 브라우저 localStorage 에 저장되어 오프라인·새로고침 후에도 유지됩니다.</div>
   </div>
   <div class="card">
     <h2>이상치 검토 <span class="fid">FP-01</span></h2>
