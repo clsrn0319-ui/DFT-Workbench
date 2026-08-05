@@ -31,9 +31,16 @@ if ! "$PY" -c "import pyscf, rdkit, fastapi" 2>/dev/null; then
 fi
 
 # ── 2. 접속 비밀번호 ──────────────────────────────────────────────
+# 한 번 정해 두면 data/access.json 에 해시로 남아, 재부팅 후에도 그대로 쓰인다.
+if [ -f data/access.json ]; then FIRST_RUN=0; else FIRST_RUN=1; fi
+
 PASSWORD="${1:-${RHOBENCH_ACCESS_PASSWORD:-}}"
 if [ -z "$PASSWORD" ]; then
-  printf '공유할 접속 비밀번호를 입력하세요 (그냥 Enter = 자동 발급): '
+  if [ "$FIRST_RUN" = "1" ]; then
+    printf '공유할 접속 비밀번호를 정하세요 (그냥 Enter = 무작위 발급): '
+  else
+    printf '접속 비밀번호 (그냥 Enter = 지난번 그대로, 바꾸려면 새로 입력): '
+  fi
   read -r PASSWORD
 fi
 [ -n "$PASSWORD" ] && export RHOBENCH_ACCESS_PASSWORD="$PASSWORD"
@@ -51,8 +58,10 @@ echo "  이 컴퓨터에서        ${GREEN}${BOLD}http://localhost:${PORT}${OFF}
 echo "  같은 네트워크에서    ${GREEN}${BOLD}http://${LAN_IP}:${PORT}${OFF}"
 if [ -n "$PASSWORD" ]; then
 echo "  접속 비밀번호        ${GREEN}${BOLD}${PASSWORD}${OFF}"
+elif [ "$FIRST_RUN" = "1" ]; then
+echo "  접속 비밀번호        ${DIM}아래 로그에 한 번 출력됩니다 — 기록해 두세요${OFF}"
 else
-echo "  접속 비밀번호        ${DIM}아래 로그에 출력됩니다${OFF}"
+echo "  접속 비밀번호        ${DIM}지난번에 쓰던 비밀번호 그대로${OFF}"
 fi
 echo
 echo "  ${DIM}이 창을 닫으면 서버가 멈춥니다. 종료하려면 Ctrl+C.${OFF}"
