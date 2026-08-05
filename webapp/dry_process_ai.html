@@ -422,8 +422,9 @@ svg .axis{stroke:var(--line)}
       <span class="headBtns"><button type="button" class="collapseBtn" data-target="secIO" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secIO">
       <div class="row">
-        <button class="ghost" id="btnExport">JSON 내보내기</button>
-        <button class="ghost" id="btnClear">전체 삭제</button>
+        <button class="ghost" id="btnExport" style="flex:1">JSON 내보내기</button>
+        <button class="ghost" id="btnExportDocx" style="flex:1">📄 DOCX 내보내기</button>
+        <button class="ghost" id="btnClear" style="flex:1">전체 삭제</button>
       </div>
       <div class="mini" style="margin-top:6px">데이터와 모델은 브라우저 localStorage 에 저장되어 오프라인·새로고침 후에도 유지됩니다.</div>
     </div>
@@ -1877,6 +1878,15 @@ $("btnRegister").addEventListener("click",()=>{
 $("btnLoadReal").addEventListener("click",()=>{const ver=$("restoreVer").value;restoreRealState(true,ver);refreshStatus();
   alert(`KETI 실측 ${REAL_LOTS.length} Lot 적재 완료 · 모델 ${MODEL?MODEL.version:"-"} 복원`);});
 $("btnExport").addEventListener("click",()=>download("dry_process_lots.json",JSON.stringify(DB.lots,null,2)));
+$("btnExportDocx").addEventListener("click",()=>{
+  const f=$("lotFilter")?$("lotFilter").value:"all";
+  const lots=DB.lots.filter(l=>f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true);
+  if(!lots.length){alert("내보낼 Lot이 없습니다.");return;}
+  const label={all:"전체",measured:"실측만",generated:"가상 생성만"}[f]||"전체";
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  const fs=`${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  downloadBlob(`lots_${f}_${fs}.docx`,buildLotsDocx(lots,label));
+});
 $("btnClear").addEventListener("click",()=>{if(confirm("모든 Lot·모델·이력을 삭제할까요? (localStorage 초기화)")){DB={lots:[],versions:[],evals:[]};MODEL=null;localStorage.removeItem("dry_process_db");localStorage.removeItem("dry_process_model");refreshStatus();}});
 $("btnOutlier").addEventListener("click",()=>{
   const {flags,dRange}=runOutliers();
@@ -2013,6 +2023,35 @@ function buildPredictionDocx(r,p,comp){
     {name:"_rels/.rels",data:_utf8(rels)},
     {name:"word/document.xml",data:_utf8(documentXml)},
   ]);
+}
+// 본문(body) 조각 → DOCX Blob 패키징 (공용)
+function _docxBlob(body){
+  const documentXml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+  const ct=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+  const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  return _zipStore([
+    {name:"[Content_Types].xml",data:_utf8(ct)},
+    {name:"_rels/.rels",data:_utf8(rels)},
+    {name:"word/document.xml",data:_utf8(documentXml)},
+  ]);
+}
+// Lot 목록 → DOCX Blob (현재 출처 필터 반영)
+function buildLotsDocx(lots,label){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  const stamp=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const meas=lots.filter(l=>l.source==="measured").length,gen=lots.length-meas;
+  const rows=lots.map(l=>{const l2=l.stages?.L2;return [
+    l.lot_id,l.source==="measured"?"실측":"생성",
+    `${fmt(l.comp.am,2)} / ${fmt(l.comp.b,2)} / ${fmt(l.comp.c,2)}`,
+    fmt(l.area,0),fmt(l2?.t,1),fmt(l2?.d,3),
+    fmt(dispV(SR_COL,l.ep?.sheet_resistance_ohm_sq),3),l.ec?"완료":"미완(결측 유지)"];});
+  const tbl=_wTable(["Lot","출처","AM/PTFE/SC (wt%)","면적(cm²)","L2 두께(μm)","L2 밀도(g/cc)","시트저항(×10⁴ Ω/sq)","셀 평가"],rows);
+  const body=
+    _wPara("AI 기반 건식 전극 공정 최적화 — Lot 목록",{bold:true,size:32})+
+    _wPara(`필터: ${label} · 총 ${lots.length}건 (실측 ${meas} / 가상 생성 ${gen}) · 모델 ${MODEL?MODEL.version:"-"} · 생성 ${stamp}`,{size:18,color:"666666"})+
+    tbl+
+    _wPara("※ 시트저항은 ×10⁴ Ω/sq 표기. 생성 데이터는 학습 보조용(가중 0.3)이며 정확도 평가·중요도 분석에서 자동 제외됩니다 (R3).",{size:16,color:"888888"});
+  return _docxBlob(body);
 }
 
 // ---------- 초기화 ----------
