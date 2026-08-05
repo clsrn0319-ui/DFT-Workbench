@@ -1281,6 +1281,8 @@ window.moveHelp=e=>{const pad=14,w=helpTip.offsetWidth,h=helpTip.offsetHeight;
   helpTip.style.left=Math.max(8,x)+"px";helpTip.style.top=Math.max(8,y)+"px";};
 window.showHelp=(e,html)=>{helpTip.innerHTML=html;helpTip.style.display="block";window.moveHelp(e);};
 window.hideHelp=()=>{helpTip.style.display="none";};
+window.HELP_N="<b>N</b><br>채점에 사용한 실측 데이터 개수입니다. 작을수록(몇 건으로 잰 성적이라) 신뢰하기 어렵습니다.";
+window.HELP_NFR03="<b>NFR-03 (정확도 목표 판정)</b><br>회사가 정한 정확도 합격 기준 통과 여부입니다. 목표: 두께 MAPE<10%, 합제밀도 MAPE<5%. 실측 30건 이상부터 달성/미달을 판정하고, 그 전에는 '유예'입니다.";
 window.HELP_RMSE="<b>RMSE (평균 제곱근 오차)</b><br>예측이 실제값에서 평균 얼마나 벗어났는가 (원래 단위 그대로). 작을수록 정확.<br>예: 전극 두께 RMSE 2.961 → 두께 예측이 평균 ±약 3 μm 틀린다.";
 window.HELP_MAPE="<b>MAPE (평균 절대 백분율 오차)</b><br>예측이 실제값 대비 평균 몇 % 틀렸나. 단위가 달라도 %로 비교 가능, 작을수록 정확.<br>예: 두께 MAPE 2.56% → 두께를 평균 2.56% 오차로 맞힌다.";
 window.HELP_EPOCHS="<b>Epochs</b><br>학습 데이터를 몇 번 반복해서 익힐지입니다. 클수록 더 학습하지만, 너무 크면 과적합(외우기)·시간↑. 보통 수백 회.";
@@ -1810,10 +1812,10 @@ $("btnEval").addEventListener("click",()=>{
     const aRows=Object.entries(r.a).map(([c,m])=>{
       const goal=c.includes("density")?5:10, ok=m.mape<=goal;
       return `<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${fmt(dispV(c,m.rmse),3)}</td><td>${fmt(m.mape,2)}%</td><td>${m.n}</td>
-      <td class="t">${r.measured>=30?(ok?'<span class="badge A">달성</span>':'<span class="badge C">미달</span>'):'<span class="badge B">유예</span>'}</td></tr>`;}).join("");
+      <td class="t">${r.measured>=30?(ok?'<span class="badge A">달성</span>':'<span class="badge C">미달</span>'):`<span class="badge B" style="cursor:help" onmouseover="showHelp(event,'실측 ${r.measured}건(30건 미만) — 정확도 목표(NFR-03) 판정을 미룹니다. 실측 30건 이상 쌓이면 달성/미달로 바뀝니다.')" onmousemove="moveHelp(event)" onmouseout="hideHelp()">유예</span>`}</td></tr>`;}).join("");
     const bRows=Object.entries(r.b).map(([c,m])=>`<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${m.hold?"—":fmt(dispV(c,m.rmse),3)}</td><td>${m.hold?"—":fmt(m.mape,2)+"%"}</td><td>${m.count}</td><td class="t">${m.hold?`실측 ${m.count}건 &lt; 5건 — 평가 유보 (FE-03)`:"조건부 산출"}</td></tr>`).join("");
     $("evalResult").innerHTML=`
-      <div class="tblwrap"><table><thead><tr><th>A등급 변수 (FE-01)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>N</th><th>NFR-03</th></tr></thead><tbody>${aRows}</tbody></table></div>
+      <div class="tblwrap"><table><thead><tr><th>A등급 변수 (FE-01)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>N<span class="help" onmouseover="showHelp(event,HELP_N)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>NFR-03<span class="help" onmouseover="showHelp(event,HELP_NFR03)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th></tr></thead><tbody>${aRows}</tbody></table></div>
       <div class="tblwrap" style="margin-top:8px"><table><thead><tr><th>B등급 (FE-03)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>실측</th><th>상태</th></tr></thead><tbody>${bRows}</tbody></table></div>
       <div class="note" style="margin-top:8px"><b>정합성·제약 준수 (FE-04):</b> 검사 ${r.consist.total}건 중 위반 없음 ${r.consist.free}건 — 정합률 ${fmt(r.consist.rate,1)}% (목표 100%) · 위반율 ${fmt(100-r.consist.rate,1)}% (목표 0%)</div>
       ${r.notes.map(n=>`<div class="mini" style="margin-top:6px">※ ${esc(n)}</div>`).join("")}
