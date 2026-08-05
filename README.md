@@ -29,15 +29,32 @@ PySCF는 Windows 네이티브를 지원하지 않으므로 WSL2에서 백엔드�
 wsl --install -d Ubuntu
 ```
 
+재부팅 후 시작 메뉴 → "Ubuntu" 실행. 이하 우분투 터미널에서 **한 줄씩** 입력합니다
+(여러 줄을 한 번에 붙여넣으면 `apt`가 `python3`·`venv`·`pip`까지 설치할 패키지
+이름으로 받아들여 엉뚱하게 동작합니다):
+
 ```bash
-# 재부팅 후 시작 메뉴 → "Ubuntu" 실행, 이하 우분투 터미널
-sudo apt update && sudo apt install -y python3-pip python3-venv git
+sudo apt update
+sudo apt install -y python3-pip python3-venv git
 git clone https://github.com/clsrn0319-ui/DFT-Workbench
 cd DFT-Workbench
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn server.main:app --host 0.0.0.0 --port 8000
+./scripts/setup.sh        # 가상환경 생성 + 패키지 설치 + 설치 확인 (5~10분)
+./scripts/start.sh        # 실행 — 접속 주소와 비밀번호를 함께 출력
 ```
+
+`setup.sh`는 이미 끝난 단계는 건너뛰므로 실패한 자리에서 다시 실행해도 됩니다.
+직접 단계를 밟고 싶다면:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000
+```
+
+> `uvicorn` 명령이 PATH에 없어 `Command 'uvicorn' not found`가 뜨면 위처럼
+> `python3 -m uvicorn`으로 실행하세요. 이때 안내되는 `sudo apt install uvicorn`은
+> **다른 패키지**이므로 설치해도 해결되지 않습니다.
 
 메모리가 부족해 계산이 느리면 `C:\Users\<이름>\.wslconfig`에 `[wsl2]` /
 `memory=12GB` 식으로 상향한 뒤 `wsl --shutdown`으로 재시작합니다.
@@ -45,8 +62,8 @@ uvicorn server.main:app --host 0.0.0.0 --port 8000
 ### 리눅스 · 맥
 
 ```bash
-pip install -r requirements.txt
-uvicorn server.main:app --host 0.0.0.0 --port 8000
+./scripts/setup.sh
+./scripts/start.sh
 # → http://localhost:8000
 ```
 
