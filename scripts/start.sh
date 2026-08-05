@@ -35,7 +35,9 @@ fi
 if [ -f data/access.json ]; then FIRST_RUN=0; else FIRST_RUN=1; fi
 
 PASSWORD="${1:-${RHOBENCH_ACCESS_PASSWORD:-}}"
-if [ -z "$PASSWORD" ]; then
+# RHOBENCH_NO_PROMPT=1 이면 묻지 않고 저장된 비밀번호로 바로 시작 (바탕화면 아이콘용).
+# 저장된 비밀번호가 아직 없으면(최초 실행) 물어봐야 하므로 이 설정을 무시한다.
+if [ -z "$PASSWORD" ] && { [ "$FIRST_RUN" = "1" ] || [ -z "${RHOBENCH_NO_PROMPT:-}" ]; }; then
   if [ "$FIRST_RUN" = "1" ]; then
     printf '공유할 접속 비밀번호를 정하세요 (그냥 Enter = 무작위 발급): '
   else

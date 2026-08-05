@@ -23,8 +23,11 @@ echo.
 rem 서버가 뜰 시간을 준 뒤 브라우저를 연다
 start "" /min powershell -NoProfile -Command "Start-Sleep -Seconds 20; Start-Process 'http://localhost:%PORT%'"
 
-rem WSL 안에서 실행기 호출 (비밀번호는 실행기가 물어봄)
-wsl -e bash -lc "cd %WSLDIR% && ./scripts/start.sh"
+rem WSL 안에서 실행기 호출.
+rem RHOBENCH_NO_PROMPT=1 — 비밀번호를 묻지 않고 지난번 것으로 바로 시작한다.
+rem (최초 실행이라 저장된 비밀번호가 없으면 실행기가 알아서 물어본다.
+rem  비밀번호를 바꾸려면 Ubuntu 터미널에서 ./scripts/start.sh 를 직접 실행)
+wsl -e bash -lc "cd %WSLDIR% && RHOBENCH_NO_PROMPT=1 ./scripts/start.sh"
 
 echo.
 echo   서버가 종료되었습니다.
