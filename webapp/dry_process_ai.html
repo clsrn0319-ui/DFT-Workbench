@@ -435,7 +435,13 @@ svg .axis{stroke:var(--line)}
   </div>
 </div>
 <div class="card" style="margin-top:14px">
-  <h2>Lot 목록</h2>
+  <h2 class="collapseHead"><span>Lot 목록 <span id="lotCount" class="fid"></span></span>
+    <span class="headBtns"><label class="f" style="margin:0 2px 0 0">출처 필터</label>
+      <select id="lotFilter" style="width:auto" title="출처별로 걸러 보기">
+        <option value="all">전체</option>
+        <option value="measured">실측만</option>
+        <option value="generated">가상 생성만</option>
+      </select></span></h2>
   <div class="tblwrap"><table id="lotTable"><thead><tr>
     <th>Lot</th><th>출처</th><th>AM/PTFE/SC (wt%)</th><th>면적 (cm²)</th><th>L2 두께 (μm)</th><th>L2 밀도 (g/cc)</th><th>시트 저항</th><th>셀 평가</th>
   </tr></thead><tbody></tbody></table></div>
@@ -1354,7 +1360,10 @@ function refreshStatus(){
 
 function renderLotTable(){
   const tb=$("lotTable").querySelector("tbody");
-  tb.innerHTML=DB.lots.slice(-80).reverse().map(l=>{
+  const f=$("lotFilter")?$("lotFilter").value:"all";
+  const rows=DB.lots.filter(l=>f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true);
+  if($("lotCount"))$("lotCount").textContent=`표시 ${rows.length}건`+(rows.length>80?" · 최근 80":"");
+  tb.innerHTML=rows.slice(-80).reverse().map(l=>{
     const l2=l.stages?.L2;
     return `<tr><td class="t">${esc(l.lot_id)}</td><td class="t">${l.source==="measured"?'<span class="badge A">실측</span>':'<span class="badge C">생성</span>'}</td>
     <td>${fmt(l.comp.am,2)} / ${fmt(l.comp.b,2)} / ${fmt(l.comp.c,2)}</td><td>${fmt(l.area,0)}</td>
@@ -1646,6 +1655,7 @@ document.querySelectorAll(".collapseBtn").forEach(b=>b.addEventListener("click",
   sec.style.display=open?"none":"";
   b.textContent=open?"＋":"－";b.setAttribute("aria-expanded",open?"false":"true");
 }));
+$("lotFilter").addEventListener("change",renderLotTable);   // Lot 목록 출처 필터
 const bwEmpty=`<div class="empty">목표를 설정하고 탐색을 실행하세요.</div>`;
 // 순방향 입력 초기화 — 조성·목표값을 빈칸으로 비운다
 $("btnResetFw").addEventListener("click",()=>{
