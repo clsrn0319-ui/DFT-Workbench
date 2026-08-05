@@ -384,7 +384,9 @@ svg .axis{stroke:var(--line)}
   <div class="card">
     <h2>실측 데이터 (내장) <span class="fid">FD-02 · KETI 건식 실험 1~10</span></h2>
     <p class="mini" style="margin:0 0 8px">실험 Lot Excel <b>실측 10건(1순위, 가중 1.0)</b>과 실측 앵커 부트스트랩 <b>생성 40건(2순위, 가중 0.3)</b>이 내장되어 있으며 최초 실행 시 자동 적재됩니다. 초기화했거나 이전 데이터가 남아 있으면 아래 버튼으로 복원하세요.</p>
-    <button class="ghost" id="btnLoadReal" style="width:100%">KETI 실측 10 + 생성 40 Lot · 사전학습 모델 복원</button>
+    <label class="f">복원할 모델 버전</label>
+    <select id="restoreVer" style="margin-bottom:6px"></select>
+    <button class="ghost" id="btnLoadReal" style="width:100%">KETI 실측 10 + 생성 40 Lot · 선택 버전 모델 복원</button>
     <h3 style="margin-top:14px">생성 데이터 추가 <span class="fid">FD-04 · 규칙 R3</span></h3>
     <p class="mini" style="margin:0 0 8px">실측 Lot 을 앵커로 부트스트랩 — 실측의 공정 경로·스프링백·결측 패턴을 계승하고 조성·목표만 소폭 섭동합니다. 학습에는 가중 0.3 으로만 기여하며(실측 1순위), 정확도 평가·중요도 해석에서는 출처 플래그로 자동 제외됩니다.</p>
     <div class="row">
@@ -982,6 +984,11 @@ async function trainPipeline(epochs,seed,onProgress){
   MODEL={net:student,registry:reg,version,trainLots:rows.length,seed,passRate};
   DB.versions.push({version,at:new Date().toISOString().slice(0,16).replace("T"," "),lots:rows.length,
     measuredRatio:rows.length?measured/rows.length:0,seed,passRate,registry:version});
+  // 버전별 가중치 보관 — 나중에 이 버전으로 복원(롤백) 가능하게 (최근 8개 유지)
+  DB.archive=DB.archive||{};
+  DB.archive[version]={net:student.serialize(),registry:reg,trainLots:rows.length,seed,passRate,version};
+  const keep=Object.keys(DB.archive).sort((a,b)=>verSort(a)-verSort(b));
+  while(keep.length>8){const drop=keep.shift();if(PRETRAINED&&drop===PRETRAINED.version)continue;delete DB.archive[drop];}
   saveDB();
   return MODEL;
 }
@@ -1328,7 +1335,7 @@ function refreshStatus(){
   $("stModel").textContent=MODEL?`${MODEL.version} (학습 ${MODEL.trainLots} Lot)`:"미학습";
   $("modelDot").classList.toggle("on",!!MODEL);
   $("footStatus").textContent=MODEL?` — 현재 모델 ${MODEL.version} · seed ${MODEL.seed} · registry ${MODEL.registry.version} (1:1 짝)`:"";
-  renderLotTable();renderVersions();drawTernary();
+  renderLotTable();renderVersions();drawTernary();populateRestoreVer();
 }
 
 function renderLotTable(){
@@ -1842,8 +1849,8 @@ $("btnRegister").addEventListener("click",()=>{
   saveDB();refreshStatus();
   alert("실측 Lot 등록 완료 — 신규 실측 등록은 재학습 트리거입니다 (FT-08). 「5. 모델 관리」에서 재학습을 실행하세요.");
 });
-$("btnLoadReal").addEventListener("click",()=>{restoreRealState(true);refreshStatus();
-  alert(`KETI 실측 ${REAL_LOTS.length} Lot 적재 완료`+(PRETRAINED?` · 사전학습 모델 ${PRETRAINED.version} 복원`:""));});
+$("btnLoadReal").addEventListener("click",()=>{const ver=$("restoreVer").value;restoreRealState(true,ver);refreshStatus();
+  alert(`KETI 실측 ${REAL_LOTS.length} Lot 적재 완료 · 모델 ${MODEL?MODEL.version:"-"} 복원`);});
 $("btnExport").addEventListener("click",()=>download("dry_process_lots.json",JSON.stringify(DB.lots,null,2)));
 $("btnClear").addEventListener("click",()=>{if(confirm("모든 Lot·모델·이력을 삭제할까요? (localStorage 초기화)")){DB={lots:[],versions:[],evals:[]};MODEL=null;localStorage.removeItem("dry_process_db");localStorage.removeItem("dry_process_model");refreshStatus();}});
 $("btnOutlier").addEventListener("click",()=>{
@@ -1984,15 +1991,36 @@ function buildPredictionDocx(r,p,comp){
 }
 
 // ---------- 초기화 ----------
-function restoreRealState(force){
+function verSort(v){return parseFloat(String(v).replace(/[^0-9.]/g,""))||0;}
+function seedArchive(){   // 사전학습 모델을 아카이브에 등록(최초 1회)
+  DB.archive=DB.archive||{};
+  if(PRETRAINED&&!DB.archive[PRETRAINED.version])
+    DB.archive[PRETRAINED.version]={net:PRETRAINED.net,registry:PRETRAINED.registry,
+      trainLots:PRETRAINED.trainLots,seed:PRETRAINED.seed,passRate:PRETRAINED.passRate,version:PRETRAINED.version};
+}
+function populateRestoreVer(){
+  const sel=$("restoreVer");if(!sel)return;
+  seedArchive();
+  const keys=Object.keys(DB.archive).sort((a,b)=>verSort(b)-verSort(a));   // 최신 위로
+  const cur=sel.value;
+  sel.innerHTML=keys.map(v=>{const a=DB.archive[v],pre=PRETRAINED&&v===PRETRAINED.version;
+    return `<option value="${v}">${v} · 학습 ${a.trainLots} Lot${pre?" (사전학습 기준)":""}</option>`;}).join("")||`<option value="">(보관된 버전 없음)</option>`;
+  if(keys.includes(cur))sel.value=cur;
+  else if(PRETRAINED&&keys.includes(PRETRAINED.version))sel.value=PRETRAINED.version;   // 기본 = 사전학습 기준
+}
+function restoreRealState(force,version){
   const embedded=[...REAL_LOTS,...GEN_LOTS];   // 실측 10 (1순위) + 부트스트랩 생성 40 (2순위)
   const ids=new Set(embedded.map(r=>r.lot_id));
   if(force){DB.lots=DB.lots.filter(l=>!ids.has(l.lot_id));}
   if(force||!DB.lots.length)DB.lots=[...JSON.parse(JSON.stringify(embedded)),...(force?DB.lots:[])];
-  if(PRETRAINED&&(force||!MODEL)){
-    MODEL={net:Net.deserialize(PRETRAINED.net),registry:PRETRAINED.registry,version:PRETRAINED.version,
-      trainLots:PRETRAINED.trainLots,seed:PRETRAINED.seed,passRate:PRETRAINED.passRate};
-    if(!DB.versions.some(v=>v.version===PRETRAINED.version)&&PRETRAINED.versionRow)DB.versions.unshift(PRETRAINED.versionRow);
+  seedArchive();
+  const ver=version||(PRETRAINED&&PRETRAINED.version);
+  const a=DB.archive[ver];
+  if(a&&(force||!MODEL)){
+    MODEL={net:Net.deserialize(a.net),registry:a.registry,version:a.version,
+      trainLots:a.trainLots,seed:a.seed,passRate:a.passRate};
+    if(!DB.versions.some(v=>v.version===a.version)&&PRETRAINED&&a.version===PRETRAINED.version&&PRETRAINED.versionRow)
+      DB.versions.unshift(PRETRAINED.versionRow);
   }
   saveDB();
 }
