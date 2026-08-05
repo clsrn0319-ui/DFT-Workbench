@@ -1807,9 +1807,9 @@ $("btnEval").addEventListener("click",()=>{
     const r=runEvaluation();
     const aRows=Object.entries(r.a).map(([c,m])=>{
       const goal=c.includes("density")?5:10, ok=m.mape<=goal;
-      return `<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${fmt(m.rmse,3)}</td><td>${fmt(m.mape,2)}%</td><td>${m.n}</td>
+      return `<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${fmt(dispV(c,m.rmse),3)}</td><td>${fmt(m.mape,2)}%</td><td>${m.n}</td>
       <td class="t">${r.measured>=30?(ok?'<span class="badge A">달성</span>':'<span class="badge C">미달</span>'):'<span class="badge B">유예</span>'}</td></tr>`;}).join("");
-    const bRows=Object.entries(r.b).map(([c,m])=>`<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${m.hold?"—":fmt(m.rmse,3)}</td><td>${m.hold?"—":fmt(m.mape,2)+"%"}</td><td>${m.count}</td><td class="t">${m.hold?`실측 ${m.count}건 &lt; 5건 — 평가 유보 (FE-03)`:"조건부 산출"}</td></tr>`).join("");
+    const bRows=Object.entries(r.b).map(([c,m])=>`<tr><td class="t">${esc(COL_KO[c]||c)}</td><td>${m.hold?"—":fmt(dispV(c,m.rmse),3)}</td><td>${m.hold?"—":fmt(m.mape,2)+"%"}</td><td>${m.count}</td><td class="t">${m.hold?`실측 ${m.count}건 &lt; 5건 — 평가 유보 (FE-03)`:"조건부 산출"}</td></tr>`).join("");
     $("evalResult").innerHTML=`
       <div class="tblwrap"><table><thead><tr><th>A등급 변수 (FE-01)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>N</th><th>NFR-03</th></tr></thead><tbody>${aRows}</tbody></table></div>
       <div class="tblwrap" style="margin-top:8px"><table><thead><tr><th>B등급 (FE-03)</th><th>RMSE<span class="help" onmouseover="showHelp(event,HELP_RMSE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>MAPE<span class="help" onmouseover="showHelp(event,HELP_MAPE)" onmousemove="moveHelp(event)" onmouseout="hideHelp()">ⓘ</span></th><th>실측</th><th>상태</th></tr></thead><tbody>${bRows}</tbody></table></div>
