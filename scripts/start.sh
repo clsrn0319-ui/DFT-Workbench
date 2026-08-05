@@ -23,10 +23,29 @@ PY=$(command -v python3 || command -v python) || {
   exit 1
 }
 
-if ! "$PY" -c "import pyscf, rdkit, fastapi" 2>/dev/null; then
-  echo "${RED}필요한 패키지가 설치되어 있지 않습니다.${OFF}"
-  echo "  아래를 먼저 실행하세요:"
-  echo "    python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt"
+MISSING=$("$PY" - <<'PYEOF' 2>/dev/null
+mods = []
+for m in ("pyscf", "rdkit", "fastapi", "uvicorn"):
+    try:
+        __import__(m)
+    except ImportError:
+        mods.append(m)
+print(" ".join(mods))
+PYEOF
+)
+if [ -n "${MISSING:-}" ]; then
+  echo "${RED}필요한 패키지가 없습니다:${OFF} $MISSING"
+  echo
+  if [ -d .venv ]; then
+    echo "  가상환경(.venv)은 있지만 패키지가 빠져 있습니다:"
+    echo "    ${BOLD}. .venv/bin/activate && pip install -r requirements.txt${OFF}"
+  else
+    echo "  아래를 순서대로 실행하세요 (처음 한 번만):"
+    echo "    ${BOLD}sudo apt install -y python3-pip python3-venv${OFF}"
+    echo "    ${BOLD}python3 -m venv .venv${OFF}"
+    echo "    ${BOLD}. .venv/bin/activate${OFF}"
+    echo "    ${BOLD}pip install -r requirements.txt${OFF}"
+  fi
   exit 1
 fi
 
@@ -71,4 +90,5 @@ echo "${BOLD}================================================================${O
 echo
 
 # ── 4. 실행 ──────────────────────────────────────────────────────
-exec uvicorn server.main:app --host 0.0.0.0 --port "$PORT"
+# `uvicorn` 명령이 PATH에 없어도 되도록 파이썬 모듈로 호출한다
+exec "$PY" -m uvicorn server.main:app --host 0.0.0.0 --port "$PORT"
