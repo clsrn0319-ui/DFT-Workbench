@@ -210,6 +210,7 @@ async function init() {
   $("submit-btn").onclick = submit;
   $("lookup-btn").onclick = doLookup;
   wireResultsControls();
+  wireBinderControls();
   $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
@@ -1126,6 +1127,7 @@ function showResult(job) {
     <div class="small muted mono" style="margin-bottom:8px">${esc(job.id)} ·
       ${esc(r.conditions.method)} · ${esc(r.conditions.solvent_model)} ·
       ${esc(String(r.conditions.temperature_k))} K · wall ${r.wall_time_s}s</div>
+    ${r.binder_report ? binderScorecard(r.binder_report) : ""}
     <div class="stat-row">${tiles}</div>
     <div class="grid-2">
       <div>
@@ -1853,3 +1855,316 @@ window.rbRenderCompare = function () {
     window.rbRenderCompare();
   }));
 };
+
+/* ================= 건식 음극 바인더 스크리닝 ================= */
+
+const VERDICT_CLASS = {"양호": "verdict-ok", "주의": "verdict-mid", "위험": "verdict-no"};
+const PFAS_STYLE = {
+  pfas: ["verdict-no", "PFAS 해당"],
+  fluorinated: ["verdict-mid", "불소 함유"],
+  pfas_free: ["verdict-ok", "PFAS-free"],
+  unknown: ["muted", "판정 불가"],
+};
+
+function pfasBadge(pfas) {
+  const [cls, short] = PFAS_STYLE[pfas?.status] || PFAS_STYLE.unknown;
+  return `<span class="badge ${cls}" style="border:1px solid currentColor">${esc(short)}</span>`;
+}
+
+/** 결과 상세 맨 위에 붙는 바인더 적합성 스코어카드 */
+function binderScorecard(rep) {
+  const cls = VERDICT_CLASS[rep.overall] || "muted";
+  let h = `<div class="card" style="margin:0 0 14px;border-left:4px solid currentColor"
+      class="${cls}">
+    <div class="card-head" style="margin-bottom:8px">
+      <h2 style="margin:0">건식 음극 바인더 적합성</h2>
+      <span class="${cls}" style="font-weight:700;font-size:15px">
+        ${esc(rep.overall || "판정 불가")}</span>
+    </div>
+    <p style="margin:0 0 10px">${pfasBadge(rep.pfas)} ${esc(rep.summary)}</p>`;
+
+  if (rep.pfas?.matched?.length) {
+    h += `<p class="muted small" style="margin:0 0 10px">검출된 구조: ${
+      rep.pfas.matched.map(esc).join(" · ")} · 불소 원자 ${rep.pfas.n_fluorine}개</p>`;
+  }
+
+  if (rep.absolute?.length) {
+    h += '<table class="kv-table" style="margin-bottom:10px">';
+    for (const a of rep.absolute) {
+      const ac = VERDICT_CLASS[a.verdict] || "muted";
+      h += `<tr><th style="width:120px">${esc(a.axis)}</th>
+        <td style="width:90px" class="${ac}"><b>${esc(a.verdict)}</b></td>
+        <td><span class="mono">${fmt(a.value)}</span>
+          <span class="muted small"> ${esc(a.unit || "")}</span>
+          <div class="muted small">${esc(a.detail)}</div></td></tr>`;
+    }
+    h += "</table>";
+  }
+
+  // 음극별 통과 여부
+  const red = (rep.absolute || []).find(a => a.per_anode);
+  if (red) {
+    h += '<div class="toolbar" style="margin:0 0 10px">'
+      + '<span class="muted small">음극별 환원 안정성</span>'
+      + red.per_anode.map(p => `<span class="badge ${p.stable ? "verdict-ok" : "verdict-no"}"
+          style="border:1px solid currentColor">${esc(p.label)} ${p.potential_v} V
+          ${p.stable ? "통과" : "위험"}</span>`).join("")
+      + "</div>";
+  }
+
+  if (rep.relative?.length) {
+    h += '<table class="kv-table" style="margin-bottom:10px">';
+    for (const rel of rep.relative) {
+      h += `<tr><th style="width:120px">${esc(rel.axis)}</th>
+        <td style="width:90px" class="mono">${fmt(rel.value)}</td>
+        <td class="muted small">${esc(rel.detail)}</td></tr>`;
+    }
+    h += "</table><p class=\"muted small\" style=\"margin:0 0 8px\">"
+      + "위 네 축은 절대 기준이 없어 «후보 순위» 화면에서 후보끼리 비교해야 의미가 있습니다.</p>";
+  }
+
+  h += '<ul class="log-list" style="margin:0">'
+    + (rep.notes || []).map(n => `<li>${esc(n)}</li>`).join("") + "</ul></div>";
+  return h;
+}
+
+/* ---------- 바인더 후보군 화면 ---------- */
+let BINDER_LIB = null;
+const BINDER_SEL = new Set();
+
+async function loadBinderLib() {
+  if (BINDER_LIB) return BINDER_LIB;
+  const res = await fetch("/api/binder/candidates");
+  if (!res.ok) throw new Error("후보 목록을 불러오지 못했습니다.");
+  BINDER_LIB = await res.json();
+  return BINDER_LIB;
+}
+
+window.rbRenderBinder = async function () {
+  const grid = $("bnd-grid");
+  if (!grid) return;
+  let lib;
+  try {
+    lib = await loadBinderLib();
+  } catch (e) {
+    grid.className = "empty small";
+    grid.textContent = e.message;
+    return;
+  }
+
+  // 계열 필터 채우기 (한 번만)
+  const fam = $("bnd-family");
+  if (fam && !fam.options.length) {
+    fam.add(new Option("모든 계열", ""));
+    for (const f of [...new Set(lib.candidates.map(c => c.family))]) fam.add(new Option(f, f));
+    fam.onchange = () => window.rbRenderBinder();
+    $("bnd-hide-pfas").onchange = () => window.rbRenderBinder();
+  }
+  // 정확도·구조 선택지 (PRESETS 재사용)
+  const acc = $("bnd-accuracy");
+  if (acc && !acc.options.length && PRESETS) {
+    for (const k of Object.keys(PRESETS.accuracy)) acc.add(new Option(k, k));
+    acc.value = "빠름";      // 스크리닝은 사전 선별이므로 빠름이 기본
+    const st = $("bnd-structure");
+    for (const s of PRESETS.structures) st.add(new Option(s, s));
+    acc.onchange = updateBinderEstimate;
+    st.onchange = updateBinderEstimate;
+  }
+
+  const famV = fam ? fam.value : "";
+  const hide = $("bnd-hide-pfas")?.checked;
+  const shown = lib.candidates.filter(c =>
+    (!famV || c.family === famV) && !(hide && c.pfas.status === "pfas"));
+
+  grid.className = "mol-grid";
+  grid.innerHTML = shown.map(c => `
+    <button class="mol-card ${BINDER_SEL.has(c.id) ? "selected" : ""}" data-bnd="${esc(c.id)}">
+      <b>${esc(c.abbr)} ${c.reference ? "· 기준군" : ""}</b>
+      <span>${pfasBadge(c.pfas)} <span class="small muted">${esc(c.family)}</span></span>
+      <span class="small muted">${esc(c.name)}</span>
+      <span class="mono small muted">${esc(c.smiles)}</span>
+      <span class="small muted">${esc(c.note)}</span>
+    </button>`).join("");
+  grid.querySelectorAll("[data-bnd]").forEach(b => b.addEventListener("click", () => {
+    const id = b.dataset.bnd;
+    BINDER_SEL.has(id) ? BINDER_SEL.delete(id) : BINDER_SEL.add(id);
+    window.rbRenderBinder();
+  }));
+
+  $("bnd-count").textContent = `${shown.length}종 표시 · ${BINDER_SEL.size}종 선택`;
+  updateBinderEstimate();
+};
+
+function updateBinderEstimate() {
+  const el = $("bnd-estimate");
+  if (!el) return;
+  const n = BINDER_SEL.size;
+  const acc = $("bnd-accuracy")?.value || "빠름";
+  // 실측 기준: '빠름' 단순 분자 약 30초, 지문 전체 계산은 그보다 훨씬 오래 걸린다
+  const per = {"빠름": "수 분", "표준": "수십 분", "정밀": "수십 분 이상"}[acc] || "수 분";
+  el.textContent = n
+    ? `${n}종 × 후보당 ${per} — 접착·응집·BDE까지 계산하므로 전위만 구할 때보다 오래 걸립니다.`
+    : "후보를 선택하세요.";
+}
+
+function wireBinderControls() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("bnd-sel-free", async () => {
+    const lib = await loadBinderLib();
+    lib.candidates.filter(c => c.pfas.status === "pfas_free")
+      .forEach(c => BINDER_SEL.add(c.id));
+    window.rbRenderBinder();
+  });
+  on("bnd-sel-none", () => { BINDER_SEL.clear(); window.rbRenderBinder(); });
+
+  on("bnd-check", async () => {
+    const out = $("bnd-check-out");
+    const smiles = $("bnd-smiles").value.trim();
+    if (!smiles) { out.textContent = "SMILES를 입력하세요."; return; }
+    out.textContent = "판정 중…";
+    try {
+      const res = await fetch("/api/binder/pfas", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({smiles}),
+      });
+      const p = await res.json();
+      if (!res.ok) throw new Error(p.detail || "판정 실패");
+      out.innerHTML = `${pfasBadge(p)} <b>${esc(p.label)}</b>
+        <div class="muted small">${esc(p.note || "")}${
+          p.matched?.length ? " · 검출: " + p.matched.map(esc).join(" · ") : ""}</div>`;
+    } catch (e) { out.textContent = e.message; }
+  });
+
+  on("bnd-submit", async () => {
+    const out = $("bnd-submit-out");
+    if (!BINDER_SEL.size) { out.textContent = "후보를 선택하세요."; return; }
+    const lib = await loadBinderLib();
+    const chosen = lib.candidates.filter(c => BINDER_SEL.has(c.id));
+    out.textContent = "제출 중…";
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          customMaterials: chosen.map(c => ({smiles: c.smiles, name: `${c.abbr} — ${c.name}`})),
+          settings: {
+            ...PRESETS.defaults,
+            accuracy: $("bnd-accuracy").value,
+            structure: $("bnd-structure").value,
+            purpose: "건식 음극 바인더 스크리닝",
+            referenceElectrode: "Li/Li+",
+          },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || "제출 실패");
+      const n = (body.jobs || body.created || []).length || chosen.length;
+      out.innerHTML = `<span class="verdict-ok">${n}건 제출 완료</span> —
+        «DFT 계산 결과»에서 진행률을 확인하고, 끝나면 «후보 순위»에서 비교하세요.`;
+      BINDER_SEL.clear();
+      window.rbRenderBinder();
+    } catch (e) { out.innerHTML = `<span class="verdict-no">${esc(e.message)}</span>`; }
+  });
+}
+
+/* ---------- 후보 순위 화면 ---------- */
+const BINDER_RANK_SEL = new Set();
+
+window.rbRenderBinderRank = async function () {
+  const picker = $("bndr-picker"), body = $("bndr-body");
+  if (!picker) return;
+  const jobs = publishedJobs();
+  for (const id of [...BINDER_RANK_SEL]) if (!jobs.some(j => j.id === id)) BINDER_RANK_SEL.delete(id);
+
+  if (!jobs.length) {
+    picker.className = "empty small";
+    picker.textContent = "완료된 계산이 없습니다. «바인더 후보군»에서 스크리닝을 제출하세요.";
+    body.innerHTML = "";
+    return;
+  }
+  picker.className = "mol-grid";
+  picker.innerHTML = jobs.map(j => `
+    <button class="mol-card ${BINDER_RANK_SEL.has(j.id) ? "selected" : ""}" data-bndr="${esc(j.id)}">
+      <b>${esc(j.material.name)}</b>
+      <span class="small muted">${esc(condLabel(j))}</span>
+      <span class="mono small muted">${esc(j.id)}</span></button>`).join("");
+  picker.querySelectorAll("[data-bndr]").forEach(b => b.addEventListener("click", () => {
+    const id = b.dataset.bndr;
+    BINDER_RANK_SEL.has(id) ? BINDER_RANK_SEL.delete(id) : BINDER_RANK_SEL.add(id);
+    window.rbRenderBinderRank();
+  }));
+  $("bndr-count").textContent = `${BINDER_RANK_SEL.size} / ${jobs.length}건 선택`;
+
+  if (!BINDER_RANK_SEL.size) {
+    body.innerHTML = '<p class="muted small">결과를 선택하면 판정과 순위가 나타납니다.</p>';
+    return;
+  }
+  body.innerHTML = '<p class="muted small">판정 중…</p>';
+  try {
+    const res = await fetch("/api/binder/rank", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ids: [...BINDER_RANK_SEL]}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "판정 실패");
+    body.innerHTML = binderRankHtml(data);
+  } catch (e) {
+    body.innerHTML = `<p class="verdict-no">${esc(e.message)}</p>`;
+  }
+};
+
+function binderRankHtml(data) {
+  const reps = data.reports;
+  // 1) 게이트 + 절대 판정 요약표
+  let h = `<h3 style="font-size:13px;color:var(--accent);margin:0 0 6px">
+      1차 판정 — PFAS 게이트와 절대 기준</h3>
+    <div class="scroll-x"><table class="kv-table" style="min-width:640px">
+    <tr><th>후보</th><th>PFAS</th><th>환원 안정성</th><th>열 안정성</th><th>종합</th></tr>`;
+  for (const r of reps) {
+    const rep = r.report;
+    const cell = axis => {
+      const a = (rep.absolute || []).find(x => x.axis === axis);
+      if (!a) return '<td class="muted small">—</td>';
+      return `<td class="${VERDICT_CLASS[a.verdict]}"><b>${esc(a.verdict)}</b>
+        <div class="mono small">${fmt(a.value)} ${esc(a.unit || "")}</div></td>`;
+    };
+    h += `<tr><th style="white-space:nowrap">${esc(r.material)}</th>
+      <td>${pfasBadge(rep.pfas)}</td>${cell("환원 안정성")}${cell("열 안정성")}
+      <td class="${VERDICT_CLASS[rep.overall] || "muted"}"><b>${esc(rep.overall || "—")}</b>
+        <div class="muted small">${esc(rep.summary)}</div></td></tr>`;
+  }
+  h += "</table></div>";
+
+  // 2) 상대 축 순위
+  const ranks = data.ranks || {};
+  const keys = Object.keys(ranks);
+  if (keys.length) {
+    h += `<h3 style="font-size:13px;color:var(--accent);margin:16px 0 6px">
+      2차 비교 — 후보 간 상대 순위</h3><div class="grid-2">`;
+    for (const k of keys) {
+      const rk = ranks[k];
+      h += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 4px">
+        ${esc(rk.axis)} <span class="muted small">(${
+          rk.lower_is_better ? "작을수록 유리" : "클수록 유리"})</span></h3>
+        <table class="kv-table">`;
+      for (const o of rk.order) {
+        h += `<tr><th style="width:34px">${o.rank}위</th>
+          <td>${esc(o.material)}</td>
+          <td class="mono" style="width:90px">${fmt(o.value)}</td></tr>`;
+      }
+      h += "</table></div>";
+    }
+    h += "</div>";
+  } else {
+    h += `<p class="muted small" style="margin-top:14px">
+      상대 순위를 매기려면 같은 지표를 가진 결과가 2건 이상 필요합니다 —
+      «물성 지문» 또는 «건식 음극 바인더 스크리닝» 목적으로 계산하세요.</p>`;
+  }
+
+  h += `<ul class="log-list" style="margin-top:12px">
+    <li>PFAS 해당은 다른 축과 무관하게 탈락입니다 — 규제 요건이기 때문입니다.</li>
+    <li>상대 순위는 대용 클러스터 모델 기반이라 같은 조건으로 계산한 후보끼리만 유효합니다.</li>
+    <li>현행 표준(PTFE·PVDF)을 함께 계산하면 «기존 대비 얼마나 되는가»를 읽을 수 있습니다.</li>
+    <li>피브릴화·기계 물성·집전체 접착은 분자 단위 DFT 범위 밖입니다.</li>
+  </ul>`;
+  return h;
+}

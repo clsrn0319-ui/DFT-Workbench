@@ -763,6 +763,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-results #rbv-results{display:block}
 #rb-real.mode-lookup #rbv-lookup{display:block}
 #rb-real.mode-compare #rbv-compare{display:block}
+#rb-real.mode-binder #rbv-binder{display:block}
+#rb-real.mode-binderrank #rbv-binderrank{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -1008,6 +1010,68 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
   <div class="card" id="compare-body"></div>
 </div>
+
+<div id="rbv-binder" class="rbv">
+  <h1>바인더 후보군</h1>
+  <p class="rb-note">건식 음극 바인더(PFAS-free) 후보를 고르고 한 번에 스크리닝합니다.
+    PFAS 판정은 계산 없이 구조만으로 즉시 나오므로, 규제 대상은 계산 전에 걸러집니다.</p>
+
+  <div class="card">
+    <div class="card-head"><h2>후보 선택</h2>
+      <div class="toolbar" style="margin:0">
+        <select id="bnd-family" style="font-size:12px;padding:3px 6px"></select>
+        <label class="compare-check">
+          <input type="checkbox" id="bnd-hide-pfas" style="accent-color:var(--accent)">
+          PFAS 숨기기</label>
+        <button class="btn" id="bnd-sel-free" type="button">PFAS-free 전체 선택</button>
+        <button class="btn" id="bnd-sel-none" type="button">선택 해제</button>
+        <span class="muted small" id="bnd-count"></span>
+      </div>
+    </div>
+    <div id="bnd-grid" class="mol-grid"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>직접 입력</h2></div>
+    <div class="toolbar">
+      <input id="bnd-smiles" placeholder="반복 단위 SMILES (예: C=CC(=O)O)"
+        style="flex:1;min-width:240px;padding:6px 10px">
+      <input id="bnd-name" placeholder="이름 (선택)" style="width:180px;padding:6px 10px">
+      <button class="btn" id="bnd-check" type="button">PFAS 판정</button>
+    </div>
+    <div id="bnd-check-out" class="small"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>스크리닝 실행</h2></div>
+    <div class="toolbar">
+      <label class="compare-check">정확도
+        <select id="bnd-accuracy" style="font-size:12px;padding:3px 6px"></select></label>
+      <label class="compare-check">구조
+        <select id="bnd-structure" style="font-size:12px;padding:3px 6px"></select></label>
+      <button class="btn primary" id="bnd-submit" type="button">선택 후보 스크리닝 제출</button>
+    </div>
+    <p class="muted small" id="bnd-estimate"></p>
+    <div id="bnd-submit-out" class="small"></div>
+  </div>
+</div>
+
+<div id="rbv-binderrank" class="rbv">
+  <h1>후보 순위</h1>
+  <p class="rb-note">완료된 결과를 바인더 관점으로 판정하고 후보끼리 순위를 매깁니다.
+    PFAS 게이트와 절대 판정(환원·열 안정성)은 통과/탈락, 접착·응집·팽윤은 후보 간 상대 순위입니다.</p>
+  <div class="card">
+    <div class="card-head"><h2>비교할 결과 선택</h2>
+      <div class="toolbar" style="margin:0">
+        <button class="btn" id="bndr-all" type="button">전체 선택</button>
+        <button class="btn" id="bndr-none" type="button">선택 해제</button>
+        <span class="muted small" id="bndr-count"></span>
+      </div>
+    </div>
+    <div id="bndr-picker" class="mol-grid"></div>
+  </div>
+  <div class="card" id="bndr-body"></div>
+</div>
 </div>
 </section>
 <script src="/static/app.js"></script>
@@ -1027,6 +1091,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
       {label: "물질 비교", mode: "compare"}]},
+    {group: "건식 바인더", items: [
+      {label: "바인더 후보군", mode: "binder"},
+      {label: "후보 순위", mode: "binderrank"}]},
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
@@ -1048,13 +1115,15 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
     real.scrollTop = 0;
     setActive(label);
-    real.classList.remove("mode-lookup", "mode-compare");
+    real.classList.remove("mode-lookup", "mode-compare", "mode-binder", "mode-binderrank");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
     }
     if (mode === "results" && window.rbRenderResults) try { window.rbRenderResults(); } catch (e) {}
     if (mode === "compare" && window.rbRenderCompare) try { window.rbRenderCompare(); } catch (e) {}
+    if (mode === "binder" && window.rbRenderBinder) try { window.rbRenderBinder(); } catch (e) {}
+    if (mode === "binderrank" && window.rbRenderBinderRank) try { window.rbRenderBinderRank(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
