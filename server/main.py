@@ -167,9 +167,10 @@ def binder_rank(req: BinderRankRequest, _: bool = Depends(require_login)):
     for j in store.list_jobs():
         if j["id"] not in wanted or j["status"] != "PUBLISHED" or not j.get("result"):
             continue
-        rep = j["result"].get("binder_report")
-        if rep is None:                      # 바인더 목적이 아니었던 결과도 판정해 준다
-            rep = binder.report(j["material"], j["result"].get("descriptors") or {})
+        # 저장본을 쓰지 않고 항상 다시 판정한다 — 순수 함수라 비용이 없고,
+        # 판정 로직이 개선되면 예전 결과에도 즉시 반영된다. 바인더 목적이
+        # 아니었던 결과도 이 경로로 판정된다.
+        rep = binder.report(j["material"], j["result"].get("descriptors") or {})
         reports.append({"material": j["material"]["name"], "id": j["id"], "report": rep})
     if not reports:
         raise HTTPException(400, "선택한 작업 중 판정할 수 있는 완료 결과가 없습니다.")

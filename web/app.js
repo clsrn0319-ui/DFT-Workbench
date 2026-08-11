@@ -1874,10 +1874,10 @@ function pfasBadge(pfas) {
 /** 결과 상세 맨 위에 붙는 바인더 적합성 스코어카드 */
 function binderScorecard(rep) {
   const cls = VERDICT_CLASS[rep.overall] || "muted";
-  let h = `<div class="card" style="margin:0 0 14px;border-left:4px solid currentColor"
-      class="${cls}">
+  let h = `<div class="card ${cls}" data-binder-scorecard
+      style="margin:0 0 14px;border-left:4px solid currentColor">
     <div class="card-head" style="margin-bottom:8px">
-      <h2 style="margin:0">건식 음극 바인더 적합성</h2>
+      <h2 style="margin:0;color:var(--text-1)">건식 음극 바인더 적합성</h2>
       <span class="${cls}" style="font-weight:700;font-size:15px">
         ${esc(rep.overall || "판정 불가")}</span>
     </div>
@@ -1897,6 +1897,17 @@ function binderScorecard(rep) {
         <td><span class="mono">${fmt(a.value)}</span>
           <span class="muted small"> ${esc(a.unit || "")}</span>
           <div class="muted small">${esc(a.detail)}</div></td></tr>`;
+    }
+    h += "</table>";
+  }
+
+  // 평가되지 않은 축 — 통과와 구분해서 보여준다
+  if (rep.unevaluated?.length) {
+    h += '<table class="kv-table" style="margin-bottom:10px">';
+    for (const u of rep.unevaluated) {
+      h += `<tr><th style="width:120px">${esc(u.axis)}</th>
+        <td style="width:90px" class="muted"><b>판정 보류</b></td>
+        <td class="muted small">${esc(u.reason)}</td></tr>`;
     }
     h += "</table>";
   }
@@ -2017,6 +2028,13 @@ function wireBinderControls() {
   });
   on("bnd-sel-none", () => { BINDER_SEL.clear(); window.rbRenderBinder(); });
 
+  // 후보 순위 화면의 선택 버튼
+  on("bndr-all", () => {
+    publishedJobs().forEach(j => BINDER_RANK_SEL.add(j.id));
+    window.rbRenderBinderRank();
+  });
+  on("bndr-none", () => { BINDER_RANK_SEL.clear(); window.rbRenderBinderRank(); });
+
   on("bnd-check", async () => {
     const out = $("bnd-check-out");
     const smiles = $("bnd-smiles").value.trim();
@@ -2123,9 +2141,13 @@ function binderRankHtml(data) {
     const rep = r.report;
     const cell = axis => {
       const a = (rep.absolute || []).find(x => x.axis === axis);
-      if (!a) return '<td class="muted small">—</td>';
-      return `<td class="${VERDICT_CLASS[a.verdict]}"><b>${esc(a.verdict)}</b>
-        <div class="mono small">${fmt(a.value)} ${esc(a.unit || "")}</div></td>`;
+      if (a) {
+        return `<td class="${VERDICT_CLASS[a.verdict]}"><b>${esc(a.verdict)}</b>
+          <div class="mono small">${fmt(a.value)} ${esc(a.unit || "")}</div></td>`;
+      }
+      // 값이 없는 것은 «통과»가 아니라 «판정 보류» — 사유를 툴팁으로 붙인다
+      const u = (rep.unevaluated || []).find(x => x.axis === axis);
+      return `<td class="muted small" title="${esc(u?.reason || "")}">판정 보류</td>`;
     };
     h += `<tr><th style="white-space:nowrap">${esc(r.material)}</th>
       <td>${pfasBadge(rep.pfas)}</td>${cell("환원 안정성")}${cell("열 안정성")}

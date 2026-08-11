@@ -205,7 +205,7 @@ RELATIVE_AXES = [
      "이량체 결합 에너지 — 피브릴화·필름 형성에 필요하나 과하면 분산 불량"),
     ("solvation_energy_kcal", "전해액 팽윤 저항", False,
      "전해액 용매화 에너지 — 덜 음수일수록 전해액에 덜 녹아 팽윤이 적음"),
-    ("dipole_debye", "표면 극성", True,
+    ("dipole_debye", "표면 극성", False,
      "쌍극자 모멘트 — 클수록 극성 표면·집전체와의 상호작용에 유리"),
 ]
 
@@ -232,6 +232,20 @@ def report(material: dict, descriptors: dict) -> dict:
          "detail": detail}
         for key, label, lower, detail in RELATIVE_AXES if desc.get(key) is not None
     ]
+    # 평가되지 않은 절대 축 — 통과로 오인하지 않도록 사유·해결책과 함께 남긴다.
+    # 예: 에틸렌(C=C)처럼 주사슬 단일결합이 없는 모노머는 BDE 자체가 나오지 않는다.
+    judged = {a["axis"] for a in absolute}
+    unevaluated = [
+        {"axis": axis, "reason": reason}
+        for axis, reason in (
+            ("환원 안정성",
+             "환원 전위가 없습니다 — 목적을 «전자구조 + 산화/환원 전위» 이상으로 두고 "
+             "기준 전극을 Li/Li+로 지정해 다시 계산하세요."),
+            ("열 안정성",
+             "끊을 수 있는 주사슬 단일결합이 없어 BDE가 산출되지 않았습니다 — "
+             "비닐 모노머는 구조를 «2량체» 이상으로 두면 주사슬 C–C가 생겨 계산됩니다."),
+        ) if axis not in judged
+    ]
 
     if gate["status"] == "pfas":
         overall = VERDICT_NO
@@ -244,16 +258,23 @@ def report(material: dict, descriptors: dict) -> dict:
         overall = None
         summary = ("판정할 값이 없습니다 — 목적을 «건식 음극 바인더 스크리닝»으로 두고 "
                    "다시 계산하세요")
-    elif any(a["verdict"] == VERDICT_MID for a in absolute):
-        overall = VERDICT_MID
-        summary = "기본 요건은 통과했으나 여유가 크지 않음"
     else:
-        overall = VERDICT_OK
-        summary = "PFAS-free · 환원 안정성 · 열 안정성 모두 통과"
+        # 실제로 판정한 축만 요약에 적는다. 미평가 축이 있으면 «일부»임을 밝힌다.
+        passed = " · ".join(["PFAS-free"] + sorted(judged))
+        if any(a["verdict"] == VERDICT_MID for a in absolute):
+            overall = VERDICT_MID
+            summary = f"{passed} 통과 — 다만 여유가 크지 않음"
+        else:
+            overall = VERDICT_OK
+            summary = f"{passed} 통과"
+        if unevaluated:
+            overall = VERDICT_MID if overall == VERDICT_OK else overall
+            summary += (f" · {' · '.join(u['axis'] for u in unevaluated)}은(는) "
+                        "평가되지 않아 판정 보류")
 
     return {
         "pfas": gate, "overall": overall, "summary": summary,
-        "absolute": absolute, "relative": relative,
+        "absolute": absolute, "unevaluated": unevaluated, "relative": relative,
         "adhesion_anode_kj": adh,
         "notes": [
             "환원 안정성은 열역학 기준입니다 — 실제로는 SEI 형성이 보호막으로 작용할 수 있습니다.",

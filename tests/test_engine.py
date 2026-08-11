@@ -309,3 +309,24 @@ def test_binder_rank_orders_relative_axes():
     ranks = binder.rank(reps)
     order = ranks["dimer_binding_kj"]["order"]
     assert order[0]["material"] == "A"   # 더 음수 = 강한 응집 = 1위
+
+
+def test_binder_does_not_claim_unevaluated_axes_passed():
+    """값이 없는 축을 «통과»로 보고하면 안 된다.
+
+    에틸렌(C=C)처럼 주사슬 단일결합이 없는 비닐 모노머는 BDE가 산출되지 않는데,
+    이를 열 안정성 통과로 요약하면 근거 없는 합격 판정이 된다.
+    """
+    from server import binder
+    rep = binder.report({"smiles": "C=C"}, {"reduction_potential_v": -4.275})
+    assert rep["overall"] == binder.VERDICT_MID          # 양호가 아니라 주의
+    assert "열 안정성" not in rep["summary"].split("통과")[0]
+    axes = [u["axis"] for u in rep["unevaluated"]]
+    assert axes == ["열 안정성"]
+    assert "2량체" in rep["unevaluated"][0]["reason"]     # 해결 방법 안내
+
+    # 두 축이 모두 평가되면 미평가 목록은 비고 양호로 판정된다
+    full = binder.report({"smiles": "C=CC"},
+                         {"reduction_potential_v": -4.374, "bde_min_kj": 467.0})
+    assert full["overall"] == binder.VERDICT_OK
+    assert full["unevaluated"] == []
