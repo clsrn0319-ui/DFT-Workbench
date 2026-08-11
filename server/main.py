@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, geometry
+from . import auth, binder, geometry
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -143,6 +143,47 @@ def get_presets(_: bool = Depends(require_login)):
         "referenceElectrodes": list(presets.ABSOLUTE_POTENTIALS.keys()),
         "defaults": presets.DEFAULT_SETTINGS,
     }
+
+
+@app.get("/api/binder/candidates")
+def binder_candidates(_: bool = Depends(require_login)):
+    """건식 음극 바인더 후보 라이브러리 (PFAS 판정 포함)."""
+    return {"candidates": binder.candidates(),
+            "anode_potentials": binder.ANODE_POTENTIALS,
+            "dry_process": binder.DRY_PROCESS,
+            "relative_axes": [{"key": k, "axis": a, "lower_is_better": low, "detail": d}
+                              for k, a, low, d in binder.RELATIVE_AXES]}
+
+
+class BinderRankRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=50)
+
+
+@app.post("/api/binder/rank")
+def binder_rank(req: BinderRankRequest, _: bool = Depends(require_login)):
+    """선택한 결과들의 상대 축을 순위로 환산한다."""
+    wanted = set(req.ids)
+    reports = []
+    for j in store.list_jobs():
+        if j["id"] not in wanted or j["status"] != "PUBLISHED" or not j.get("result"):
+            continue
+        rep = j["result"].get("binder_report")
+        if rep is None:                      # 바인더 목적이 아니었던 결과도 판정해 준다
+            rep = binder.report(j["material"], j["result"].get("descriptors") or {})
+        reports.append({"material": j["material"]["name"], "id": j["id"], "report": rep})
+    if not reports:
+        raise HTTPException(400, "선택한 작업 중 판정할 수 있는 완료 결과가 없습니다.")
+    return {"reports": reports, "ranks": binder.rank(reports)}
+
+
+class PfasCheckRequest(BaseModel):
+    smiles: str = Field(min_length=1, max_length=300)
+
+
+@app.post("/api/binder/pfas")
+def binder_pfas(req: PfasCheckRequest, _: bool = Depends(require_login)):
+    """구조만으로 PFAS 해당 여부를 즉시 판정 (DFT 계산 불필요)."""
+    return binder.pfas_check(req.smiles)
 
 
 class LookupRequest(BaseModel):

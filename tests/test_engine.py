@@ -249,3 +249,63 @@ def test_active_job_count_is_global(tmp_path, monkeypatch):
     store.create_job(mat, presets.DEFAULT_SETTINGS)
     assert store.count_active() == 2
     assert len(store.list_jobs()) == 2
+
+
+def test_pfas_gate_follows_oecd_definition():
+    """완전 불소화 탄소가 있어야 PFAS — 단일 불소 치환은 해당하지 않는다."""
+    from server.binder import pfas_check
+    assert pfas_check("FC(F)=C(F)F")["status"] == "pfas"        # PTFE
+    assert pfas_check("C=C(F)F")["status"] == "pfas"            # PVDF
+    assert pfas_check("OC(=O)C(F)(F)C(F)(F)F")["status"] == "pfas"   # PFOA 조각
+    assert pfas_check("Fc1ccccc1")["status"] == "fluorinated"   # 단일 불소 — PFAS 아님
+    assert pfas_check("C=CC(=O)O")["status"] == "pfas_free"     # PAA
+    assert pfas_check("C=C")["n_fluorine"] == 0
+
+
+def test_binder_candidates_are_valid_and_classified():
+    from rdkit import Chem
+    from server import binder
+    cands = binder.candidates()
+    assert len(cands) >= 14
+    for c in cands:
+        assert Chem.MolFromSmiles(c["smiles"]) is not None, c["abbr"]
+    # 기준군(PTFE·PVDF)만 PFAS 로 분류되어야 한다
+    pfas = {c["abbr"] for c in cands if c["pfas"]["status"] == "pfas"}
+    assert pfas == {"PTFE", "PVDF"}
+    assert all(c["reference"] for c in cands if c["abbr"] in pfas)
+
+
+def test_binder_report_gates_on_pfas():
+    """PFAS 는 다른 축이 아무리 좋아도 탈락시킨다."""
+    from server import binder
+    good = {"reduction_potential_v": -2.0, "bde_min_298_kj": 400.0}
+    ok = binder.report({"smiles": "C=C"}, good)
+    assert ok["overall"] == binder.VERDICT_OK
+    blocked = binder.report({"smiles": "FC(F)=C(F)F"}, good)
+    assert blocked["overall"] == binder.VERDICT_NO
+    assert "PFAS" in blocked["summary"]
+
+
+def test_binder_reduction_verdict_uses_anode_potential():
+    from server import binder
+    # 환원 전위가 음극 전위보다 높으면 위험
+    risky = binder.report({"smiles": "C=C"}, {"reduction_potential_v": 1.0})
+    red = next(a for a in risky["absolute"] if a["axis"] == "환원 안정성")
+    assert red["verdict"] == binder.VERDICT_NO
+    safe = binder.report({"smiles": "C=C"}, {"reduction_potential_v": -3.0})
+    red2 = next(a for a in safe["absolute"] if a["axis"] == "환원 안정성")
+    assert red2["verdict"] == binder.VERDICT_OK
+    assert all(p["stable"] for p in red2["per_anode"])
+
+
+def test_binder_rank_orders_relative_axes():
+    from server import binder
+    reps = [
+        {"material": "A", "report": binder.report(
+            {"smiles": "C=C"}, {"dimer_binding_kj": -30.0})},
+        {"material": "B", "report": binder.report(
+            {"smiles": "C=C"}, {"dimer_binding_kj": -10.0})},
+    ]
+    ranks = binder.rank(reps)
+    order = ranks["dimer_binding_kj"]["order"]
+    assert order[0]["material"] == "A"   # 더 음수 = 강한 응집 = 1위

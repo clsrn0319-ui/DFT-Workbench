@@ -21,7 +21,10 @@ import threading
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# RHOBENCH_DATA_DIR 로 저장 위치를 바꿀 수 있다 — 용도별(전해액/바인더)로
+# 서버를 따로 띄울 때 결과와 비밀번호를 완전히 분리하기 위한 것.
+DATA_DIR = Path(os.environ.get(
+    "RHOBENCH_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 ACCESS_FILE = DATA_DIR / "access.json"
 
 SESSION_TTL = 12 * 3600  # 12시간

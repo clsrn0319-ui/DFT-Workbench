@@ -26,6 +26,7 @@ from pyscf import gto, dft, scf
 from pyscf.hessian import thermo as pyscf_thermo
 from pyscf.solvent import smd
 
+from . import binder as binder_mod
 from . import descriptors as desc_mod
 from . import presets
 from .geometry import (smiles_to_conformers, build_cluster,
@@ -368,7 +369,9 @@ def run_job(job, update, is_cancelled=lambda: False):
         smiles = job["material"]["smiles"]
         temperature = float(settings.get("temperature") or 298.15)
         purpose = settings.get("purpose", "")
-        want_fingerprint = "지문" in purpose
+        # 바인더 스크리닝은 지문 전체(접착·응집·BDE)와 전위를 모두 필요로 한다
+        want_binder = "바인더" in purpose
+        want_fingerprint = "지문" in purpose or want_binder
         want_redox = "전위" in purpose or want_fingerprint  # 반응성 지표에 IP/EA 필요
         fingerprint_structures = {}
         closed_shell = params["multiplicity"] == 1
@@ -923,9 +926,17 @@ def run_job(job, update, is_cancelled=lambda: False):
             except Exception as exc:  # noqa: BLE001 — TDDFT 실패는 나머지 결과 유지
                 log(f"TDDFT 계산 실패: {exc}")
 
+        # 건식 음극 바인더 적합성 판정 — 산출된 기술자를 바인더 관점으로 번역
+        binder_report = None
+        if want_binder:
+            stage("바인더 적합성 판정", 96)
+            binder_report = binder_mod.report(job["material"], descriptors)
+            log(f"바인더 판정: {binder_report['summary']}")
+
         elapsed = time.time() - t_start
         result = {
             "descriptors": descriptors,
+            "binder_report": binder_report,
             "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
                            for f in fragments] if fragments else None),
             "fingerprint_structures": fingerprint_structures or None,
