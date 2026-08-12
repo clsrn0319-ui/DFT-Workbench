@@ -534,3 +534,71 @@ def test_tg_prediction_still_refused():
         "Tg 회귀 계수가 추가되었습니다 — 중첩 CV 로 오차를 먼저 확인하세요"
     unknown = pol.glass_transition("CCCCCCCCCCN")
     assert unknown["available"] is False and unknown["tg_c"] is None
+
+
+def test_elastic_relations_are_exact_and_invertible():
+    """탄성 관계식은 적합이 아니라 정확한 물리 — 왕복해도 값이 보존된다."""
+    from server.mechanical import elastic_constants
+    a = elastic_constants(e_gpa=3.2, poisson=0.33, density_g_cm3=1.05)
+    back = elastic_constants(bulk_gpa=a["bulk_gpa"], shear_gpa=a["shear_gpa"])
+    assert back["e_gpa"] == pytest.approx(3.2, abs=1e-3)
+    assert back["poisson"] == pytest.approx(0.33, abs=1e-3)
+    # 종파는 항상 횡파보다 빠르다
+    assert a["longitudinal_wave_m_s"] > a["shear_wave_m_s"]
+    with pytest.raises(ValueError):
+        elastic_constants(e_gpa=3.0, poisson=0.5)      # ν = 0.5 는 비압축성 극한
+    with pytest.raises(ValueError):
+        elastic_constants(e_gpa=3.0)                   # 한 쌍을 주어야 한다
+
+
+def test_elastic_prediction_is_refused():
+    """탄성 상수는 예측하지 않는다 — 검증에서 «평균 찍기»에 졌다."""
+    from server import mechanical
+    for t in mechanical.REFUSAL["targets"]:
+        assert t["nested_cv"] > t["mean_baseline"], \
+            f"{t['key']}: 검증을 통과했다면 예측을 실어야 합니다"
+    unknown = mechanical.literature_elastic("C=CCCCCN")
+    assert unknown["available"] is False and unknown["e_gpa"] is None
+    known = mechanical.literature_elastic("C=Cc1ccccc1")          # PS
+    assert known["available"] and known["e_gpa"] == 3.2
+
+
+def test_state_gate_separates_crystalline_from_rubbery():
+    """Tg 위여도 반결정성이면 고무질이 아니다 — 결정이 하중을 받는다."""
+    from server.mechanical import state_at
+    # PTFE: Tg −73, Tm 327 → 180 °C 에서 결정이 남아 있다
+    ptfe = state_at("FC(F)=C(F)F", 180)
+    assert ptfe["state"].startswith("반결정") and ptfe["tm_c"] == 327
+    # PE: Tm 135 → 180 °C 는 용융
+    assert state_at("C=C", 180)["state"] == "용융"
+    # PAN: 녹지 않고 분해한다
+    assert state_at("C=CC#N", 180)["state"] == "반결정 (융해 없음)"
+    # PAA: 비정질이라 융점 자체가 없다 — 「반결정」으로 부르면 안 된다
+    paa = state_at("C=CC(=O)O", 180)
+    assert paa["state"] == "고무질" and paa["decomp_c"] == 200
+    # 상온에서는 유리질
+    assert state_at("C=CC(=O)O", 25)["state"] == "유리질"
+
+
+def test_state_gate_holds_judgement_near_tg():
+    """Tg 근처에서는 단일 상태를 주장하지 않는다."""
+    from server.mechanical import state_at
+    near = state_at("C=CC(=O)O", 106)              # PAA Tg = 106 °C
+    assert near["state"] == "전이 구간" and near["confident"] is False
+    unknown = state_at("C=CCCCCN", 25)             # Tg 문헌값 없음
+    assert unknown["state"] == "불가" and unknown["confident"] is False
+
+
+def test_rubbery_modulus_scales_with_entanglement():
+    """고무 탄성 E = 3ρRT/Me — Me 가 커지면 무르고, 온도가 오르면 단단해진다."""
+    from server.mechanical import rubbery_modulus
+    soft = rubbery_modulus(0.855, 453.15, 2400)
+    stiff = rubbery_modulus(0.855, 453.15, 1200)
+    # Me 를 절반으로 줄이면 정확히 두 배 — 반올림(소수 3자리)만큼만 허용
+    assert stiff["e_mpa"] == pytest.approx(2 * soft["e_mpa"], abs=0.002)
+    hotter = rubbery_modulus(0.855, 500.0, 1200)
+    assert hotter["e_mpa"] > stiff["e_mpa"]
+    # 유리질(GPa)보다 두 자릿수 이상 낮아야 한다
+    assert stiff["e_gpa"] < 0.1
+    with pytest.raises(ValueError):
+        rubbery_modulus(0.855, 453.15, 0)

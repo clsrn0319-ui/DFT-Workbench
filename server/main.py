@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
-from . import convergence, polymer
+from . import convergence, mechanical, polymer
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -297,6 +297,46 @@ class PolymerRequest(BaseModel):
 def polymer_card(req: PolymerRequest, _: bool = Depends(require_login)):
     """Step 1 — 구조만으로 즉시 산출되는 고분자 물성 카드 (DFT 불필요)."""
     return polymer.property_card({"name": req.name, "smiles": req.smiles})
+
+
+class MechanicalRequest(BaseModel):
+    smiles: str = Field(min_length=1, max_length=300)
+    name: Optional[str] = None
+    temperature_c: float = Field(default=25.0, ge=-273.0, le=600.0)
+    entanglement_mw: Optional[float] = Field(default=None, gt=0, le=1e6)
+
+
+@app.post("/api/mechanical/card")
+def mechanical_card(req: MechanicalRequest, _: bool = Depends(require_login)):
+    """Step 2 — 사용 온도에서의 역학 상태 판정과 문헌 탄성 상수."""
+    return mechanical.report(req.smiles, req.temperature_c,
+                             entanglement_mw=req.entanglement_mw, name=req.name)
+
+
+@app.post("/api/mechanical/states")
+def mechanical_states(req: MechanicalRequest, _: bool = Depends(require_login)):
+    """건식 바인더 후보 전체를 한 온도에서 한 번에 판정한다."""
+    rows = []
+    for cand in binder.DRY_BINDER_CANDIDATES + binder.PFAS_REFERENCES:
+        st = mechanical.state_at(cand["smiles"], req.temperature_c)
+        rows.append({"name": cand["name"], "smiles": cand["smiles"],
+                     "state": st["state"], "confident": st["confident"],
+                     "tg_c": st.get("tg_c"), "tm_c": st.get("tm_c"),
+                     "decomp_c": st.get("decomp_c"), "note": st.get("note")})
+    return {"temperature_c": req.temperature_c, "rows": rows,
+            "refusal": mechanical.REFUSAL}
+
+
+@app.post("/api/mechanical/elastic")
+def mechanical_elastic(payload: dict, _: bool = Depends(require_login)):
+    """탄성 관계식 환산 — (E, ν) 또는 (K, G) 중 한 쌍을 받는다."""
+    try:
+        return mechanical.elastic_constants(
+            e_gpa=payload.get("e_gpa"), poisson=payload.get("poisson"),
+            bulk_gpa=payload.get("bulk_gpa"), shear_gpa=payload.get("shear_gpa"),
+            density_g_cm3=payload.get("density_g_cm3"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.post("/api/polymer/cards")

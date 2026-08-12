@@ -213,6 +213,7 @@ async function init() {
   wireBinderControls();
   wirePolymerCard();
   wireChainControls();
+  wireMechControls();
   $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
@@ -2489,4 +2490,157 @@ function wireChainControls() {
   });
 
   on("chn-refresh", () => window.rbRenderChain());
+}
+
+/* ================= 기계 물성 · 사용 온도 상태 (Step 2) ================= */
+
+/** 상태별 색 — 확정이면 초록/회색, 보류면 앰버 */
+function mechStateClass(state, confident) {
+  if (!confident) return "verdict-mid";
+  if (state === "유리질") return "verdict-ok";
+  if (state === "용융" || state === "분해") return "verdict-no";
+  return "muted";
+}
+
+function mechStatesHtml(data) {
+  const rows = data.rows || [];
+  let h = `<p class="small" style="margin:0 0 8px">사용 온도
+    <b>${fmt(data.temperature_c)} °C</b> 기준 — 판정 근거는 Tg·Tm·분해 온도입니다.</p>
+    <div class="scroll-x"><table class="kv-table" style="min-width:720px">
+    <tr><th style="width:170px">후보</th><th style="width:110px">상태</th>
+      <th style="width:60px">Tg</th><th style="width:60px">Tm</th>
+      <th style="width:60px">분해</th><th>근거</th></tr>`;
+  for (const r of rows) {
+    h += `<tr><th>${esc(r.name)}</th>
+      <td><span class="badge ${mechStateClass(r.state, r.confident)}"
+        style="border:1px solid currentColor">${esc(r.state)}</span></td>
+      <td class="mono small">${r.tg_c ?? "—"}</td>
+      <td class="mono small">${r.tm_c ?? "—"}</td>
+      <td class="mono small">${r.decomp_c ?? "—"}</td>
+      <td class="muted small">${esc(r.note || "")}</td></tr>`;
+  }
+  h += `</table></div>`;
+  const f = data.refusal;
+  if (f) {
+    h += `<p class="verdict-mid small" style="margin:10px 0 0"><b>탄성 상수는 예측하지 않습니다.</b>
+      ${esc(f.note)}</p>
+      <div class="scroll-x"><table class="kv-table" style="min-width:420px;margin-top:6px">
+      <tr><th style="width:130px">목표</th><th style="width:110px">중첩 교차검증</th>
+        <th style="width:110px">평균값 찍기</th><th>판정</th></tr>` +
+      f.targets.map(t => `<tr><th>${esc(t.key)}</th>
+        <td class="mono">${t.nested_cv} ${esc(t.unit || "")}</td>
+        <td class="mono">${t.mean_baseline}</td>
+        <td class="verdict-no small">짐</td></tr>`).join("") +
+      `</table></div>`;
+  }
+  return h;
+}
+
+function mechCardHtml(card) {
+  const s = card.state || {}, lit = card.literature || {}, d = card.derived;
+  let h = `<h3 style="font-size:13px;color:var(--accent);margin:10px 0 6px">
+      ${esc(card.name || card.smiles)} — ${fmt(card.temperature_c)} °C</h3>
+    <p><span class="badge ${mechStateClass(s.state, s.confident)}"
+      style="border:1px solid currentColor">${esc(s.state || "—")}</span>
+      <span class="muted small"> ${esc(s.note || "")}</span></p>`;
+  if (lit.available && d) {
+    h += `<div class="scroll-x"><table class="kv-table" style="min-width:520px">
+      <tr><th style="width:170px">영률 E</th><td class="mono">${fmt(d.e_gpa)} GPa</td>
+        <td class="muted small">문헌 (${esc(lit.confidence)})</td></tr>
+      <tr><th>푸아송비 ν</th><td class="mono">${fmt(d.poisson)}</td>
+        <td class="muted small">문헌</td></tr>
+      <tr><th>체적 탄성률 K</th><td class="mono">${fmt(d.bulk_gpa)} GPa</td>
+        <td class="muted small">관계식 — 정확</td></tr>
+      <tr><th>전단 탄성률 G</th><td class="mono">${fmt(d.shear_gpa)} GPa</td>
+        <td class="muted small">관계식 — 정확</td></tr>
+      ${d.longitudinal_wave_m_s ? `<tr><th>종파 음속</th>
+        <td class="mono">${fmt(d.longitudinal_wave_m_s)} m/s</td>
+        <td class="muted small">ρ ${fmt(d.density_g_cm3)} g/cm³ 기준</td></tr>
+      <tr><th>횡파 음속</th><td class="mono">${fmt(d.shear_wave_m_s)} m/s</td>
+        <td class="muted small">Rao·Hartmann 몰함수가 쓰는 양</td></tr>` : ""}
+      </table></div>`;
+  } else {
+    h += `<p class="muted small">${esc(lit.note || "문헌 탄성 상수 없음")}</p>`;
+  }
+  if (card.rubbery) {
+    h += `<p class="small" style="margin-top:8px">고무질 탄성률
+      <b class="mono">${fmt(card.rubbery.e_mpa)} MPa</b>
+      <span class="muted"> — ${esc(card.rubbery.basis)}</span></p>`;
+  }
+  if (card.errors?.length) {
+    h += card.errors.map(e =>
+      `<p class="verdict-mid small" style="margin:6px 0 0">${esc(e)}</p>`).join("");
+  }
+  return h;
+}
+
+window.rbRenderMech = async function () {
+  const out = $("mch-states");
+  if (!out || out.dataset.loaded) return;
+  out.dataset.loaded = "1";
+  await mechRunStates();
+};
+
+async function mechRunStates() {
+  const out = $("mch-states");
+  out.innerHTML = '<p class="muted small">판정 중…</p>';
+  try {
+    const res = await fetch("/api/mechanical/states", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({smiles: "C=C", temperature_c: Number($("mch-temp").value)}),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || "판정 실패");
+    out.innerHTML = mechStatesHtml(d);
+  } catch (e) { out.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
+}
+
+function wireMechControls() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("mch-run", mechRunStates);
+  on("mch-rt", () => { $("mch-temp").value = 25; mechRunStates(); });
+  on("mch-dry", () => { $("mch-temp").value = 180; mechRunStates(); });
+
+  on("mch-card", async () => {
+    const box = $("mch-card-out");
+    const smiles = $("mch-smiles").value.trim();
+    if (!smiles) { box.innerHTML = '<p class="small">SMILES를 입력하세요.</p>'; return; }
+    box.innerHTML = '<p class="muted small">판정 중…</p>';
+    try {
+      const me = parseFloat($("mch-me").value);
+      const res = await fetch("/api/mechanical/card", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({smiles, name: $("mch-name").value.trim() || null,
+                              temperature_c: Number($("mch-temp").value),
+                              entanglement_mw: Number.isFinite(me) ? me : null}),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || "판정 실패");
+      box.innerHTML = mechCardHtml(d);
+    } catch (e) { box.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
+  });
+
+  on("mch-conv", async () => {
+    const box = $("mch-conv-out");
+    box.innerHTML = '<p class="muted small">환산 중…</p>';
+    try {
+      const res = await fetch("/api/mechanical/elastic", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({e_gpa: Number($("mch-e").value),
+                              poisson: Number($("mch-nu").value),
+                              density_g_cm3: Number($("mch-rho").value)}),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || "환산 실패");
+      box.innerHTML = `<div class="scroll-x"><table class="kv-table" style="min-width:460px">` +
+        [["체적 탄성률 K", d.bulk_gpa, "GPa"], ["전단 탄성률 G", d.shear_gpa, "GPa"],
+         ["종탄성률 K+4G/3", d.longitudinal_gpa, "GPa"],
+         ["종파 음속", d.longitudinal_wave_m_s, "m/s"],
+         ["횡파 음속", d.shear_wave_m_s, "m/s"]]
+          .filter(r => r[1] != null)
+          .map(([k, v, u]) => `<tr><th style="width:170px">${esc(k)}</th>
+            <td class="mono">${fmt(v)}<span class="muted small"> ${esc(u)}</span></td></tr>`)
+          .join("") + `</table></div>`;
+    } catch (e) { box.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
+  });
 }

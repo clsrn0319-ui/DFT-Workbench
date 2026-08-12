@@ -766,6 +766,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-binder #rbv-binder{display:block}
 #rb-real.mode-binderrank #rbv-binderrank{display:block}
 #rb-real.mode-chain #rbv-chain{display:block}
+#rb-real.mode-mech #rbv-mech{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -1107,6 +1108,54 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
   <div class="card" id="chn-body"></div>
 </div>
+
+<div id="rbv-mech" class="rbv">
+  <h1>기계 물성 · 사용 온도 상태</h1>
+  <p class="rb-note">모듈러스는 Tg를 지나며 <b>약 1000배</b> 달라집니다. 그래서
+    「모듈러스가 얼마인가」보다 <b>「사용 온도에서 어떤 상태인가」</b>가 먼저입니다.
+    탄성 상수는 구조에서 예측하지 않고, 문헌값을 인용하거나 관계식으로 환산합니다.</p>
+
+  <div class="card">
+    <div class="card-head"><h2>후보군 상태 판정</h2>
+      <div class="toolbar">
+        <label class="small">사용 온도
+          <input id="mch-temp" type="number" value="180" step="5" min="-200" max="500"
+            style="width:80px;padding:4px 8px"> °C</label>
+        <button class="btn" id="mch-rt" type="button">상온 25 °C</button>
+        <button class="btn" id="mch-dry" type="button">건식 공정 180 °C</button>
+        <button class="btn primary" id="mch-run" type="button">판정</button>
+      </div></div>
+    <div id="mch-states"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>개별 후보 카드</h2>
+      <div class="toolbar">
+        <input id="mch-smiles" placeholder="반복 단위 SMILES (예: C=CC(=O)O)"
+          class="input" style="flex:1;min-width:220px;padding:6px 10px">
+        <input id="mch-name" placeholder="이름 (선택)" style="width:130px;padding:6px 10px">
+        <input id="mch-me" type="number" placeholder="Me (선택)" style="width:110px;padding:6px 10px">
+        <button class="btn primary" id="mch-card" type="button">카드</button>
+      </div></div>
+    <div id="mch-card-out"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>탄성 상수 환산</h2>
+      <div class="toolbar">
+        <label class="small">E <input id="mch-e" type="number" value="3.2" step="0.1"
+          style="width:70px;padding:4px 8px"> GPa</label>
+        <label class="small">ν <input id="mch-nu" type="number" value="0.33" step="0.01"
+          style="width:70px;padding:4px 8px"></label>
+        <label class="small">ρ <input id="mch-rho" type="number" value="1.05" step="0.01"
+          style="width:70px;padding:4px 8px"> g/cm³</label>
+        <button class="btn" id="mch-conv" type="button">환산</button>
+      </div></div>
+    <div id="mch-conv-out"></div>
+    <p class="muted small" style="margin:8px 0 0">등방 탄성체의 정확한 관계식입니다 —
+      적합이 아니라 물리이므로 오차가 없습니다. E·ν 를 주면 K·G·음속이 나옵니다.</p>
+  </div>
+</div>
 </div>
 </section>
 <script src="/static/app.js"></script>
@@ -1129,7 +1178,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     {group: "건식 바인더", items: [
       {label: "바인더 후보군", mode: "binder"},
       {label: "후보 순위", mode: "binderrank"},
-      {label: "사슬 길이 수렴", mode: "chain"}]},
+      {label: "사슬 길이 수렴", mode: "chain"},
+      {label: "기계 물성 · 상태", mode: "mech"}]},
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
@@ -1152,7 +1202,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.scrollTop = 0;
     setActive(label);
     real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
-      "mode-binderrank", "mode-chain");
+      "mode-binderrank", "mode-chain", "mode-mech");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1162,6 +1212,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "binder" && window.rbRenderBinder) try { window.rbRenderBinder(); } catch (e) {}
     if (mode === "binderrank" && window.rbRenderBinderRank) try { window.rbRenderBinderRank(); } catch (e) {}
     if (mode === "chain" && window.rbRenderChain) try { window.rbRenderChain(); } catch (e) {}
+    if (mode === "mech" && window.rbRenderMech) try { window.rbRenderMech(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
