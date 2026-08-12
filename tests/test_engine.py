@@ -401,11 +401,27 @@ def test_polymer_density_and_delta_against_literature():
     assert abs(p["ced_j_cm3"] - delta ** 2) < 0.1 * delta + 0.5
 
 
-def test_polymer_warns_when_delta_is_degenerate():
-    """비극성·비고리 구조는 δ가 절편으로 고정되므로 경고를 붙인다."""
+def test_delta_distinguishes_nonpolar_polymers():
+    """비극성 포화 사슬끼리도 δ가 구분되어야 한다.
+
+    참조 20종 시절에는 극성·고리 항만 써서 PE·PP·PTFE 가 모두 절편값으로
+    모였다. 47종으로 늘리며 회전 결합 밀도가 들어와 축퇴가 풀렸다.
+    """
     from server.polymer import predict
-    assert predict("C=C")["warnings"], "PE 는 δ 축퇴 경고가 있어야 한다"
-    assert not predict("C=CC(=O)O")["warnings"], "극성기가 있으면 경고 없음"
+    pe = predict("C=C")["solubility_parameter_mpa05"]
+    pp = predict("C=CC")["solubility_parameter_mpa05"]
+    ptfe = predict("FC(F)=C(F)F")["solubility_parameter_mpa05"]
+    assert len({pe, pp, ptfe}) == 3, f"축퇴: PE {pe} PP {pp} PTFE {ptfe}"
+    assert pe > ptfe, "PTFE 는 참조셋에서 가장 낮은 δ 를 갖는다"
+
+
+def test_polymer_warns_on_strong_hydrogen_bonding():
+    """δ 오차가 가장 큰 영역(강한 수소결합)에서는 경고를 붙인다."""
+    from server.polymer import predict
+    assert any("수소결합" in w for w in predict("C=CO")["warnings"]), \
+        "PVA 는 수소결합 경고가 있어야 한다"
+    assert not predict("C=CC(=O)OC")["warnings"], \
+        "에스터(주개 없음)는 경고 없음"
 
 
 def test_glass_transition_is_quoted_not_predicted():
@@ -479,3 +495,42 @@ def test_minimum_defined_length_flags_missing_bde():
     assert pe["bde_min_n"] == 2 and "n=2" in pe["note"]
     paa = minimum_defined_length("C=CC(=O)O")
     assert paa["bde_min_n"] == 1
+
+
+def test_reference_dataset_is_well_formed():
+    """참조셋 47종 — SMILES가 모두 파싱되고 더미가 정확히 2개여야 한다.
+
+    더미 2개는 «반복 단위가 이웃과 붙는 자리»를 뜻한다. 개수가 틀리면 Vw 의
+    결합 수 보정이 어긋나 모든 하위 물성이 조용히 밀린다.
+    """
+    from rdkit import Chem
+    from server.polymer import _vw_unit
+    from server.reference_polymers import REFERENCE, family_counts
+    assert len(REFERENCE) >= 47
+    for ab, name, smi, tg, rho, delta, fam, conf in REFERENCE:
+        mol = Chem.MolFromSmiles(smi)
+        assert mol is not None, f"{ab}: SMILES 파싱 실패 {smi}"
+        n_dummy = sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() == 0)
+        assert n_dummy == 2, f"{ab}: 더미 {n_dummy}개 (2개여야 함)"
+        assert _vw_unit(smi) > 0, f"{ab}: Vw 가 양수가 아님"
+        assert 0.5 < rho < 3.0, f"{ab}: 밀도 범위 이상 {rho}"
+        assert conf in ("high", "medium")
+    # 비닐 주사슬만으로는 새 후보로 외삽되지 않는다 — 계열이 다양해야 한다
+    fams = family_counts()
+    assert len(fams) >= 6, f"주사슬 계열이 부족합니다: {fams}"
+    for required in ("아마이드", "방향족", "에스터", "에터"):
+        assert fams.get(required, 0) >= 2, f"{required} 계열이 2종 미만: {fams}"
+
+
+def test_tg_prediction_still_refused():
+    """참조를 47종으로 늘려도 Tg 는 여전히 예측하지 않는다.
+
+    중첩 교차검증 61.6 K, 최대 581 K(PDMS). 참조셋 Tg 표준편차가 89 K 이므로
+    평균값을 찍는 것과 크게 다르지 않다. 회귀 계수를 넣는 순간 이 테스트가
+    깨져야 한다 — 검증 없이 Tg 를 싣는 것을 막는 장치다.
+    """
+    import server.polymer as pol
+    assert not any("TG" in n.upper() and "COEF" in n.upper() for n in dir(pol)), \
+        "Tg 회귀 계수가 추가되었습니다 — 중첩 CV 로 오차를 먼저 확인하세요"
+    unknown = pol.glass_transition("CCCCCCCCCCN")
+    assert unknown["available"] is False and unknown["tg_c"] is None

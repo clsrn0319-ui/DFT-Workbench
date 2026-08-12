@@ -6,10 +6,14 @@
   문헌   실측이 표준인 물성 — 예측하지 않고 문헌값을 인용
   불가   현재 데이터로는 신뢰할 수 없어 값을 내지 않음
 
-특히 유리전이온도 Tg 는 **예측하지 않는다**. 참조 고분자 20종으로 회귀를 세워
-leave-one-out 검증한 결과 최선의 조합에서도 평균 절대오차 45 K, 최대 136 K 였다.
-후보 간 Tg 차이가 대개 그보다 작아 순위가 뒤집히므로, 값을 내면 오히려 해롭다.
-알려진 고분자는 문헌값을 쓰고, 미지 구조는 «예측 불가»로 남긴다.
+특히 유리전이온도 Tg 는 **예측하지 않는다**. 참조를 47종으로 늘리고 Bicerano 계열
+연결성 지수(Chi·Kappa)까지 넣어 중첩 교차검증한 결과 평균절대오차 61.6 K, 최대
+581 K(PDMS)였다. 참조셋의 Tg 표준편차가 89 K 이므로 평균값을 찍는 것과 크게
+다르지 않다. 후보 간 Tg 차이가 대개 그보다 작아 순위가 뒤집히므로, 값을 내면
+오히려 해롭다. 알려진 고분자는 문헌값을 쓰고, 미지 구조는 «예측 불가»로 남긴다.
+
+참조 데이터는 reference_polymers.py 에 있다. 47종은 Bicerano 가 ~25 K 를
+주장하는 근거(~320종)에 한참 못 미친다 — Tg 를 실으려면 데이터가 더 필요하다.
 """
 
 from rdkit import Chem
@@ -23,18 +27,25 @@ _ATOM_VW = {"H": 7.24, "C": 20.58, "N": 15.60, "O": 14.71, "F": 13.31,
             "Si": 38.79}
 _A3_TO_CM3_MOL = 0.6023
 
-# 회귀 계수 — 참조 고분자 20종을 «반복 단위(더미 원자 표현)» 기준으로 적합.
+# 회귀 계수 — 참조 고분자 47종(reference_polymers.py)을 «반복 단위» 기준으로 적합.
 # 상수항이 앞에 온다.
-# 밀도  ρ = f(vw_per_mw, logp_per_vw, halogen)   LOO MAE 0.049 g/cm³ (최대 0.205)
-_RHO_COEF = (1.678859, -0.730943, -6.03356, 1.297632)
-# 용해도 δ = f(tpsa_per_vw, ring)                LOO MAE 1.37 MPa^0.5 (최대 4.04)
-_DELTA_COEF = (16.297126, 9.579774, 17.055988)
+#
+# 오차는 **중첩 교차검증** 값이다. 바깥 루프에서 한 종을 빼고 남은 46종만으로
+# 변수 선택까지 다시 한 뒤 뺀 종을 예측한다. 변수 선택도 데이터를 보는 행위라,
+# 선택을 고정한 채 잰 단순 LOO(ρ 0.040 · δ 1.61)는 낙관 편향이 있다.
+_RHO_KEYS = ("tpsa_per_vw", "ring", "halogen", "hbd", "branch")
+_RHO_COEF = (0.889062, 0.639892, 1.659532, 1.798123, -0.435704, -0.11418)
+_RHO_ERR = 0.041          # 중첩 CV 평균절대오차 [g/cm³] (최대 0.178)
+
+_DELTA_KEYS = ("tpsa_per_vw", "ring", "hbd", "rot_density")
+_DELTA_COEF = (14.361561, 6.995537, 29.140904, 18.074666, 5.470375)
+_DELTA_ERR = 1.8          # 중첩 CV 평균절대오차 [MPa^0.5] (최대 8.30)
 
 RELIABILITY = {
     "vdw_volume": ("계산", "반복 단위 기준 — PE 20.8 vs 문헌 20.5 cm³/mol"),
     "molar_volume": ("계산", "밀도와 동일 근거"),
-    "density": ("계산", "LOO 평균절대오차 0.05 g/cm³"),
-    "solubility_parameter": ("계산", "LOO 평균절대오차 1.38 MPa^0.5"),
+    "density": ("계산", f"참조 47종 중첩 CV 평균절대오차 {_RHO_ERR} g/cm³"),
+    "solubility_parameter": ("계산", f"참조 47종 중첩 CV 평균절대오차 {_DELTA_ERR} MPa^0.5"),
     "ced": ("계산", "δ²에서 유도 — δ와 동일 근거"),
     "ced_dft": ("계산", "이량체 결합 에너지 기반 — 순위만 유효"),
     "rotatable_density": ("구조", "구조에서 직접 셈 — 오차 없음"),
@@ -151,38 +162,44 @@ def _features(smiles):
     mw = sum(a.GetMass() for a in mh.GetAtoms() if a.GetAtomicNum() > 0)
     vw = _vw_unit(unit["smiles"])
     heavy = max(sum(1 for a in m.GetAtoms() if a.GetAtomicNum() > 0), 1)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(m)
     return {
-        "unit": unit, "mw": mw, "vw": vw, "heavy": heavy,
+        "unit": unit, "mw": mw, "vw": vw, "heavy": heavy, "rot": rot,
         "vw_per_mw": vw / mw,
         "logp_per_vw": Crippen.MolLogP(m) / vw,
         "tpsa_per_vw": Descriptors.TPSA(m) / vw,
         "ring": rdMolDescriptors.CalcNumRings(m) / heavy,
         "halogen": sum(1 for a in m.GetAtoms()
                        if a.GetSymbol() in ("F", "Cl", "Br", "I")) / heavy,
-        "rot": rdMolDescriptors.CalcNumRotatableBonds(m),
+        "hbd": rdMolDescriptors.CalcNumHBD(m) / heavy,
+        "branch": sum(1 for a in m.GetAtoms()
+                      if a.GetAtomicNum() > 0 and a.GetDegree() >= 3) / heavy,
+        "rot_density": rot / heavy,
     }
 
 
 def predict(smiles: str) -> dict:
     """구조만으로 즉시 산출되는 물성 (DFT 불필요) — Step 1의 L1 계층."""
     f = _features(smiles)
-    c = _RHO_COEF
-    density = c[0] + c[1] * f["vw_per_mw"] + c[2] * f["logp_per_vw"] + c[3] * f["halogen"]
-    d = _DELTA_COEF
-    delta = d[0] + d[1] * f["tpsa_per_vw"] + d[2] * f["ring"]
+    density = _RHO_COEF[0] + sum(c * f[k] for c, k in zip(_RHO_COEF[1:], _RHO_KEYS))
+    delta = _DELTA_COEF[0] + sum(c * f[k] for c, k in zip(_DELTA_COEF[1:], _DELTA_KEYS))
     density = max(density, 0.5)          # 물리적으로 불가능한 외삽 방지
     delta = max(delta, 5.0)
     molar_volume = f["mw"] / density
 
-    # δ 회귀는 극성(TPSA)과 고리 항만 쓴다. 둘 다 0인 비극성·비고리 고분자는
-    # 전부 절편값(~16.3)으로 수렴해 서로 구분되지 않는다. 참조 20종에 불소계가
-    # PTFE·PVDF 둘뿐이라 할로겐 항을 넣으면 LOO 오차가 오히려 커져(1.43→1.69)
-    # 넣지 않았다. 해당 구조에서는 δ를 순위 근거로 쓰지 말아야 한다.
     warnings = []
-    if f["tpsa_per_vw"] == 0 and f["ring"] == 0:
+    # δ 회귀는 극성·고리·수소결합·회전 항만 쓴다. 넷 다 0인 비극성 포화 사슬은
+    # 전부 절편값(~14.4)으로 모여 서로 구분되지 않는다.
+    if all(f[k] == 0 for k in _DELTA_KEYS):
         warnings.append(
-            "극성기·고리가 없어 δ가 절편값으로 고정됩니다 — 이 구조군(PE·PP·PTFE 등)"
-            "끼리는 δ로 구분할 수 없습니다. 문헌값이나 DFT 경로(CED)를 쓰세요.")
+            "극성기·고리·수소결합·회전 결합이 모두 없어 δ가 절편값으로 고정됩니다 — "
+            "이 구조군(PE·PTFE 등)끼리는 δ로 구분할 수 없습니다. "
+            "문헌값이나 DFT 경로(CED)를 쓰세요.")
+    # 강한 수소결합 고분자에서 δ가 가장 크게 빗나간다 (PVA 8.3, PVP 7.7 MPa^0.5)
+    if f["hbd"] > 0.15:
+        warnings.append(
+            f"수소결합 주개 밀도가 높습니다 ({f['hbd']:.2f}) — 이 영역에서 δ 오차가 "
+            "가장 큽니다 (참조셋 최악 8.3 MPa^0.5). 순위 근거로 쓰기 전에 확인하세요.")
 
     return {
         "repeat_unit_smiles": f["unit"]["smiles"],

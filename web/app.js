@@ -2233,9 +2233,9 @@ function polymerCardHtml(card) {
            "Zhao 법 · 반복 단위 기준 (PE 20.8 vs 문헌 20.5)");
   h += row("몰 부피", fmt(c.molar_volume_cm3), "cm³/mol", "계산", "M ÷ ρ");
   h += row("밀도 ρ", fmt(c.density_g_cm3), "g/cm³", "계산",
-           "교차검증 평균오차 0.05 g/cm³");
+           "참조 47종 중첩 교차검증 평균오차 0.041 g/cm³");
   h += row("용해도 파라미터 δ", fmt(c.solubility_parameter_mpa05), "MPa^0.5", "계산",
-           "교차검증 평균오차 1.37 MPa^0.5");
+           "참조 47종 중첩 교차검증 평균오차 1.8 MPa^0.5");
   h += row("응집 에너지 밀도 CED", fmt(c.ced_j_cm3), "J/cm³", "계산", "δ² 에서 유도");
   h += row("회전 가능 결합", `${c.rotatable_bonds} (밀도 ${fmt(c.rotatable_density)})`,
            "", "계산", "사슬 유연성 대리 지표 — 구조에서 직접 셈");
@@ -2257,7 +2257,8 @@ function polymerCardHtml(card) {
     <b>계산</b> = 교차검증으로 오차를 측정한 값 ·
     <b>문헌</b> = 예측하지 않고 실측값 인용 ·
     <b>불가</b> = 신뢰할 수 없어 값을 내지 않음.
-    Tg는 구조 예측 시 평균오차 45 K로 후보 간 순위가 뒤집혀 예측하지 않습니다.</p>`;
+    Tg는 참조 47종·연결성 지수까지 넣어도 중첩 교차검증 오차 61.6 K(최대 581 K)로,
+    참조셋 Tg 표준편차 89 K 대비 개선이 작아 예측하지 않습니다.</p>`;
   return h;
 }
 
