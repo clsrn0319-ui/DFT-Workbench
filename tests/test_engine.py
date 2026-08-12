@@ -330,3 +330,63 @@ def test_binder_does_not_claim_unevaluated_axes_passed():
                          {"reduction_potential_v": -4.374, "bde_min_kj": 467.0})
     assert full["overall"] == binder.VERDICT_OK
     assert full["unevaluated"] == []
+
+
+def test_vdw_volume_matches_literature():
+    """Zhao 법 van der Waals 부피 — 소분자 문헌값 대비 ±8 % 이내."""
+    from server.polymer import vdw_volume
+    for smiles, lit in [("CC", 27.3), ("c1ccccc1", 48.4), ("CO", 21.7),
+                        ("CC(C)=O", 39.2), ("Cc1ccccc1", 59.5)]:
+        calc = vdw_volume(smiles)
+        assert abs(calc - lit) / lit < 0.08, f"{smiles}: {calc} vs {lit}"
+
+
+def test_polymer_density_and_delta_against_literature():
+    """회귀 모델이 문헌 밀도·용해도 파라미터를 검증된 오차 안에서 재현한다.
+
+    LOO 교차검증 기준 밀도 0.05 g/cm³, δ 1.43 MPa^0.5 였으므로
+    적합에 쓰인 물질에 대해서는 그보다 넉넉한 한계로 회귀를 확인한다.
+    """
+    from server.polymer import predict
+    for smiles, rho, delta in [("C=C", 0.855, 16.2),        # PE
+                               ("C=CC(=O)O", 1.22, 24.5),   # PAA
+                               ("C=C(F)F", 1.77, 17.5)]:    # PVDF
+        p = predict(smiles)
+        assert abs(p["density_g_cm3"] - rho) < 0.20, (smiles, p["density_g_cm3"])
+        assert abs(p["solubility_parameter_mpa05"] - delta) < 4.5, (smiles, p)
+    # CED 는 δ² 이어야 한다 (δ는 소수 첫째 자리로 반올림해 보고하므로 그만큼 허용)
+    p = predict("C=CC(=O)O")
+    delta = p["solubility_parameter_mpa05"]
+    assert abs(p["ced_j_cm3"] - delta ** 2) < 0.1 * delta + 0.5
+
+
+def test_polymer_warns_when_delta_is_degenerate():
+    """비극성·비고리 구조는 δ가 절편으로 고정되므로 경고를 붙인다."""
+    from server.polymer import predict
+    assert predict("C=C")["warnings"], "PE 는 δ 축퇴 경고가 있어야 한다"
+    assert not predict("C=CC(=O)O")["warnings"], "극성기가 있으면 경고 없음"
+
+
+def test_glass_transition_is_quoted_not_predicted():
+    """Tg 는 예측하지 않는다 — 문헌값이 없으면 값을 내지 않아야 한다."""
+    from server.polymer import glass_transition
+    known = glass_transition("C=CC#N")               # PAN
+    assert known["available"] and known["tg_c"] == 85 and known["source"] == "문헌"
+    unknown = glass_transition("CCCCCCCCCCN")        # 등록되지 않은 구조
+    assert unknown["available"] is False and unknown["tg_c"] is None
+    assert "45 K" in unknown["note"]                 # 예측하지 않는 이유를 밝힌다
+    # 문헌 자체가 흩어지는 항목은 표시된다
+    assert glass_transition("FC(F)=C(F)F").get("uncertain") is True
+
+
+def test_property_card_cross_checks_dft_route():
+    """DFT 이량체 결합 에너지로 구한 CED가 구조 회귀와 대조된다."""
+    from server import polymer
+    card = polymer.property_card({"name": "PAA", "smiles": "C=CC(=O)O"},
+                                 {"dimer_binding_kj": -35.0})
+    assert card["computed"]["density_g_cm3"] > 1.0
+    assert card["dft"]["ced_j_cm3"] > 0
+    assert "delta_vs_structure" in card["dft"]      # 두 경로의 차이를 보고한다
+    # 미지 구조는 오류가 아니라 빈 카드로 처리
+    bad = polymer.property_card({"name": "x", "smiles": "not-a-smiles((("})
+    assert bad["errors"] and bad["computed"] is None

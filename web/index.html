@@ -1032,14 +1032,16 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
 
   <div class="card">
-    <div class="card-head"><h2>직접 입력</h2></div>
+    <div class="card-head"><h2>직접 입력 — 즉시 판정 (DFT 불필요)</h2></div>
     <div class="toolbar">
       <input id="bnd-smiles" placeholder="반복 단위 SMILES (예: C=CC(=O)O)"
         style="flex:1;min-width:240px;padding:6px 10px">
       <input id="bnd-name" placeholder="이름 (선택)" style="width:180px;padding:6px 10px">
       <button class="btn" id="bnd-check" type="button">PFAS 판정</button>
+      <button class="btn primary" id="bnd-card" type="button">물성 카드</button>
     </div>
     <div id="bnd-check-out" class="small"></div>
+    <div id="bnd-card-out"></div>
   </div>
 
   <div class="card">

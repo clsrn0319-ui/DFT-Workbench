@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
+from . import polymer
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -175,6 +176,33 @@ def binder_rank(req: BinderRankRequest, _: bool = Depends(require_login)):
     if not reports:
         raise HTTPException(400, "선택한 작업 중 판정할 수 있는 완료 결과가 없습니다.")
     return {"reports": reports, "ranks": binder.rank(reports)}
+
+
+class PolymerRequest(BaseModel):
+    smiles: str = Field(min_length=1, max_length=300)
+    name: Optional[str] = None
+
+
+@app.post("/api/polymer/card")
+def polymer_card(req: PolymerRequest, _: bool = Depends(require_login)):
+    """Step 1 — 구조만으로 즉시 산출되는 고분자 물성 카드 (DFT 불필요)."""
+    return polymer.property_card({"name": req.name, "smiles": req.smiles})
+
+
+@app.post("/api/polymer/cards")
+def polymer_cards(req: BinderRankRequest, _: bool = Depends(require_login)):
+    """완료된 계산 결과에 DFT 경로 물성을 더한 물성 카드 묶음."""
+    wanted = set(req.ids)
+    cards = []
+    for j in store.list_jobs():
+        if j["id"] not in wanted or j["status"] != "PUBLISHED" or not j.get("result"):
+            continue
+        card = polymer.property_card(j["material"], j["result"].get("descriptors"))
+        card["job_id"] = j["id"]
+        cards.append(card)
+    if not cards:
+        raise HTTPException(400, "선택한 작업 중 물성 카드를 만들 수 있는 결과가 없습니다.")
+    return {"cards": cards}
 
 
 class PfasCheckRequest(BaseModel):

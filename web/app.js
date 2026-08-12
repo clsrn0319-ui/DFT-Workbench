@@ -211,6 +211,7 @@ async function init() {
   $("lookup-btn").onclick = doLookup;
   wireResultsControls();
   wireBinderControls();
+  wirePolymerCard();
   $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
@@ -2189,4 +2190,84 @@ function binderRankHtml(data) {
     <li>피브릴화·기계 물성·집전체 접착은 분자 단위 DFT 범위 밖입니다.</li>
   </ul>`;
   return h;
+}
+
+/* ---------- Step 1 · 고분자 물성 카드 ---------- */
+
+/** 계산값·문헌값·예측 불가를 한눈에 구분되게 그린다 */
+function polymerCardHtml(card) {
+  if (card.errors?.length) {
+    return `<p class="verdict-no small">${card.errors.map(esc).join(" · ")}</p>`;
+  }
+  const c = card.computed, g = card.glass_transition, d = card.dft || {};
+  const row = (label, value, unit, kind, note) => `
+    <tr><th style="width:150px">${esc(label)}</th>
+      <td style="width:110px" class="mono">${value}<span class="muted small"> ${esc(unit || "")}</span></td>
+      <td style="width:60px"><span class="badge ${
+        kind === "문헌" ? "verdict-mid" : kind === "불가" ? "muted" : "verdict-ok"
+      }" style="border:1px solid currentColor">${esc(kind)}</span></td>
+      <td class="muted small">${esc(note || "")}</td></tr>`;
+
+  let h = `<h3 style="font-size:13px;color:var(--accent);margin:12px 0 6px">
+      고분자 물성 카드 — ${esc(card.name || card.smiles)}</h3>
+    <div class="scroll-x"><table class="kv-table" style="min-width:620px">`;
+  h += row("반복 단위 분자량", fmt(c.repeat_unit_mw), "g/mol", "계산", "");
+  h += row("van der Waals 부피", fmt(c.vdw_volume_cm3), "cm³/mol", "계산",
+           "Zhao 법 · 소분자 문헌 대비 ±5 %");
+  h += row("몰 부피", fmt(c.molar_volume_cm3), "cm³/mol", "계산", "M ÷ ρ");
+  h += row("밀도 ρ", fmt(c.density_g_cm3), "g/cm³", "계산",
+           "교차검증 평균오차 0.05 g/cm³");
+  h += row("용해도 파라미터 δ", fmt(c.solubility_parameter_mpa05), "MPa^0.5", "계산",
+           "교차검증 평균오차 1.43 MPa^0.5");
+  h += row("응집 에너지 밀도 CED", fmt(c.ced_j_cm3), "J/cm³", "계산", "δ² 에서 유도");
+  h += row("회전 가능 결합", `${c.rotatable_bonds} (밀도 ${fmt(c.rotatable_density)})`,
+           "", "계산", "사슬 유연성 대리 지표 — 구조에서 직접 셈");
+
+  if (g?.available) {
+    h += row("유리전이온도 Tg", fmt(g.tg_c), "°C", "문헌",
+             (g.name ? g.name + " · " : "") +
+             (g.uncertain ? "문헌값 편차가 큼 — " : "") + (g.note || "실측 인용"));
+  } else {
+    h += row("유리전이온도 Tg", "—", "", "불가", g?.note || "");
+  }
+
+  if (d.ced_j_cm3 != null) {
+    h += row("CED (DFT 경로)", fmt(d.ced_j_cm3), "J/cm³", "계산",
+             `이량체 결합 에너지 기반 · δ ${fmt(d.solubility_parameter_mpa05)} — ` +
+             `구조 회귀와 차이 ${fmt(d.delta_vs_structure)} MPa^0.5`);
+  }
+  h += "</table></div>";
+
+  if (c.warnings?.length) {
+    h += `<ul class="log-list" style="margin-top:8px">${
+      c.warnings.map(w => `<li class="verdict-mid">${esc(w)}</li>`).join("")}</ul>`;
+  }
+  h += `<p class="muted small" style="margin:8px 0 0">
+    <b>계산</b> = 교차검증으로 오차를 측정한 값 ·
+    <b>문헌</b> = 예측하지 않고 실측값 인용 ·
+    <b>불가</b> = 신뢰할 수 없어 값을 내지 않음.
+    Tg는 구조 예측 시 평균오차 45 K로 후보 간 순위가 뒤집혀 예측하지 않습니다.</p>`;
+  return h;
+}
+
+function wirePolymerCard() {
+  const btn = $("bnd-card");
+  if (!btn) return;
+  btn.onclick = async () => {
+    const out = $("bnd-card-out");
+    const smiles = $("bnd-smiles").value.trim();
+    if (!smiles) { out.innerHTML = '<p class="small">SMILES를 입력하세요.</p>'; return; }
+    out.innerHTML = '<p class="muted small">계산 중…</p>';
+    try {
+      const res = await fetch("/api/polymer/card", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({smiles, name: $("bnd-name").value.trim() || null}),
+      });
+      const card = await res.json();
+      if (!res.ok) throw new Error(card.detail || "물성 카드 생성 실패");
+      out.innerHTML = polymerCardHtml(card);
+    } catch (e) {
+      out.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`;
+    }
+  };
 }
