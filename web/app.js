@@ -2197,10 +2197,7 @@ function binderRankHtml(data) {
 
 /** 계산값·문헌값·예측 불가를 한눈에 구분되게 그린다 */
 function polymerCardHtml(card) {
-  if (card.errors?.length) {
-    return `<p class="verdict-no small">${card.errors.map(esc).join(" · ")}</p>`;
-  }
-  const c = card.computed, g = card.glass_transition, d = card.dft || {};
+  const g = card.glass_transition, d = card.dft || {};
   const row = (label, value, unit, kind, note) => `
     <tr><th style="width:150px">${esc(label)}</th>
       <td style="width:110px" class="mono">${value}<span class="muted small"> ${esc(unit || "")}</span></td>
@@ -2208,29 +2205,42 @@ function polymerCardHtml(card) {
         kind === "문헌" ? "verdict-mid" : kind === "불가" ? "muted" : "verdict-ok"
       }" style="border:1px solid currentColor">${esc(kind)}</span></td>
       <td class="muted small">${esc(note || "")}</td></tr>`;
+  const tgRow = () => g?.available
+    ? row("유리전이온도 Tg", fmt(g.tg_c), "°C", "문헌",
+          (g.name ? g.name + " · " : "") +
+          (g.uncertain ? "문헌값 편차가 큼 — " : "") + (g.note || "실측 인용"))
+    : row("유리전이온도 Tg", "—", "", "불가", g?.note || "");
 
+  // 반복 단위를 확정하지 못하면 구조 기반 물성은 전부 무효 — 다만 문헌값은 남긴다
+  if (card.errors?.length || !card.computed) {
+    return `<h3 style="font-size:13px;color:var(--accent);margin:12px 0 6px">
+        고분자 물성 카드 — ${esc(card.name || card.smiles)}</h3>
+      <p class="verdict-no small">${card.errors.map(esc).join(" · ")}</p>
+      <div class="scroll-x"><table class="kv-table" style="min-width:620px">
+      ${tgRow()}</table></div>`;
+  }
+
+  const c = card.computed;
   let h = `<h3 style="font-size:13px;color:var(--accent);margin:12px 0 6px">
       고분자 물성 카드 — ${esc(card.name || card.smiles)}</h3>
     <div class="scroll-x"><table class="kv-table" style="min-width:620px">`;
+  h += row("반복 단위", `<span class="mono">${esc(c.repeat_unit_smiles)}</span>`, "",
+           c.repeat_unit_source === "등록" ? "문헌" : "계산",
+           `${c.repeat_unit_source} · ${c.repeat_unit_note || ""} `
+           + "(* 는 이웃 단위와 붙는 자리)");
   h += row("반복 단위 분자량", fmt(c.repeat_unit_mw), "g/mol", "계산", "");
   h += row("van der Waals 부피", fmt(c.vdw_volume_cm3), "cm³/mol", "계산",
-           "Zhao 법 · 소분자 문헌 대비 ±5 %");
+           "Zhao 법 · 반복 단위 기준 (PE 20.8 vs 문헌 20.5)");
   h += row("몰 부피", fmt(c.molar_volume_cm3), "cm³/mol", "계산", "M ÷ ρ");
   h += row("밀도 ρ", fmt(c.density_g_cm3), "g/cm³", "계산",
            "교차검증 평균오차 0.05 g/cm³");
   h += row("용해도 파라미터 δ", fmt(c.solubility_parameter_mpa05), "MPa^0.5", "계산",
-           "교차검증 평균오차 1.43 MPa^0.5");
+           "교차검증 평균오차 1.37 MPa^0.5");
   h += row("응집 에너지 밀도 CED", fmt(c.ced_j_cm3), "J/cm³", "계산", "δ² 에서 유도");
   h += row("회전 가능 결합", `${c.rotatable_bonds} (밀도 ${fmt(c.rotatable_density)})`,
            "", "계산", "사슬 유연성 대리 지표 — 구조에서 직접 셈");
 
-  if (g?.available) {
-    h += row("유리전이온도 Tg", fmt(g.tg_c), "°C", "문헌",
-             (g.name ? g.name + " · " : "") +
-             (g.uncertain ? "문헌값 편차가 큼 — " : "") + (g.note || "실측 인용"));
-  } else {
-    h += row("유리전이온도 Tg", "—", "", "불가", g?.note || "");
-  }
+  h += tgRow();
 
   if (d.ced_j_cm3 != null) {
     h += row("CED (DFT 경로)", fmt(d.ced_j_cm3), "J/cm³", "계산",

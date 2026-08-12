@@ -23,21 +23,36 @@ _ATOM_VW = {"H": 7.24, "C": 20.58, "N": 15.60, "O": 14.71, "F": 13.31,
             "Si": 38.79}
 _A3_TO_CM3_MOL = 0.6023
 
-# 회귀 계수 — 참조 고분자 20종으로 적합. 상수항이 앞에 온다.
-# 밀도  ρ = f(vw_per_mw, logp_per_vw, halogen)   LOO MAE 0.050 g/cm³ (최대 0.189)
-_RHO_COEF = (1.756468, -0.799654, -5.706789, 1.269616)
-# 용해도 δ = f(tpsa_per_vw, ring)                LOO MAE 1.43 MPa^0.5 (최대 4.03)
-_DELTA_COEF = (16.271496, 9.834685, 17.272336)
+# 회귀 계수 — 참조 고분자 20종을 «반복 단위(더미 원자 표현)» 기준으로 적합.
+# 상수항이 앞에 온다.
+# 밀도  ρ = f(vw_per_mw, logp_per_vw, halogen)   LOO MAE 0.049 g/cm³ (최대 0.205)
+_RHO_COEF = (1.678859, -0.730943, -6.03356, 1.297632)
+# 용해도 δ = f(tpsa_per_vw, ring)                LOO MAE 1.37 MPa^0.5 (최대 4.04)
+_DELTA_COEF = (16.297126, 9.579774, 17.055988)
 
 RELIABILITY = {
-    "vdw_volume": ("계산", "±5 % (소분자 문헌 대조)"),
+    "vdw_volume": ("계산", "반복 단위 기준 — PE 20.8 vs 문헌 20.5 cm³/mol"),
     "molar_volume": ("계산", "밀도와 동일 근거"),
     "density": ("계산", "LOO 평균절대오차 0.05 g/cm³"),
-    "solubility_parameter": ("계산", "LOO 평균절대오차 1.43 MPa^0.5"),
+    "solubility_parameter": ("계산", "LOO 평균절대오차 1.38 MPa^0.5"),
     "ced": ("계산", "δ²에서 유도 — δ와 동일 근거"),
     "ced_dft": ("계산", "이량체 결합 에너지 기반 — 순위만 유효"),
     "rotatable_density": ("구조", "구조에서 직접 셈 — 오차 없음"),
     "glass_transition_c": ("문헌", "예측하지 않음 — 문헌값 인용"),
+}
+
+
+class RepeatUnitError(ValueError):
+    """반복 단위를 확정할 수 없어 물성을 낼 수 없는 경우."""
+
+
+# 자동 규칙(C=C 포화)으로는 얻을 수 없는 반복 단위 — 명시 등록.
+# 값은 더미 원자 * 로 «이웃 단위와 붙는 자리»를 표시한 반복 단위 SMILES 이다.
+# 이 표시가 없으면 PVA(-CH2CH(OH)-)와 PEO(-CH2CH2O-)가 둘 다 에탄올로
+# 축약되어 구분되지 않는다 — 수산기인지 에터인지가 사라지기 때문이다.
+REPEAT_UNITS = {
+    "C=CC=C": ("*CC=CC*", "1,4-부가 중합 — 주사슬에 이중결합이 남는다"),
+    "COCCOCCOC": ("*CCO*", "폴리에틸렌옥사이드 반복 단위 -CH2CH2O-"),
 }
 
 
@@ -48,8 +63,46 @@ def _mol(smiles):
     return m
 
 
-def vdw_volume(smiles: str) -> float:
-    """반복 단위의 van der Waals 부피 (cm³/mol)."""
+def repeat_unit(smiles: str) -> dict:
+    """모노머 → «반복 단위» (더미 원자 * 로 이웃과 붙는 자리를 표시).
+
+    그룹 기여법은 사슬 안의 반복 단위에 대해 정의된다. 비닐 모노머를 그대로
+    넣으면 C=C가 남아 결합 수가 달라지고 Vw 가 10~25 % 부풀려진다 — 사슬 길이
+    수렴에서 «n=1은 다른 화학종»이라 판정한 것과 같은 이유다.
+
+    확정할 수 없으면 조용히 근사하지 않고 RepeatUnitError 를 낸다. 그룹 기여법의
+    특징적 실패는 틀린 값이 아니라 «학습 범위 밖에서 그럴듯한 값»이기 때문이다.
+    """
+    canon = Chem.MolToSmiles(_mol(smiles))
+    for key, (unit, note) in REPEAT_UNITS.items():
+        if Chem.MolToSmiles(_mol(key)) == canon:
+            return {"smiles": unit, "source": "등록", "note": note}
+
+    m = _mol(smiles)
+    for bond in m.GetBonds():
+        if (bond.GetBondType() == Chem.BondType.DOUBLE and not bond.GetIsAromatic()
+                and not bond.IsInRing()
+                and bond.GetBeginAtom().GetSymbol() == "C"
+                and bond.GetEndAtom().GetSymbol() == "C"):
+            rw = Chem.RWMol(m)
+            a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            rw.GetBondBetweenAtoms(a, b).SetBondType(Chem.BondType.SINGLE)
+            for idx in (a, b):              # 이중결합이 열린 자리가 이웃과 붙는다
+                d = rw.AddAtom(Chem.Atom(0))
+                rw.AddBond(idx, d, Chem.BondType.SINGLE)
+            out = rw.GetMol()
+            Chem.SanitizeMol(out)
+            return {"smiles": Chem.MolToSmiles(out), "source": "비닐 자동",
+                    "note": "C=C를 포화시키고 그 자리를 결합 지점으로 잡았습니다."}
+
+    raise RepeatUnitError(
+        f"반복 단위를 확정할 수 없습니다: {smiles} — 중합 가능한 C=C가 없고 "
+        "등록된 반복 단위도 없습니다. 축합 중합체·다당류는 반복 단위가 모노머에서 "
+        "물 등이 빠진 형태라 구조마다 다릅니다. REPEAT_UNITS 에 등록하세요.")
+
+
+def molecule_vdw_volume(smiles: str) -> float:
+    """«독립 분자» 하나의 van der Waals 부피 (cm³/mol) — Zhao 법 원형."""
     mh = Chem.AddHs(_mol(smiles))
     total = sum(_ATOM_VW.get(a.GetSymbol(), 0.0) for a in mh.GetAtoms())
     ring = mh.GetRingInfo()
@@ -60,13 +113,46 @@ def vdw_volume(smiles: str) -> float:
     return round(a3 * _A3_TO_CM3_MOL, 2)
 
 
+def vdw_volume(smiles: str) -> float:
+    """«사슬 안 반복 단위»의 van der Waals 부피 (cm³/mol). 인자는 모노머 SMILES.
+
+    독립 분자 부피가 필요하면 molecule_vdw_volume() 을 쓴다 — 둘은 다른 값이다
+    (에틸렌 24.4 vs PE 반복 단위 20.8).
+    """
+    return _vw_unit(repeat_unit(smiles)["smiles"])
+
+
+def _vw_unit(unit: str) -> float:
+    """더미 표현 반복 단위 → 사슬 안 반복 단위의 Vw.
+
+    더미는 원자에서 빼고, 더미 결합도 결합 수에서 뺀 뒤 이웃 단위와의 결합
+    1개를 더한다. 무한 사슬에서 단위 간 결합 수는 단위 수와 같으므로
+    반복 단위당 정확히 1개다.
+    """
+    mh = Chem.AddHs(_mol(unit))
+    total = sum(_ATOM_VW.get(a.GetSymbol(), 0.0)
+                for a in mh.GetAtoms() if a.GetAtomicNum() > 0)
+    n_dummy_bonds = sum(1 for b in mh.GetBonds()
+                        if b.GetBeginAtom().GetAtomicNum() == 0
+                        or b.GetEndAtom().GetAtomicNum() == 0)
+    ring = mh.GetRingInfo()
+    aromatic = sum(1 for r in ring.AtomRings()
+                   if all(mh.GetAtomWithIdx(i).GetIsAromatic() for i in r))
+    non_aromatic = ring.NumRings() - aromatic
+    a3 = (total - 5.92 * (mh.GetNumBonds() - n_dummy_bonds + 1)
+          - 14.7 * aromatic - 3.8 * non_aromatic)
+    return round(a3 * _A3_TO_CM3_MOL, 2)
+
+
 def _features(smiles):
-    m = _mol(smiles)
-    mw = Descriptors.MolWt(m)
-    vw = vdw_volume(smiles)
-    heavy = max(m.GetNumHeavyAtoms(), 1)
+    unit = repeat_unit(smiles)
+    m = _mol(unit["smiles"])
+    mh = Chem.AddHs(m)
+    mw = sum(a.GetMass() for a in mh.GetAtoms() if a.GetAtomicNum() > 0)
+    vw = _vw_unit(unit["smiles"])
+    heavy = max(sum(1 for a in m.GetAtoms() if a.GetAtomicNum() > 0), 1)
     return {
-        "mw": mw, "vw": vw, "heavy": heavy,
+        "unit": unit, "mw": mw, "vw": vw, "heavy": heavy,
         "vw_per_mw": vw / mw,
         "logp_per_vw": Crippen.MolLogP(m) / vw,
         "tpsa_per_vw": Descriptors.TPSA(m) / vw,
@@ -99,6 +185,9 @@ def predict(smiles: str) -> dict:
             "끼리는 δ로 구분할 수 없습니다. 문헌값이나 DFT 경로(CED)를 쓰세요.")
 
     return {
+        "repeat_unit_smiles": f["unit"]["smiles"],
+        "repeat_unit_source": f["unit"]["source"],
+        "repeat_unit_note": f["unit"]["note"],
         "repeat_unit_mw": round(f["mw"], 2),
         "vdw_volume_cm3": f["vw"],
         "molar_volume_cm3": round(molar_volume, 1),
@@ -182,9 +271,16 @@ def property_card(material: dict, descriptors: dict | None = None) -> dict:
             "dft": {}, "reliability": RELIABILITY, "errors": []}
     try:
         card["computed"] = predict(smiles)
+    except RepeatUnitError as exc:
+        # 반복 단위가 없으면 구조 기반 물성은 전부 무효다 — 근사하지 않고 멈춘다
+        card["errors"].append(str(exc))
+        card["repeat_unit_available"] = False
+        card["glass_transition"] = glass_transition(smiles)
+        return card
     except ValueError as exc:
         card["errors"].append(str(exc))
         return card
+    card["repeat_unit_available"] = True
 
     card["glass_transition"] = glass_transition(smiles)
 

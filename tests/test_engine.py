@@ -334,11 +334,52 @@ def test_binder_does_not_claim_unevaluated_axes_passed():
 
 def test_vdw_volume_matches_literature():
     """Zhao 법 van der Waals 부피 — 소분자 문헌값 대비 ±8 % 이내."""
-    from server.polymer import vdw_volume
+    from server.polymer import molecule_vdw_volume
     for smiles, lit in [("CC", 27.3), ("c1ccccc1", 48.4), ("CO", 21.7),
                         ("CC(C)=O", 39.2), ("Cc1ccccc1", 59.5)]:
-        calc = vdw_volume(smiles)
+        calc = molecule_vdw_volume(smiles)
         assert abs(calc - lit) / lit < 0.08, f"{smiles}: {calc} vs {lit}"
+
+
+def test_repeat_unit_vdw_volume_matches_literature():
+    """반복 단위 Vw 는 van Krevelen 그룹표 값과 ±5 % 안에서 맞아야 한다.
+
+    모노머를 그대로 쓰면 C=C 때문에 결합 수가 모자라 10~25 % 부풀려진다.
+    """
+    from server.polymer import molecule_vdw_volume, vdw_volume
+    for monomer, lit in [("C=C", 20.46), ("C=CC", 30.68),
+                         ("C=CC#N", 34.0), ("C=CO", 25.05)]:
+        calc = vdw_volume(monomer)
+        assert abs(calc - lit) / lit < 0.05, f"{monomer}: {calc} vs {lit}"
+        # 모노머 부피와는 명확히 달라야 한다 (같으면 정정이 안 된 것)
+        assert molecule_vdw_volume(monomer) > calc * 1.05
+
+
+def test_repeat_unit_distinguishes_pva_from_peo():
+    """PVA(-CH2CH(OH)-)와 PEO(-CH2CH2O-)는 서로 다른 물성을 내야 한다.
+
+    양 끝을 H로 막으면 둘 다 에탄올로 축약되어 구분이 사라진다. 결합 자리를
+    더미 원자로 남겨야 수산기와 에터가 구분된다.
+    """
+    from server.polymer import predict, repeat_unit
+    pva, peo = predict("C=CO"), predict("COCCOCCOC")
+    assert repeat_unit("C=CO")["smiles"] != repeat_unit("COCCOCCOC")["smiles"]
+    assert abs(pva["density_g_cm3"] - 1.260) < 0.06     # 문헌 1.260
+    assert abs(peo["density_g_cm3"] - 1.130) < 0.06     # 문헌 1.130
+    assert pva["solubility_parameter_mpa05"] > peo["solubility_parameter_mpa05"]
+
+
+def test_repeat_unit_refuses_undefined_structures():
+    """반복 단위를 확정할 수 없으면 근사하지 않고 거부한다."""
+    from server.polymer import RepeatUnitError, predict, property_card
+    cmc = "OCC1OC(O)C(OCC(=O)O)C(O)C1O"
+    with pytest.raises(RepeatUnitError):
+        predict(cmc)
+    card = property_card({"name": "CMC", "smiles": cmc})
+    assert card["repeat_unit_available"] is False
+    assert card["computed"] is None and card["errors"]
+    # 구조 기반 물성은 막히더라도 문헌 Tg 는 계속 제공되어야 한다
+    assert card["glass_transition"]["available"] is True
 
 
 def test_polymer_density_and_delta_against_literature():
