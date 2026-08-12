@@ -2722,6 +2722,49 @@ function svgContainment(d) {
   return s + "</svg>";
 }
 
+/** EA 도약 — 수직 → 단열 → ΔG 로 가며 판정이 뒤집히는 지점을 드러낸다 */
+function svgEaStages(d) {
+  const st = d.ea_stages?.steps || [];
+  if (st.length < 2) return "";
+  const w = d.containment.window;
+  const vs = st.map(s => s.reduction_v);
+  const lo = Math.min(...vs, w.low) - 0.5, hi = Math.max(...vs, w.high) + 0.5;
+  const W = 780, H = 64 + 42 * st.length, L = 118, R = 30;
+  const x = v => L + (v - lo) / (hi - lo) * (W - L - R);
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="esw-chart" role="img"
+    aria-label="전자 친화도 단계별 환원 전위">`;
+  // 흑연 구동 범위 띠 — 어느 단계에서 이 띠를 넘는지가 핵심
+  s += `<rect x="${x(w.low)}" y="24" width="${Math.max(3, x(w.high) - x(w.low))}"
+      height="${H - 58}" fill="var(--danger)" fill-opacity="0.10"/>
+    <line x1="${x(w.high)}" y1="24" x2="${x(w.high)}" y2="${H - 34}"
+      stroke="var(--danger)" stroke-dasharray="4 3"/>
+    <text x="${x(w.high) + 4}" y="18" font-size="10" fill="var(--danger)"
+      >${esc(w.label)} 상단 ${w.high} V</text>`;
+  st.forEach((p, i) => {
+    const y = 46 + i * 42, over = p.reduction_v > w.high;
+    const col = over ? "var(--danger)" : p.reduction_v >= w.low ? "var(--pin)" : "var(--ok)";
+    s += `<text x="${L - 8}" y="${y + 4}" font-size="11.5" text-anchor="end"
+        fill="var(--text-1)">${esc(p.label)}</text>
+      <circle cx="${x(p.reduction_v)}" cy="${y}" r="6" fill="${col}"/>
+      <text x="${x(p.reduction_v)}" y="${y - 11}" font-size="10.5" text-anchor="middle"
+        fill="${col}">${fmt(p.reduction_v)} V</text>`;
+    if (i > 0) {
+      const prev = st[i - 1];
+      s += `<line x1="${x(prev.reduction_v)}" y1="${y - 42 + 8}" x2="${x(p.reduction_v)}"
+          y2="${y - 8}" stroke="var(--muted)" stroke-width="1.5"
+          marker-end="url(#eaArrow)"/>
+        <text x="${(x(prev.reduction_v) + x(p.reduction_v)) / 2}" y="${y - 20}"
+          font-size="10" text-anchor="middle" fill="var(--muted)">+${p.delta_ev} eV</text>`;
+    }
+  });
+  s += `<defs><marker id="eaArrow" viewBox="0 0 8 8" refX="6" refY="4"
+      markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker></defs>
+    <text x="${(L + W) / 2}" y="${H - 8}" font-size="11" text-anchor="middle"
+      fill="var(--muted)">환원 전위 (V vs Li/Li⁺) — 붉은 띠 안·오른쪽이면 환원됨</text></svg>`;
+  return s;
+}
+
 /** LUMO 사다리 — 「LUMO가 낮다」가 무엇에 비해 낮은지 보여준다 */
 function svgLumoLadder(d) {
   if (d.lumo_ev == null) return "";
@@ -2739,7 +2782,8 @@ function svgLumoLadder(d) {
       <text x="${L - 8}" y="${y(r.lumo_ev) + 4}" font-size="10.5" text-anchor="end"
         fill="var(--muted)">${esc(r.label)}</text>
       <text x="${W - R}" y="${y(r.lumo_ev) - 3}" font-size="9.5" text-anchor="end"
-        fill="var(--muted)">${r.lumo_ev}</text>`;
+        fill="var(--muted)">${r.lumo_ev}${r.reduction_v != null
+          ? ` (E_red ${r.reduction_v > 0 ? "+" : ""}${r.reduction_v} V)` : ""}</text>`;
   }
   s += `<line x1="${L}" y1="${y(d.lumo_ev)}" x2="${W - R}" y2="${y(d.lumo_ev)}"
       stroke="var(--accent)" stroke-width="2.5"/>
@@ -2781,6 +2825,15 @@ function eswDiagnoseHtml(d) {
   h += `<h4 style="font-size:12px;margin:14px 0 4px">원인 — 구조에서 판정까지</h4>`
      + chainHtml(d);
 
+  const ea = svgEaStages(d);
+  if (ea) {
+    h += `<h4 style="font-size:12px;margin:14px 0 4px">
+        전자를 실제로 넣으면 — 판정이 뒤집히는 지점</h4>` + ea
+      + `<p class="muted small" style="margin:2px 0 0">${esc(d.ea_stages.note)}
+         구조를 고정한 «수직» 값만 보면 안전해 보이는 물질이, 음이온 구조가 완화되고
+         용매가 감싸면서 환원 전위가 크게 올라갑니다.</p>`;
+  }
+
   if (d.groups?.length) {
     h += `<h4 style="font-size:12px;margin:14px 0 4px">검출된 환원 취약 작용기</h4>
       <ul class="log-list">` + d.groups.map(g =>
@@ -2791,8 +2844,12 @@ function eswDiagnoseHtml(d) {
   const ladder = svgLumoLadder(d);
   if (ladder) {
     h += `<h4 style="font-size:12px;margin:14px 0 4px">LUMO 준위 비교</h4>` + ladder
-       + `<p class="muted small" style="margin:2px 0 0">참고선은 대표 구조군의 대략적인
-          위치입니다 — 같은 조건에서 계산한 값이 아니라 «어느 쪽인지»를 보는 눈금입니다.</p>`;
+       + `<p class="muted small" style="margin:2px 0 0">참고선은 모두 «표준» 프리셋에서
+          실제로 계산한 값입니다 (괄호는 그 물질의 환원 전위).</p>`;
+    if (d.lumo_caveat) {
+      h += `<p class="verdict-mid small" style="margin:6px 0 0">
+        <b>LUMO 만으로 판정하지 마세요.</b> ${esc(d.lumo_caveat.note)}</p>`;
+    }
   }
 
   if (d.all_electrodes?.length) {

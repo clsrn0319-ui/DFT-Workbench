@@ -67,16 +67,31 @@ REDUCIBLE_GROUPS = [
      "π* 가 LUMO를 이루지만 공액이 없으면 비교적 높이 놓여 환원이 쉽지 않습니다."),
 ]
 
-# 사슬을 읽을 때 쓸 참고점 — 「이 값이 큰가 작은가」를 판단할 기준
+# 참고점 — 모두 «표준» 프리셋(PBE0-D3(BJ)/def2-TZVP · 구조 최적화 · SMD 카보네이트)
+# 에서 실제로 계산한 값이다. 어림값을 눈금으로 쓰면 정작 관심 구조가 자기 참고선
+# 아래에 찍히는 일이 생긴다 — 실제로 그런 오차가 있어 실측값으로 교체했다.
 LUMO_REFERENCE = [
-    {"label": "포화 알케인 (PE 사슬)", "lumo_ev": 1.5,
-     "note": "σ* 밖에 없어 LUMO가 높다 — 환원에 매우 강하다"},
-    {"label": "고립 C=C (에틸렌)", "lumo_ev": 0.13, "note": "π* 이지만 공액 없음"},
-    {"label": "방향족 공액 비닐 (스타이렌류)", "lumo_ev": -0.3,
-     "note": "공액으로 π* 가 내려간다"},
-    {"label": "카보네이트 (EC)", "lumo_ev": -0.5,
-     "note": "흑연에서 환원되어 SEI를 형성한다"},
+    {"label": "포화 알케인 (부탄 — PE 사슬)", "lumo_ev": 1.486,
+     "reduction_v": -1.97, "source": "표준 계산",
+     "note": "σ* 밖에 받을 자리가 없어 LUMO가 높다 — 환원에 매우 강하다"},
+    {"label": "스타이렌 (방향족 공액 비닐)", "lumo_ev": -1.126,
+     "reduction_v": 0.44, "source": "표준 계산",
+     "note": "비닐 π* 와 고리 π* 가 섞여 내려간다"},
+    {"label": "아크릴로나이트릴 (나이트릴)", "lumo_ev": -1.419,
+     "reduction_v": 0.71, "source": "표준 계산",
+     "note": "나이트릴의 강한 전자 끌기로 π* 가 더 낮다"},
 ]
+
+# LUMO 만으로 환원 전위를 짐작하면 얼마나 빗나가는지 — 실측 사례
+LUMO_CAVEAT = {
+    "example": "스타이렌",
+    "naive_v": -0.31,      # −LUMO − 1.44 로 짐작한 값
+    "actual_v": 0.44,      # ΔG 기반 실제 환원 전위
+    "note": ("LUMO 는 «전자를 넣기 전»의 사진입니다. 실제로 전자가 들어가면 분자가 "
+             "구조를 바꾸고(완화) 용매가 음이온을 감싸(용매화) 훨씬 안정해집니다. "
+             "스타이렌은 LUMO 로 짐작하면 −0.31 V 로 안전해 보이지만 실제 환원 전위는 "
+             "+0.44 V 로, 0.75 V 나 낙관하게 됩니다. 판정은 반드시 EA 기반 전위로 하세요."),
+}
 
 
 def _mol(smiles):
@@ -144,11 +159,18 @@ def containment(red_v: float, ox_v: float, window: dict) -> dict:
             f"구동 범위 {lo:.2f}~{hi:.2f} V 가 ESW({red_v:+.2f}~{ox_v:+.2f} V) 안에 "
             f"완전히 들어옵니다 — 여유 {margin:.2f} V.")
     else:
+        # 「구동 범위 안에서 환원」과 「범위에 들어가기도 전에 환원」은 다른 상황이다.
+        # 전자는 리튬화 도중 일부 구간에서, 후자는 전 구간에서 분해가 일어난다.
+        whole_range = red_v > hi or ox_v < lo
+        verdict = "분해 우려" if whole_range else "경계"
+        where = ("구동 «전 구간»에서" if whole_range else "구동 범위 «일부 구간»에서")
         worst = max(f["gap_v"] for f in fails)
-        verdict = "경계" if worst <= 0.5 else "분해 우려"
         summary = (f"구동 범위 {lo:.2f}~{hi:.2f} V 가 ESW({red_v:+.2f}~{ox_v:+.2f} V) 안에 "
                    f"들어오지 못합니다 — " + " / ".join(f["side"] for f in fails)
-                   + f" 쪽으로 최대 {worst:.2f} V 벗어납니다.")
+                   + f" 쪽으로 최대 {worst:.2f} V 벗어나며, {where} 분해가 일어납니다.")
+        if whole_range and red_v > hi:
+            summary += (f" 환원 전위 {red_v:+.2f} V 가 범위 상단 {hi:.2f} V 보다 높아, "
+                        "전극이 작동 전위에 도달하기 «전»에 이미 환원됩니다.")
     return {"verdict": verdict, "summary": summary, "fails": fails,
             "window": window, "reduce_gap_v": round(reduce_gap, 3),
             "oxidize_gap_v": round(oxidize_gap, 3)}
@@ -158,9 +180,23 @@ def causal_chain(smiles: str, desc: dict, cont: dict, e_abs: float) -> list[dict
     """판정을 구조까지 되짚는 인과 사슬. 각 단계에 실제 계산값을 붙인다."""
     groups = reducible_groups(smiles)
     lumo = desc.get("lumo_ev")
-    ea = desc.get("ea_adiabatic_ev", desc.get("ea_vertical_ev"))
-    red = desc.get("reduction_potential_gibbs_v", desc.get("reduction_potential_v"))
     win = cont["window"]
+    # EA 와 전위는 «같은 기준»끼리 짝지어야 한다. ΔG 기반 전위를 쓰면서 단열 EA 를
+    # 보여주면 E_red = EA − E_abs 항등식이 화면에서 깨져 보인다.
+    if desc.get("reduction_potential_gibbs_v") is not None:
+        red = desc["reduction_potential_gibbs_v"]
+        ea, ea_label = desc.get("ea_gibbs_ev"), "ΔG 기반 전자 친화도 EA"
+        ea_note = ("전자 하나를 붙이고 구조 완화와 298 K 열보정(ZPE·엔탈피·엔트로피)까지 "
+                   "반영한 값입니다.")
+    else:
+        red = desc.get("reduction_potential_v")
+        if desc.get("ea_adiabatic_ev") is not None:
+            ea, ea_label = desc["ea_adiabatic_ev"], "단열 전자 친화도 EA"
+            ea_note = "전자를 붙인 뒤 음이온 구조를 다시 최적화한 값 — 구조 완화 포함."
+        else:
+            ea, ea_label = desc.get("ea_vertical_ev"), "수직 전자 친화도 EA"
+            ea_note = ("구조를 고정한 채 전자만 넣은 값 — 구조 완화가 빠져 있어 위험을 "
+                       "낮잡을 수 있습니다.")
 
     top = groups[0] if groups else None
     return [
@@ -171,8 +207,8 @@ def causal_chain(smiles: str, desc: dict, cont: dict, e_abs: float) -> list[dict
                  "포화 사슬만 있으면 σ* 밖에 받을 자리가 없어 환원에 강합니다."},
         {"step": 2, "label": "LUMO", "value": lumo, "unit": "eV", "measured": True,
          "note": "전자를 받는 자리의 에너지 — 낮을수록 받기 쉽습니다. DFT 계산값입니다."},
-        {"step": 3, "label": "전자 친화도 EA", "value": ea, "unit": "eV", "measured": True,
-         "note": "전자 하나를 실제로 붙였을 때의 안정화 — 구조 완화까지 포함합니다."},
+        {"step": 3, "label": ea_label, "value": ea, "unit": "eV", "measured": True,
+         "note": ea_note},
         {"step": 4, "label": "환원 전위", "value": red, "unit": "V vs Li/Li⁺",
          "measured": True,
          "note": (f"E_red = EA − {e_abs} V. 해석이 아니라 기준전극 절대전위를 뺀 "
@@ -183,6 +219,33 @@ def causal_chain(smiles: str, desc: dict, cont: dict, e_abs: float) -> list[dict
         {"step": 6, "label": "판정", "value": cont["verdict"], "unit": "",
          "measured": False, "note": cont["summary"]},
     ]
+
+
+def ea_stages(desc: dict, e_abs: float = 1.44) -> dict:
+    """수직 → 단열 → ΔG 로 EA 가 뛰는 과정 — 판정이 뒤집히는 지점을 드러낸다.
+
+    구조를 고정한 «수직» EA 만 보면 안전해 보이는 물질이, 실제로 전자를 받고
+    구조가 완화되고 용매가 음이온을 감싸면 환원 전위가 크게 올라간다.
+    스타이렌이 정확히 그 사례다 (수직 −0.51 eV → 단열 +1.73 eV).
+    """
+    steps, prev = [], None
+    for key, label, adds in [
+        ("ea_vertical_ev", "수직 EA", "구조를 고정한 채 전자만 넣은 값"),
+        ("ea_adiabatic_ev", "단열 EA", "음이온 구조를 다시 최적화 — 구조 완화가 더해진다"),
+        ("ea_gibbs_ev", "ΔG 기반 EA", "298 K 열보정(ZPE·엔탈피·엔트로피)까지 더한다"),
+    ]:
+        v = desc.get(key)
+        if v is None:
+            continue
+        step = {"key": key, "label": label, "ea_ev": v,
+                "reduction_v": round(v - e_abs, 3), "adds": adds}
+        if prev is not None:
+            step["delta_ev"] = round(v - prev, 3)
+        steps.append(step)
+        prev = v
+    return {"steps": steps, "e_abs": e_abs,
+            "note": ("환원 전위는 이 사슬의 «마지막» 값으로 판정합니다. 수직 EA 만 보면 "
+                     "위험을 크게 낮잡습니다.") if len(steps) > 1 else ""}
 
 
 def diagnose(material: dict, desc: dict, electrode: str = "graphite",
@@ -199,7 +262,8 @@ def diagnose(material: dict, desc: dict, electrode: str = "graphite",
            "reduction_potential_v": red, "oxidation_potential_v": ox,
            "lumo_ev": desc.get("lumo_ev"),
            "ea_ev": desc.get("ea_adiabatic_ev", desc.get("ea_vertical_ev")),
-           "lumo_reference": LUMO_REFERENCE, "e_abs": e_abs}
+           "lumo_reference": LUMO_REFERENCE, "lumo_caveat": LUMO_CAVEAT,
+           "e_abs": e_abs}
     if red is None or ox is None:
         out["available"] = False
         out["note"] = ("환원·산화 전위가 없어 진단할 수 없습니다 — 'DFT 계산'에서 "
@@ -208,6 +272,7 @@ def diagnose(material: dict, desc: dict, electrode: str = "graphite",
         return out
 
     out["available"] = True
+    out["ea_stages"] = ea_stages(desc, e_abs)
     cont = containment(red, ox, win)
     out["containment"] = cont
     out["groups"] = reducible_groups(smiles)

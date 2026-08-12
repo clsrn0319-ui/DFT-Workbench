@@ -658,3 +658,44 @@ def test_esw_diagnose_reports_missing_potentials():
     from server.esw import diagnose
     d = diagnose({"name": "X", "smiles": "C=Cc1ccccc1"}, {"lumo_ev": -0.3})
     assert d["available"] is False and "산화/환원 전위" in d["note"]
+
+
+def test_esw_chain_identity_holds_on_screen():
+    """3단계 EA 와 4단계 전위는 E_red = EA − E_abs 를 만족해야 한다.
+
+    ΔG 기반 전위를 쓰면서 단열 EA 를 보여주면 화면에서 항등식이 깨져 보인다.
+    실제 스타이렌 값(단열 1.734 / ΔG 1.884)에서 0.15 eV 어긋났던 사례다.
+    """
+    from server.esw import diagnose
+    full = {"lumo_ev": -1.126, "ea_vertical_ev": -0.505, "ea_adiabatic_ev": 1.734,
+            "ea_gibbs_ev": 1.884, "reduction_potential_v": 0.294,
+            "reduction_potential_gibbs_v": 0.444, "oxidation_potential_v": 4.573,
+            "oxidation_potential_gibbs_v": 4.549}
+    for desc in (full, {k: v for k, v in full.items() if "gibbs" not in k}):
+        chain = {c["step"]: c for c in
+                 diagnose({"name": "S", "smiles": "C=Cc1ccccc1"}, desc)["chain"]}
+        assert chain[3]["value"] - 1.44 == pytest.approx(chain[4]["value"], abs=1e-6)
+
+
+def test_esw_separates_partial_from_whole_range_decomposition():
+    """구동 범위 «안»에서 환원되는 것과 «들어가기 전»에 환원되는 것은 다르다."""
+    from server.esw import ELECTRODE_BY_KEY, containment
+    gr, si = ELECTRODE_BY_KEY["graphite"], ELECTRODE_BY_KEY["si"]
+    # 스타이렌 실측: E_red +0.444 V
+    on_graphite = containment(0.444, 4.549, gr)     # 0.444 > 0.25 (범위 상단)
+    assert on_graphite["verdict"] == "분해 우려"
+    assert "전 구간" in on_graphite["summary"]
+    on_si = containment(0.444, 4.549, si)           # 0.05 ~ 0.60 사이에 들어옴
+    assert on_si["verdict"] == "경계"
+    assert "일부 구간" in on_si["summary"]
+
+
+def test_esw_ea_stages_show_where_verdict_flips():
+    """수직 → 단열 → ΔG 로 가며 환원 전위가 어떻게 올라가는지 단계로 낸다."""
+    from server.esw import ea_stages
+    st = ea_stages({"ea_vertical_ev": -0.505, "ea_adiabatic_ev": 1.734,
+                    "ea_gibbs_ev": 1.884})["steps"]
+    assert [s["key"] for s in st] == ["ea_vertical_ev", "ea_adiabatic_ev", "ea_gibbs_ev"]
+    assert st[0]["reduction_v"] == pytest.approx(-1.945, abs=1e-3)   # 안전해 보임
+    assert st[-1]["reduction_v"] == pytest.approx(0.444, abs=1e-3)   # 실제는 위험
+    assert st[1]["delta_ev"] == pytest.approx(2.239, abs=1e-3)       # 구조 완화+용매화
