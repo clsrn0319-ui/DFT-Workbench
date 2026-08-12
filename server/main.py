@@ -12,6 +12,7 @@ import io
 import time
 
 import os
+import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -19,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
-from . import polymer
+from . import convergence, polymer
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -176,6 +177,108 @@ def binder_rank(req: BinderRankRequest, _: bool = Depends(require_login)):
     if not reports:
         raise HTTPException(400, "선택한 작업 중 판정할 수 있는 완료 결과가 없습니다.")
     return {"reports": reports, "ranks": binder.rank(reports)}
+
+
+class ConvergenceRequest(BaseModel):
+    smiles: str = Field(min_length=1, max_length=300)
+    name: Optional[str] = None
+    lengths: list[int] = Field(default=list(convergence.DEFAULT_LENGTHS),
+                               min_length=2, max_length=6)
+    settings: JobSettings = JobSettings()
+
+
+@app.post("/api/convergence/preview")
+def convergence_preview(req: ConvergenceRequest, _: bool = Depends(require_login)):
+    """제출 전 확인 — 길이별 올리고머와 물성이 정의되는 최소 길이."""
+    lengths = sorted({n for n in req.lengths if 1 <= n <= 12})
+    series = convergence.build_series(req.smiles, lengths)
+    for entry in series:
+        if entry.get("smiles"):
+            entry["atom_count"] = geometry.atom_count(entry["smiles"])
+            entry["over_limit"] = entry["atom_count"] > MAX_ATOMS
+    return {"series": series,
+            "minimum_defined": convergence.minimum_defined_length(req.smiles),
+            "max_atoms": MAX_ATOMS}
+
+
+@app.post("/api/convergence/submit")
+def convergence_submit(req: ConvergenceRequest, _: bool = Depends(require_login)):
+    """사슬 길이 계열을 한 번에 제출한다. 각 작업에 계열 정보를 붙여 둔다."""
+    lengths = sorted({n for n in req.lengths if 1 <= n <= 12})
+    series = convergence.build_series(req.smiles, lengths)
+    usable = [e for e in series if e.get("smiles")
+              and geometry.atom_count(e["smiles"]) <= MAX_ATOMS]
+    if len(usable) < 2:
+        raise HTTPException(
+            400, f"원자 수 상한({MAX_ATOMS}) 안에서 계산 가능한 사슬 길이가 2개 미만입니다. "
+                 "더 짧은 길이를 고르거나 RHOBENCH_MAX_ATOMS 를 올리세요.")
+    if store.count_active() + len(usable) > MAX_ACTIVE_JOBS:
+        raise HTTPException(
+            400, f"동시 실행 가능한 작업은 {MAX_ACTIVE_JOBS}개입니다 "
+                 f"(현재 {store.count_active()}개 진행 중, 요청 {len(usable)}개).")
+
+    settings = req.settings.model_dump()
+    # 계열 안에서는 구조 설정이 의미가 없다 — 길이를 SMILES 로 직접 지정하기 때문
+    settings["structure"] = "모노머"
+    base = req.name or req.smiles
+    series_id = "SER-" + secrets.token_hex(4).upper()
+
+    jobs = []
+    for entry in usable:
+        material = {"id": None, "name": f"{base} (n={entry['n']})",
+                    "smiles": entry["smiles"]}
+        job = store.create_job(material, settings)
+        store.update_job(job["id"], {"series": {
+            "id": series_id, "base_name": base, "base_smiles": req.smiles,
+            "n": entry["n"]}})
+        worker.submit(job["id"])
+        jobs.append(store.get_job(job["id"]))
+    return {"series_id": series_id, "jobs": jobs,
+            "skipped": [e for e in series if e not in usable]}
+
+
+@app.get("/api/convergence/series")
+def convergence_series(_: bool = Depends(require_login)):
+    """등록된 사슬 길이 계열 목록."""
+    groups: dict[str, dict] = {}
+    for j in store.list_jobs():
+        s = j.get("series")
+        if not s:
+            continue
+        g = groups.setdefault(s["id"], {
+            "series_id": s["id"], "base_name": s["base_name"],
+            "base_smiles": s["base_smiles"], "jobs": []})
+        g["jobs"].append({"id": j["id"], "n": s["n"], "status": j["status"]})
+    for g in groups.values():
+        g["jobs"].sort(key=lambda x: x["n"])
+        g["done"] = sum(1 for x in g["jobs"] if x["status"] == "PUBLISHED")
+        g["total"] = len(g["jobs"])
+    return {"series": sorted(groups.values(), key=lambda g: -g["total"])}
+
+
+@app.get("/api/convergence/analyze")
+def convergence_analyze(series_id: str, _: bool = Depends(require_login)):
+    """완료된 길이별 결과로 물성별 수렴을 판정한다."""
+    entries = []
+    base = None
+    for j in store.list_jobs():
+        s = j.get("series")
+        if not s or s["id"] != series_id:
+            continue
+        base = base or {"name": s["base_name"], "smiles": s["base_smiles"]}
+        if j["status"] == "PUBLISHED" and j.get("result"):
+            entries.append({"n": s["n"], "job_id": j["id"],
+                            "descriptors": j["result"].get("descriptors") or {}})
+    if base is None:
+        raise HTTPException(404, "해당 계열을 찾을 수 없습니다.")
+    if len(entries) < 2:
+        raise HTTPException(
+            400, f"완료된 길이가 {len(entries)}개뿐입니다 — 수렴 판정에는 2개 이상이 필요합니다.")
+    result = convergence.analyze(entries, base_smiles=base["smiles"])
+    result["series_id"] = series_id
+    result["base"] = base
+    result["minimum_defined"] = convergence.minimum_defined_length(base["smiles"])
+    return result
 
 
 class PolymerRequest(BaseModel):

@@ -765,6 +765,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-compare #rbv-compare{display:block}
 #rb-real.mode-binder #rbv-binder{display:block}
 #rb-real.mode-binderrank #rbv-binderrank{display:block}
+#rb-real.mode-chain #rbv-chain{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -1074,6 +1075,38 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
   <div class="card" id="bndr-body"></div>
 </div>
+
+<div id="rbv-chain" class="rbv">
+  <h1>사슬 길이 수렴</h1>
+  <p class="rb-note">반복 단위 수 n을 늘려가며 같은 물성을 계산해, 그 값이
+    <b>고분자를 대표하는지</b> 판정합니다. 수렴하지 않으면 대표값을 주장하지 않습니다.</p>
+
+  <div class="card">
+    <div class="card-head"><h2>계열 제출</h2></div>
+    <div class="toolbar">
+      <input id="chn-smiles" placeholder="반복 단위 SMILES (예: C=CC(=O)O)"
+        style="flex:1;min-width:220px;padding:6px 10px">
+      <input id="chn-name" placeholder="이름 (선택)" style="width:150px;padding:6px 10px">
+      <input id="chn-lengths" value="1,2,3,5" style="width:110px;padding:6px 10px"
+        title="쉼표로 구분한 반복 단위 수">
+      <label class="compare-check">정확도
+        <select id="chn-accuracy" style="font-size:12px;padding:3px 6px"></select></label>
+      <button class="btn" id="chn-preview" type="button">미리보기</button>
+      <button class="btn primary" id="chn-submit" type="button">계열 제출</button>
+    </div>
+    <div id="chn-preview-out"></div>
+    <div id="chn-submit-out" class="small"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>등록된 계열</h2>
+      <button class="btn" id="chn-refresh" type="button">새로고침</button>
+    </div>
+    <div id="chn-series" class="mol-grid"></div>
+  </div>
+
+  <div class="card" id="chn-body"></div>
+</div>
 </div>
 </section>
 <script src="/static/app.js"></script>
@@ -1095,7 +1128,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       {label: "물질 비교", mode: "compare"}]},
     {group: "건식 바인더", items: [
       {label: "바인더 후보군", mode: "binder"},
-      {label: "후보 순위", mode: "binderrank"}]},
+      {label: "후보 순위", mode: "binderrank"},
+      {label: "사슬 길이 수렴", mode: "chain"}]},
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
@@ -1117,7 +1151,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.style.left = (window.innerWidth > 760 ? sidebarRight() : 0) + "px";
     real.scrollTop = 0;
     setActive(label);
-    real.classList.remove("mode-lookup", "mode-compare", "mode-binder", "mode-binderrank");
+    real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
+      "mode-binderrank", "mode-chain");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1126,6 +1161,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "compare" && window.rbRenderCompare) try { window.rbRenderCompare(); } catch (e) {}
     if (mode === "binder" && window.rbRenderBinder) try { window.rbRenderBinder(); } catch (e) {}
     if (mode === "binderrank" && window.rbRenderBinderRank) try { window.rbRenderBinderRank(); } catch (e) {}
+    if (mode === "chain" && window.rbRenderChain) try { window.rbRenderChain(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };

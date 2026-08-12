@@ -390,3 +390,51 @@ def test_property_card_cross_checks_dft_route():
     # 미지 구조는 오류가 아니라 빈 카드로 처리
     bad = polymer.property_card({"name": "x", "smiles": "not-a-smiles((("})
     assert bad["errors"] and bad["computed"] is None
+
+
+def test_convergence_detects_and_extrapolates():
+    from server import convergence as cv
+    conv = cv.analyze_property("homo_ev", [(2, -8.60), (3, -8.45), (5, -8.42)])
+    assert conv["converged"] and conv["status"] == "converged"
+    assert conv["extrapolation"]["limit"] < -8.0     # 1/n 외삽 극한값
+    not_conv = cv.analyze_property("homo_ev", [(1, -9.10), (2, -8.30), (3, -7.60)])
+    assert not not_conv["converged"]
+    # 크기값은 판정 대상이 아니다
+    ext = cv.analyze_property("total_energy_hartree", [(1, -78.0), (2, -156.0)])
+    assert ext["status"] == "extensive"
+
+
+def test_convergence_refuses_two_point_extrapolation():
+    """두 점은 직선이 정확히 지나 1/n 형태를 검증할 수 없으므로 외삽하지 않는다."""
+    from server.convergence import extrapolate
+    assert extrapolate([(1, -6.1), (2, -7.8)]) is None
+    three = extrapolate([(2, -7.8), (3, -8.3), (5, -8.5)])
+    assert three is not None and "max_residual" in three
+
+
+def test_convergence_excludes_vinyl_monomer():
+    """비닐 단량체의 n=1 은 포화 사슬과 다른 화학종이라 판정에서 빠진다."""
+    from server import convergence as cv
+    assert cv.monomer_is_chain_segment("C=C")["same_species"] is False      # PE
+    assert cv.monomer_is_chain_segment("C=CC(=O)O")["same_species"] is False  # PAA
+    assert cv.monomer_is_chain_segment("COCCOCCOC")["same_species"] is True   # PEO
+
+    series = [{"n": 1, "descriptors": {"homo_ev": -6.1}},
+              {"n": 2, "descriptors": {"homo_ev": -7.8}},
+              {"n": 3, "descriptors": {"homo_ev": -8.0}}]
+    res = cv.analyze(series, base_smiles="C=C")
+    assert res["excluded_lengths"] == [1] and res["lengths"] == [2, 3]
+    assert res["exclusion_note"] and "비닐" in res["exclusion_note"]
+    # 남은 길이가 둘뿐이므로 외삽을 내지 않고 그 이유를 알린다
+    assert res["extrapolation_available"] is False and "외삽" in res["warning"]
+    # 비닐이 아니면 n=1 을 그대로 쓴다
+    keep = cv.analyze(series, base_smiles="COCCOCCOC")
+    assert keep["excluded_lengths"] == [] and keep["lengths"] == [1, 2, 3]
+
+
+def test_minimum_defined_length_flags_missing_bde():
+    from server.convergence import minimum_defined_length
+    pe = minimum_defined_length("C=C")
+    assert pe["bde_min_n"] == 2 and "n=2" in pe["note"]
+    paa = minimum_defined_length("C=CC(=O)O")
+    assert paa["bde_min_n"] == 1

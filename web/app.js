@@ -212,6 +212,7 @@ async function init() {
   wireResultsControls();
   wireBinderControls();
   wirePolymerCard();
+  wireChainControls();
   $("lookup-q").addEventListener("keydown", e => { if (e.key === "Enter") doLookup(); });
   refreshJobs();
   setInterval(refreshJobs, 2000);
@@ -2270,4 +2271,206 @@ function wirePolymerCard() {
       out.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`;
     }
   };
+}
+
+/* ================= 사슬 길이 수렴 (Step 1 · L3) ================= */
+
+let CHAIN_SERIES = null;   // 선택한 계열 id
+
+/** 물성값의 n 의존성 곡선 — 수렴하면 초록, 아니면 앰버. 점선은 외삽 극한값 */
+function svgConvergence(prop) {
+  const pts = prop.points || [];
+  if (pts.length < 2) return "";
+  const W = 300, H = 130, L = 46, R = 12, T = 12, B = 26;
+  const ns = pts.map(p => p.n), vs = pts.map(p => p.value);
+  const limit = prop.extrapolation?.limit;
+  const all = limit != null ? vs.concat([limit]) : vs;
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (hi - lo < 1e-9) { lo -= 0.5; hi += 0.5; }
+  const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
+  const nMax = Math.max(...ns), nMin = Math.min(...ns);
+  const x = n => L + (nMax === nMin ? 0.5 : (n - nMin) / (nMax - nMin)) * (W - L - R);
+  const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const col = prop.converged ? "var(--ok)" : "var(--pin)";
+
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:320px" role="img">`;
+  // 외삽 극한값 기준선
+  if (limit != null) {
+    sv += `<line x1="${L}" y1="${y(limit)}" x2="${W - R}" y2="${y(limit)}"
+      class="gridline" stroke-dasharray="4 3" />
+      <text x="${W - R}" y="${y(limit) - 3}" class="value-label" text-anchor="end"
+        >극한 ${fmt(limit)}</text>`;
+  }
+  sv += `<polyline points="${pts.map(p => `${x(p.n)},${y(p.value)}`).join(" ")}"
+    fill="none" stroke="${col}" stroke-width="2" />`;
+  for (const p of pts) {
+    sv += `<circle cx="${x(p.n)}" cy="${y(p.value)}" r="4" fill="${col}"
+        ><title>n=${p.n}: ${fmt(p.value)}</title></circle>
+      <text x="${x(p.n)}" y="${H - 8}" class="axis-label" text-anchor="middle">n=${p.n}</text>`;
+  }
+  sv += `<text x="2" y="${y(vs[0])}" class="value-label">${fmt(vs[0])}</text>
+    <text x="2" y="${y(vs[vs.length - 1])}" class="value-label">${fmt(vs[vs.length - 1])}</text></svg>`;
+  return sv;
+}
+
+function chainAnalysisHtml(data) {
+  const md = data.minimum_defined || {};
+  let h = `<h3 style="font-size:13px;color:var(--accent);margin:0 0 6px">
+      ${esc(data.base.name)} — 판정에 쓴 사슬 길이 n = ${data.lengths.join(" · ")}
+      ${(data.excluded_lengths || []).length
+        ? `<span class="muted small">(계산 ${data.all_lengths.join(" · ")})</span>` : ""}</h3>`;
+
+  h += `<p class="${data.n_converged === data.n_judged ? "verdict-ok" : "verdict-mid"}"
+      style="margin:0 0 4px"><b>판정 물성 ${data.n_judged}개 중
+      ${data.n_converged}개 수렴</b></p>`;
+  if (data.not_converged?.length) {
+    h += `<p class="muted small" style="margin:0 0 8px">미수렴: ${
+      data.not_converged.map(k => esc(axisMeta(k).label)).join(" · ")}</p>`;
+  }
+  if (data.exclusion_note) {
+    h += `<p class="verdict-mid small" style="margin:0 0 6px">
+      n=${(data.excluded_lengths || []).join(", ")} 제외 — ${esc(data.exclusion_note)}</p>`;
+  }
+  if (data.warning) {
+    h += `<p class="verdict-mid small" style="margin:0 0 6px">${esc(data.warning)}</p>`;
+  }
+  if (md.note) {
+    h += `<p class="muted small" style="margin:0 0 10px">${esc(md.note)}</p>`;
+  }
+
+  // 수렴한 것 → 미수렴 → 크기값 순으로 정렬해 중요한 것부터 보이게 한다
+  const rank = p => p.status === "not_converged" ? 0 : p.status === "converged" ? 1 : 2;
+  const props = [...data.properties].sort((a, b) => rank(a) - rank(b));
+
+  let cards = "";
+  for (const p of props) {
+    if (p.status === "insufficient") continue;
+    const meta = axisMeta(p.key);
+    const badge = p.status === "converged"
+      ? '<span class="badge verdict-ok" style="border:1px solid currentColor">수렴</span>'
+      : p.status === "not_converged"
+      ? '<span class="badge verdict-mid" style="border:1px solid currentColor">미수렴</span>'
+      : '<span class="badge muted" style="border:1px solid currentColor">크기값</span>';
+    cards += `<div><h3 style="font-size:12.5px;color:var(--accent);margin:0 0 3px">
+        ${esc(meta.label)}${meta.unit ? ` (${esc(meta.unit)})` : ""} ${badge}</h3>
+      ${svgConvergence(p)}
+      <p class="muted small" style="margin:2px 0 0">${esc(p.note || "")}</p></div>`;
+  }
+  h += `<div class="grid-2">${cards}</div>`;
+  h += `<ul class="log-list" style="margin-top:12px">
+    <li>수렴 판정은 «마지막 두 길이의 변화 &lt; 임계값» 기준입니다.</li>
+    <li>극한값은 값 = a + b/n 선형 외삽의 절편 — 말단기 효과가 1/n 으로 준다는 표준 가정입니다.</li>
+    <li>미수렴 물성은 후보 간 비교에 쓰지 마세요 — 사슬 길이 차이가 순위를 뒤집을 수 있습니다.</li>
+    <li>전자 에너지처럼 사슬에 비례하는 «크기값»은 수렴 대상이 아닙니다.</li>
+  </ul>`;
+  return h;
+}
+
+window.rbRenderChain = async function () {
+  const box = $("chn-series");
+  if (!box) return;
+  const acc = $("chn-accuracy");
+  if (acc && !acc.options.length && PRESETS) {
+    for (const k of Object.keys(PRESETS.accuracy)) acc.add(new Option(k, k));
+    acc.value = "빠름";
+  }
+  try {
+    const res = await fetch("/api/convergence/series");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "계열 목록을 불러오지 못했습니다.");
+    if (!data.series.length) {
+      box.className = "empty small";
+      box.textContent = "등록된 계열이 없습니다. 위에서 반복 단위 SMILES로 계열을 제출하세요.";
+      $("chn-body").innerHTML = "";
+      return;
+    }
+    box.className = "mol-grid";
+    box.innerHTML = data.series.map(g => `
+      <button class="mol-card ${CHAIN_SERIES === g.series_id ? "selected" : ""}"
+        data-chn="${esc(g.series_id)}">
+        <b>${esc(g.base_name)}</b>
+        <span class="small ${g.done === g.total ? "verdict-ok" : "muted"}">
+          ${g.done}/${g.total}건 완료 · n = ${g.jobs.map(x => x.n).join(", ")}</span>
+        <span class="mono small muted">${esc(g.series_id)}</span></button>`).join("");
+    box.querySelectorAll("[data-chn]").forEach(b => b.addEventListener("click", () => {
+      CHAIN_SERIES = b.dataset.chn;
+      window.rbRenderChain();
+    }));
+  } catch (e) {
+    box.className = "empty small";
+    box.textContent = e.message;
+    return;
+  }
+
+  const body = $("chn-body");
+  if (!CHAIN_SERIES) {
+    body.innerHTML = '<p class="muted small">계열을 선택하면 수렴 판정이 나타납니다.</p>';
+    return;
+  }
+  body.innerHTML = '<p class="muted small">판정 중…</p>';
+  try {
+    const res = await fetch(
+      `/api/convergence/analyze?series_id=${encodeURIComponent(CHAIN_SERIES)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "판정 실패");
+    body.innerHTML = chainAnalysisHtml(data);
+  } catch (e) {
+    body.innerHTML = `<p class="verdict-mid small">${esc(e.message)}</p>`;
+  }
+};
+
+function wireChainControls() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  const lengths = () => $("chn-lengths").value.split(",")
+    .map(s => parseInt(s.trim(), 10)).filter(n => n >= 1 && n <= 12);
+  const payload = () => ({
+    smiles: $("chn-smiles").value.trim(),
+    name: $("chn-name").value.trim() || null,
+    lengths: lengths(),
+    settings: {...PRESETS.defaults, accuracy: $("chn-accuracy").value,
+               purpose: "전자구조 + 산화/환원 전위", referenceElectrode: "Li/Li+"},
+  });
+
+  on("chn-preview", async () => {
+    const out = $("chn-preview-out");
+    if (!$("chn-smiles").value.trim()) { out.innerHTML = '<p class="small">SMILES를 입력하세요.</p>'; return; }
+    out.innerHTML = '<p class="muted small">확인 중…</p>';
+    try {
+      const res = await fetch("/api/convergence/preview", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload()),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || "미리보기 실패");
+      out.innerHTML = `<table class="kv-table" style="margin-top:8px">
+        <tr><th>n</th><th>올리고머 SMILES</th><th>원자 수</th><th></th></tr>` +
+        d.series.map(e => `<tr><th>${e.n}</th>
+          <td class="mono small">${esc(e.smiles || e.error || "—")}</td>
+          <td class="mono">${e.atom_count ?? "—"}</td>
+          <td class="${e.over_limit ? "verdict-no" : "muted"} small">${
+            e.over_limit ? `상한 ${d.max_atoms} 초과 — 제외됨` : ""}</td></tr>`).join("") +
+        `</table><p class="muted small" style="margin:6px 0 0">${
+          esc(d.minimum_defined.note || "")}</p>`;
+    } catch (e) { out.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
+  });
+
+  on("chn-submit", async () => {
+    const out = $("chn-submit-out");
+    if (!$("chn-smiles").value.trim()) { out.textContent = "SMILES를 입력하세요."; return; }
+    out.textContent = "제출 중…";
+    try {
+      const res = await fetch("/api/convergence/submit", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload()),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || "제출 실패");
+      CHAIN_SERIES = d.series_id;
+      out.innerHTML = `<span class="verdict-ok">${d.jobs.length}건 제출 완료</span>
+        — 계열 ${esc(d.series_id)}. 계산이 끝나면 아래에서 수렴 판정이 나타납니다.`;
+      window.rbRenderChain();
+    } catch (e) { out.innerHTML = `<span class="verdict-no">${esc(e.message)}</span>`; }
+  });
+
+  on("chn-refresh", () => window.rbRenderChain());
 }
