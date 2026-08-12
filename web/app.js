@@ -1695,22 +1695,29 @@ function eswSection(jobs) {
     const d = j.result.descriptors;
     const red = d.reduction_potential_gibbs_v ?? d.reduction_potential_v;
     const ox = d.oxidation_potential_gibbs_v ?? d.oxidation_potential_v;
-    const anodeOK = red < 0.1, anodeMid = red < 0.8;
+    // 흑연 판정은 «구동 범위 전체가 ESW 안에 들어오는가» — 한 점이 아니라 포함 관계
+    const GR_LO = 0.01, GR_HI = 0.25;
+    const anodeOK = red < GR_LO, anodeMid = red <= GR_HI;
     const ncmOK = ox > 4.3, lfpOK = ox > 3.45;
     rows += `<tr><td><b>${esc(j.material.name)}</b><br>
         <span class="mono small muted">${esc(j.id)}</span></td>
       <td>${fmt(red)} ~ ${fmt(ox)} V</td>
       <td class="${anodeOK ? "verdict-ok" : anodeMid ? "verdict-mid" : "verdict-no"}">${anodeOK ? "안정" : anodeMid ? "경계" : "환원 분해 우려"}</td>
       <td class="${lfpOK ? "verdict-ok" : "verdict-no"}">${lfpOK ? "안정" : "산화 우려"}</td>
-      <td class="${ncmOK ? "verdict-ok" : "verdict-no"}">${ncmOK ? "안정" : "산화 우려"}</td></tr>`;
+      <td class="${ncmOK ? "verdict-ok" : "verdict-no"}">${ncmOK ? "안정" : "산화 우려"}</td>
+      <td><button class="btn" type="button"
+        onclick="window.rbEswDiagnose('${esc(j.id)}','graphite')">왜?</button></td></tr>`;
   }
   return skipNote + svg + `
     <div class="scroll-x" style="margin-top:14px"><table class="kv-table" style="min-width:640px">
-      <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.1 V)</th>
-        <th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th></tr>
+      <tr><th>물질</th><th>ESW (환원~산화)</th><th>음극 Graphite (0.01~0.25 V)</th>
+        <th>양극 LFP (3.45 V)</th><th>양극 NCM811 (4.3 V)</th><th>근거</th></tr>
       ${rows}</table></div>
+    <div id="esw-diag" style="margin-top:12px">${ESW_DIAG?.html || ""}</div>
     <ul class="log-list" style="margin-top:10px">
-      <li>판정 기준: 환원 전위 &lt; 음극 전위 → 음극에서 환원 안정, 산화 전위 &gt; 양극 전위 → 양극에서 산화 안정 (열역학적 기준)</li>
+      <li>판정 기준은 <b>포함 관계</b>입니다 — 전극 «구동 범위 전체»가 물질의 ESW 안에 들어와야 안정합니다. 한쪽 끝만 보면 중간에서 분해되는 경우를 놓칩니다.</li>
+      <li>흑연은 단일 전위가 아니라 0.01~0.25 V 범위에서 작동합니다 (리튬화 단계 평탄부 0.20 · 0.11 · 0.08 V).</li>
+      <li>「왜?」 버튼을 누르면 판정을 <b>구조 → LUMO → EA → 환원 전위 → 판정</b> 으로 되짚어 보여줍니다.</li>
       <li>ΔG 기반 전위가 있으면 우선 사용, 없으면 단열/수직 전위 사용</li>
       <li>주의: 실제 전지에서는 SEI/CEI 피막의 동역학적 보호가 크게 작용합니다 — 예: EC는 환원 분해되지만 안정적 SEI를 형성해 사용됩니다. 이 판정은 스크리닝용 열역학 지표입니다.</li>
     </ul>`;
@@ -2644,3 +2651,200 @@ function wireMechControls() {
     } catch (e) { box.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
   });
 }
+
+/* ============ ESW 진단: 「왜 이 판정인가」를 구조까지 되짚어 보여준다 ============ */
+
+// 열어 둔 진단 패널 — 비교 화면이 2초마다 다시 그려져도 살아남아야 한다
+let ESW_DIAG = null;   // {jobId, electrode, html}
+
+/** 포함 관계 그림 — 전극 구동 «범위»가 물질 ESW 안에 들어오는지 한눈에 */
+function svgContainment(d) {
+  const red = d.reduction_potential_v, ox = d.oxidation_potential_v;
+  const c = d.containment, w = c.window;
+  const lo = Math.min(red, w.low, 0) - 0.6, hi = Math.max(ox, w.high) + 0.6;
+  const W = 780, H = 176, L = 96, R = 26;
+  const x = v => L + (v - lo) / (hi - lo) * (W - L - R);
+  const safe = !c.fails.length;
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="esw-chart" role="img"
+    aria-label="전극 구동 범위와 안정 창의 포함 관계">`;
+
+  // 눈금
+  const step = (hi - lo) > 8 ? 2 : (hi - lo) > 4 ? 1 : 0.5;
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    s += `<line x1="${x(v)}" y1="26" x2="${x(v)}" y2="${H - 40}" stroke="var(--grid)"/>
+      <text x="${x(v)}" y="${H - 24}" font-size="10.5" text-anchor="middle"
+        fill="var(--muted)">${(+v.toFixed(2))}</text>`;
+  }
+  s += `<text x="${(L + W) / 2}" y="${H - 6}" font-size="11" text-anchor="middle"
+    fill="var(--muted)">전위 (V vs Li/Li⁺) — 왼쪽일수록 환원되기 쉬움</text>`;
+
+  // 물질의 ESW 띠 (안정 구간)
+  s += `<text x="${L - 8}" y="62" font-size="11.5" text-anchor="end"
+      fill="var(--text-1)">이 물질의 ESW</text>
+    <rect x="${x(red)}" y="46" width="${Math.max(2, x(ox) - x(red))}" height="22" rx="5"
+      fill="var(--accent)" fill-opacity="0.16" stroke="var(--accent)"/>
+    <text x="${x(red) - 4}" y="61" font-size="10" text-anchor="end"
+      fill="var(--text-2)">${fmt(red)}</text>
+    <text x="${x(ox) + 4}" y="61" font-size="10" fill="var(--text-2)">${fmt(ox)}</text>`;
+
+  // 전극 구동 범위 띠
+  const ey = 96, ew = Math.max(3, x(w.high) - x(w.low));
+  s += `<text x="${L - 8}" y="${ey + 15}" font-size="11.5" text-anchor="end"
+      fill="var(--text-1)">${esc(w.label)} 구동</text>
+    <rect x="${x(w.low)}" y="${ey}" width="${ew}" height="22" rx="5"
+      fill="${safe ? "var(--ok)" : "var(--danger)"}" fill-opacity="0.22"
+      stroke="${safe ? "var(--ok)" : "var(--danger)"}"/>
+    <text x="${x(w.high) + 5}" y="${ey + 15}" font-size="10"
+      fill="var(--text-2)">${w.low}~${w.high} V</text>`;
+
+  // 벗어난 구간을 붉게 — 「어디가 왜 문제인가」가 이 부분이다
+  for (const f of c.fails) {
+    if (f.side === "환원") {
+      const x0 = x(w.low), x1 = x(Math.min(red, w.high));
+      s += `<rect x="${x0}" y="${ey - 3}" width="${Math.max(2, x1 - x0)}" height="28"
+          fill="var(--danger)" fill-opacity="0.30"/>
+        <line x1="${x0}" y1="${ey + 34}" x2="${x1}" y2="${ey + 34}"
+          stroke="var(--danger)" stroke-width="1.5"/>
+        <text x="${(x0 + x1) / 2}" y="${ey + 48}" font-size="10.5" text-anchor="middle"
+          fill="var(--danger)">환원 구간 ${f.gap_v} V</text>`;
+    } else {
+      const x0 = x(Math.max(ox, w.low)), x1 = x(w.high);
+      s += `<rect x="${x0}" y="${ey - 3}" width="${Math.max(2, x1 - x0)}" height="28"
+          fill="var(--danger)" fill-opacity="0.30"/>
+        <text x="${(x0 + x1) / 2}" y="${ey + 48}" font-size="10.5" text-anchor="middle"
+          fill="var(--danger)">산화 구간 ${f.gap_v} V</text>`;
+    }
+  }
+  if (safe) {
+    s += `<text x="${x((w.low + w.high) / 2)}" y="${ey + 44}" font-size="10.5"
+      text-anchor="middle" fill="var(--ok)">ESW 안에 완전히 들어옴</text>`;
+  }
+  return s + "</svg>";
+}
+
+/** LUMO 사다리 — 「LUMO가 낮다」가 무엇에 비해 낮은지 보여준다 */
+function svgLumoLadder(d) {
+  if (d.lumo_ev == null) return "";
+  const refs = (d.lumo_reference || []).map(r => ({...r}));
+  const all = [...refs.map(r => r.lumo_ev), d.lumo_ev];
+  const lo = Math.min(...all) - 0.5, hi = Math.max(...all) + 0.5;
+  const W = 780, H = 150, L = 190, R = 20;
+  const y = v => H - 40 - (v - lo) / (hi - lo) * (H - 74);
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="esw-chart" role="img"
+    aria-label="LUMO 준위 비교">
+    <text x="8" y="16" font-size="11" fill="var(--muted)">LUMO (eV) — 낮을수록 전자를 받기 쉬움</text>`;
+  for (const r of refs) {
+    s += `<line x1="${L}" y1="${y(r.lumo_ev)}" x2="${W - R}" y2="${y(r.lumo_ev)}"
+        stroke="var(--grid)" stroke-dasharray="4 3"/>
+      <text x="${L - 8}" y="${y(r.lumo_ev) + 4}" font-size="10.5" text-anchor="end"
+        fill="var(--muted)">${esc(r.label)}</text>
+      <text x="${W - R}" y="${y(r.lumo_ev) - 3}" font-size="9.5" text-anchor="end"
+        fill="var(--muted)">${r.lumo_ev}</text>`;
+  }
+  s += `<line x1="${L}" y1="${y(d.lumo_ev)}" x2="${W - R}" y2="${y(d.lumo_ev)}"
+      stroke="var(--accent)" stroke-width="2.5"/>
+    <text x="${L - 8}" y="${y(d.lumo_ev) + 4}" font-size="11.5" text-anchor="end"
+      fill="var(--accent)" font-weight="600">${esc(d.name || "이 물질")}</text>
+    <text x="${W - R}" y="${y(d.lumo_ev) - 4}" font-size="10.5" text-anchor="end"
+      fill="var(--accent)" font-weight="600">${fmt(d.lumo_ev)} eV</text>`;
+  return s + "</svg>";
+}
+
+/** 인과 사슬 — 구조에서 판정까지 왜 그렇게 되는지 */
+function chainHtml(d) {
+  const bad = d.containment?.verdict !== "안정";
+  return `<div class="scroll-x"><table class="kv-table" style="min-width:660px">
+    <tr><th style="width:34px"></th><th style="width:140px">단계</th>
+      <th style="width:150px">값</th><th style="width:58px">근거</th><th>설명</th></tr>` +
+    d.chain.map((c, i) => `<tr>
+      <td class="mono muted small">${i < d.chain.length - 1 ? c.step + " ↓" : c.step}</td>
+      <th>${esc(c.label)}</th>
+      <td class="mono ${c.label === "판정" ? (bad ? "verdict-no" : "verdict-ok") : ""}">${
+        c.value == null ? "—" : esc(String(typeof c.value === "number" ? fmt(c.value) : c.value))
+      }<span class="muted small"> ${esc(c.unit || "")}</span></td>
+      <td><span class="badge ${c.measured ? "verdict-ok" : "muted"}"
+        style="border:1px solid currentColor">${c.measured ? "계산" : "해석"}</span></td>
+      <td class="muted small">${esc(c.note || "")}</td></tr>`).join("") +
+    `</table></div>`;
+}
+
+function eswDiagnoseHtml(d) {
+  if (!d.available) {
+    return `<p class="verdict-mid small">${esc(d.note || "진단할 수 없습니다.")}</p>`;
+  }
+  const c = d.containment, bad = c.verdict !== "안정";
+  let h = `<h3 style="font-size:13px;color:var(--accent);margin:12px 0 4px">
+      왜 «${esc(c.verdict)}» 인가 — ${esc(d.name)} · ${esc(d.electrode.label)}</h3>
+    <p class="${bad ? "verdict-no" : "verdict-ok"} small" style="margin:0 0 8px">
+      ${esc(c.summary)}</p>` + svgContainment(d);
+
+  h += `<h4 style="font-size:12px;margin:14px 0 4px">원인 — 구조에서 판정까지</h4>`
+     + chainHtml(d);
+
+  if (d.groups?.length) {
+    h += `<h4 style="font-size:12px;margin:14px 0 4px">검출된 환원 취약 작용기</h4>
+      <ul class="log-list">` + d.groups.map(g =>
+        `<li><b>${esc(g.name)}</b>${g.count > 1 ? ` ×${g.count}` : ""} — ${esc(g.why)}</li>`
+      ).join("") + `</ul>`;
+  }
+
+  const ladder = svgLumoLadder(d);
+  if (ladder) {
+    h += `<h4 style="font-size:12px;margin:14px 0 4px">LUMO 준위 비교</h4>` + ladder
+       + `<p class="muted small" style="margin:2px 0 0">참고선은 대표 구조군의 대략적인
+          위치입니다 — 같은 조건에서 계산한 값이 아니라 «어느 쪽인지»를 보는 눈금입니다.</p>`;
+  }
+
+  if (d.all_electrodes?.length) {
+    h += `<h4 style="font-size:12px;margin:14px 0 4px">다른 전극에서는</h4>
+      <div class="scroll-x"><table class="kv-table" style="min-width:560px">
+      <tr><th style="width:170px">전극</th><th style="width:60px">구분</th>
+        <th style="width:90px">판정</th><th>근거</th></tr>` +
+      d.all_electrodes.map(e => `<tr><th>${esc(e.label)}</th>
+        <td class="muted small">${e.side === "anode" ? "음극" : "양극"}</td>
+        <td class="${e.verdict === "안정" ? "verdict-ok"
+                   : e.verdict === "경계" ? "verdict-mid" : "verdict-no"}">${esc(e.verdict)}</td>
+        <td class="muted small">${esc(e.summary)}</td></tr>`).join("") + `</table></div>`;
+  }
+
+  if (d.remedies?.length) {
+    h += `<h4 style="font-size:12px;margin:14px 0 4px">판정을 바꾸려면</h4>
+      <ul class="log-list">` + d.remedies.map(r => `<li>${esc(r)}</li>`).join("") + `</ul>`;
+  }
+  return h;
+}
+
+window.rbEswDiagnose = async function (jobId, electrode) {
+  // 비교 화면은 2초마다 다시 그려진다 — 패널 내용을 상태로 들고 있지 않으면
+  // 진단 결과가 곧바로 지워진다. eswSection() 이 이 html 을 다시 넣는다.
+  const paint = html => {
+    ESW_DIAG = {jobId, electrode: electrode || "graphite", html};
+    const box = document.getElementById("esw-diag");
+    if (box) box.innerHTML = html;
+  };
+  paint('<p class="muted small">진단 중…</p>');
+  try {
+    const res = await fetch("/api/esw/diagnose", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({job_id: jobId, electrode: electrode || "graphite"}),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || "진단 실패");
+    paint(`<div class="toolbar" style="margin-bottom:6px">
+        <span class="small muted">전극</span>
+        ${d.electrodes.map(e => `<button class="btn ${e.key === d.electrode.key ? "primary" : ""}"
+          type="button" onclick="window.rbEswDiagnose('${esc(jobId)}','${e.key}')"
+          >${esc(e.label)}</button>`).join("")}
+        <button class="btn ghost" type="button"
+          onclick="window.rbEswDiagClose()">닫기</button>
+      </div>` + eswDiagnoseHtml(d));
+  } catch (e) {
+    paint(`<p class="verdict-no small">${esc(e.message)}</p>`);
+  }
+};
+
+window.rbEswDiagClose = function () {
+  ESW_DIAG = null;
+  const box = document.getElementById("esw-diag");
+  if (box) box.innerHTML = "";
+};

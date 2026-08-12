@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
-from . import convergence, mechanical, polymer
+from . import convergence, esw, mechanical, polymer
 from . import lookup as lookup_mod
 from . import presets, store, worker
 
@@ -297,6 +297,43 @@ class PolymerRequest(BaseModel):
 def polymer_card(req: PolymerRequest, _: bool = Depends(require_login)):
     """Step 1 — 구조만으로 즉시 산출되는 고분자 물성 카드 (DFT 불필요)."""
     return polymer.property_card({"name": req.name, "smiles": req.smiles})
+
+
+class EswDiagnoseRequest(BaseModel):
+    job_id: Optional[str] = None
+    smiles: Optional[str] = Field(default=None, max_length=300)
+    name: Optional[str] = None
+    descriptors: Optional[dict] = None
+    electrode: str = "graphite"
+
+
+@app.post("/api/esw/diagnose")
+def esw_diagnose(req: EswDiagnoseRequest, _: bool = Depends(require_login)):
+    """ESW 판정을 구조까지 되짚는다 — 「왜 경계인가」."""
+    material, desc, e_abs = None, req.descriptors or {}, 1.44
+    if req.job_id:
+        job = store.get_job(req.job_id)
+        if job is None or job.get("status") != "PUBLISHED" or not job.get("result"):
+            raise HTTPException(404, "완료된 작업을 찾을 수 없습니다.")
+        material = job["material"]
+        desc = job["result"].get("descriptors") or {}
+        ref = (job.get("settings") or {}).get("referenceElectrode")
+        e_abs = presets.ABSOLUTE_POTENTIALS.get(ref, 1.44)
+    elif req.smiles:
+        material = {"name": req.name or req.smiles, "smiles": req.smiles}
+    else:
+        raise HTTPException(400, "job_id 또는 smiles 중 하나가 필요합니다.")
+    try:
+        return esw.diagnose(material, desc, electrode=req.electrode, e_abs=e_abs)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/esw/electrodes")
+def esw_electrodes(_: bool = Depends(require_login)):
+    """전극 구동 «범위» — 단일 전위값이 아니라 범위로 판정한다."""
+    return {"electrodes": esw.ELECTRODE_WINDOWS,
+            "lumo_reference": esw.LUMO_REFERENCE}
 
 
 class MechanicalRequest(BaseModel):

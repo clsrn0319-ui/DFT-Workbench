@@ -602,3 +602,59 @@ def test_rubbery_modulus_scales_with_entanglement():
     assert stiff["e_gpa"] < 0.1
     with pytest.raises(ValueError):
         rubbery_modulus(0.855, 453.15, 0)
+
+
+def test_esw_containment_uses_whole_operating_range():
+    """판정은 포함 관계다 — 전극 구동 «범위 전체»가 ESW 안에 들어와야 안정하다.
+
+    한 점(0.1 V)만 보면 구동 범위 중간에서 분해되는 경우를 놓친다.
+    """
+    from server.esw import ELECTRODE_BY_KEY, containment
+    gr = ELECTRODE_BY_KEY["graphite"]
+    assert gr["low"] == 0.01 and gr["high"] == 0.25
+    # 환원 전위가 구동 범위 하단보다 위 → 그 구간에서 환원된다
+    bad = containment(0.60, 5.5, gr)
+    assert bad["verdict"] != "안정"
+    assert any(f["side"] == "환원" for f in bad["fails"])
+    assert bad["reduce_gap_v"] == pytest.approx(0.59, abs=1e-6)
+    # 0.1 V 한 점만 보면 통과하지만 범위 하단(0.01 V)에서는 환원되는 경우
+    edge = containment(0.05, 5.5, gr)
+    assert edge["verdict"] != "안정", "한 점 기준이었다면 놓쳤을 사례"
+    # 구동 범위 전체가 안쪽 → 안정
+    ok = containment(-1.97, 6.03, gr)
+    assert ok["verdict"] == "안정" and not ok["fails"]
+
+
+def test_esw_detects_conjugated_vinyl_as_reduction_risk():
+    """스타이렌의 «방향족과 공액된 비닐»이 환원 취약 작용기로 잡혀야 한다."""
+    from server.esw import reducible_groups
+    names = [g["name"] for g in reducible_groups("C=Cc1ccccc1")]
+    assert "방향족과 공액된 비닐" in names
+    assert names[0] == "방향족과 공액된 비닐", "가장 강한 원인이 먼저 와야 한다"
+    # 포화 사슬에는 아무 것도 없어야 한다 — 중합되면 C=C 가 사라진다
+    assert reducible_groups("CCCC") == []
+    assert "나이트릴 (C≡N)" in [g["name"] for g in reducible_groups("C=CC#N")]
+
+
+def test_esw_causal_chain_is_labelled_measured_or_interpreted():
+    """사슬의 각 단계가 계산값인지 해석인지 구분되어야 한다."""
+    from server.esw import diagnose
+    desc = {"lumo_ev": -0.30, "ea_adiabatic_ev": 0.90,
+            "reduction_potential_v": -0.54, "oxidation_potential_v": 5.6}
+    d = diagnose({"name": "Styrene", "smiles": "C=Cc1ccccc1"}, desc)
+    assert d["available"] is True
+    chain = {c["label"]: c for c in d["chain"]}
+    assert chain["LUMO"]["measured"] is True
+    assert chain["환원 전위"]["measured"] is True
+    assert chain["구조"]["measured"] is False, "작용기 귀속은 해석이지 계산이 아니다"
+    assert chain["판정"]["measured"] is False
+    # E_red = EA − 1.44 항등식이 사슬에 드러나야 한다
+    assert "1.44" in chain["환원 전위"]["note"]
+    assert len(d["all_electrodes"]) == len(d["electrodes"])
+
+
+def test_esw_diagnose_reports_missing_potentials():
+    """전위가 없으면 조용히 빠지지 않고 이유와 해결책을 말한다."""
+    from server.esw import diagnose
+    d = diagnose({"name": "X", "smiles": "C=Cc1ccccc1"}, {"lumo_ev": -0.3})
+    assert d["available"] is False and "산화/환원 전위" in d["note"]
