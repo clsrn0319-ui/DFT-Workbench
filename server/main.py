@@ -196,8 +196,15 @@ def convergence_preview(req: ConvergenceRequest, _: bool = Depends(require_login
         if entry.get("smiles"):
             entry["atom_count"] = geometry.atom_count(entry["smiles"])
             entry["over_limit"] = entry["atom_count"] > MAX_ATOMS
+    # 비닐 단량체면 n=1이 판정에서 빠지므로, 제출 «전»에 알려 길이를 더 넣게 한다
+    seg = convergence.monomer_is_chain_segment(req.smiles)
+    judged = [n for n in lengths if not (n == 1 and not seg["same_species"])]
     return {"series": series,
             "minimum_defined": convergence.minimum_defined_length(req.smiles),
+            "monomer_excluded": not seg["same_species"],
+            "exclusion_note": seg["note"],
+            "judged_lengths": judged,
+            "extrapolation_available": len(judged) >= 3,
             "max_atoms": MAX_ATOMS}
 
 

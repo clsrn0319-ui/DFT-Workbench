@@ -102,6 +102,7 @@ def analyze_property(key: str, points: list[tuple[int, float]]) -> dict:
     thr = threshold_for(key, values)
     last = abs(deltas[-1]["delta"])
     converged = last < thr
+    extrap = extrapolate(pts)
 
     result.update({
         "deltas": deltas,
@@ -111,15 +112,17 @@ def analyze_property(key: str, points: list[tuple[int, float]]) -> dict:
         "status": "converged" if converged else "not_converged",
         "longest_n": pts[-1][0],
         "value_at_longest": round(values[-1], 4),
-        "extrapolation": extrapolate(pts),
+        "extrapolation": extrap,
     })
     if converged:
         result["note"] = (f"n={pts[-2][0]}→{pts[-1][0]} 변화 {last:.4g} 가 "
                           f"임계값 {thr:.4g} 미만 — 대표값으로 쓸 수 있습니다.")
     else:
+        # 외삽을 내지 못한 경우(점 2개)에 «외삽값을 참고하라»고 하면 안 된다
+        tail = ("더 긴 사슬을 계산하거나 외삽값을 참고하세요."
+                if extrap else "더 긴 사슬을 계산하세요.")
         result["note"] = (f"n={pts[-2][0]}→{pts[-1][0]} 변화 {last:.4g} 가 "
-                          f"임계값 {thr:.4g} 이상 — 아직 수렴하지 않았습니다. "
-                          "더 긴 사슬을 계산하거나 외삽값을 참고하세요.")
+                          f"임계값 {thr:.4g} 이상 — 아직 수렴하지 않았습니다. " + tail)
     return result
 
 

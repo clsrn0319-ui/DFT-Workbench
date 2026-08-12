@@ -2450,7 +2450,12 @@ function wireChainControls() {
           <td class="${e.over_limit ? "verdict-no" : "muted"} small">${
             e.over_limit ? `상한 ${d.max_atoms} 초과 — 제외됨` : ""}</td></tr>`).join("") +
         `</table><p class="muted small" style="margin:6px 0 0">${
-          esc(d.minimum_defined.note || "")}</p>`;
+          esc(d.minimum_defined.note || "")}</p>` +
+        (d.exclusion_note ? `<p class="verdict-mid small" style="margin:4px 0 0">
+          n=1 제외 예정 — ${esc(d.exclusion_note)}</p>` : "") +
+        (d.extrapolation_available ? "" : `<p class="verdict-mid small" style="margin:4px 0 0">
+          판정에 쓸 길이가 ${d.judged_lengths.length}개(n = ${d.judged_lengths.join(", ")})뿐이라
+          무한 사슬 외삽은 나오지 않습니다 — 길이를 3개 이상 남기세요.</p>`);
     } catch (e) { out.innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`; }
   });
 
