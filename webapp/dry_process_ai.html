@@ -156,7 +156,7 @@ svg .axis{stroke:var(--line)}
     <span class="chip"><span class="dot" id="modelDot"></span>모델 <b id="stModel">미학습</b></span>
     <span class="chip">적재 Lot <b id="stLots">0</b></span>
     <span class="chip">실측 <b id="stMeasured">0</b> / 생성 <b id="stGenerated">0</b></span>
-    <span class="chip">비용량 <b id="stCap">210</b> mAh/g</span>
+    <span class="chip">활물질 용량 <b id="stCap">210</b> mAh/g</span>
   </div>
 </header>
 
@@ -177,7 +177,7 @@ svg .axis{stroke:var(--line)}
     <h2>조성 · 목표 사양 <span class="fid">FF-01 · FF-02</span></h2>
     <div class="row">
       <div><label class="f">활물질</label><select id="f_mat_a"></select></div>
-      <div><label class="f">비용량 (mAh/g)</label><input type="number" id="f_cap_spec" value="210" step="1" min="1" title="선택 활물질의 비용량 — 면적당 용량 계산에 사용"></div>
+      <div><label class="f">활물질 용량 (mAh/g)</label><input type="number" id="f_cap_spec" value="210" step="1" min="1" title="선택 활물질의 용량(비용량) — 면적당 용량 계산에 사용. 수정 가능"></div>
     </div>
     <div class="row">
       <div><label class="f">도전재</label><select id="f_mat_c"></select></div>
@@ -425,7 +425,7 @@ svg .axis{stroke:var(--line)}
         <div><label class="f"><span id="lbl_e_b">PTFE</span> (wt%)</label><input type="number" id="e_b" value="2" step="0.1"></div>
         <div><label class="f"><span id="lbl_e_c">Super C</span> (wt%)</label><input type="number" id="e_c" value="2" step="0.1"></div>
       </div>
-      <div><label class="f">비용량 (mAh/g)</label><input type="number" id="e_cap_spec" value="210" step="1" min="1" title="선택 활물질의 비용량"></div>
+      <div><label class="f">활물질 용량 (mAh/g)</label><input type="number" id="e_cap_spec" value="210" step="1" min="1" title="선택 활물질의 용량(비용량)"></div>
       <div class="row">
         <div><label class="f">최종 두께 (μm)</label><input type="number" id="e_t" value="80"></div>
         <div><label class="f">합제밀도 (g/cc)</label><input type="number" id="e_d" value="3.1" step="0.01"></div>
@@ -483,8 +483,7 @@ let SPECIFIC_CAPACITY = 210.0;              // 현재 선택 활물질의 비용
 // ---------- 소재 사전 (오프라인 프리셋 — R7) ----------
 // 활물질은 비용량(mAh/g) 기본값 동반 — 면적당 용량 계산에 사용. 값은 수정 가능.
 const MATERIALS = {
-  active: [{n:"NCM811",cap:210},{n:"NCM622",cap:185},{n:"NCM523",cap:175},{n:"NCM111",cap:155},
-           {n:"NCA",cap:200},{n:"LFP",cap:160},{n:"LCO",cap:150},{n:"LMFP",cap:150}],
+  active: [{n:"NCM811",cap:210},{n:"Natural Graphite",cap:360},{n:"Artificial Graphite",cap:350},{n:"Gr/Si",cap:450}],
   conductive: ["Super C","Super P","Ketjenblack","CNT","그래핀"],
   binder: ["PTFE","PVDF","CMC/SBR"],
 };
