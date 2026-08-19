@@ -475,7 +475,9 @@ svg .axis{stroke:var(--line)}
 </div>
 <div class="card" style="margin-top:14px">
   <h2 class="collapseHead"><span>Lot 목록 <span id="lotCount" class="fid"></span></span>
-    <span class="headBtns"><label class="f" style="margin:0 2px 0 0">출처 필터</label>
+    <span class="headBtns"><label class="f" style="margin:0 2px 0 0">활물질</label>
+      <select id="lotMatFilter" style="width:auto" title="활물질별로 걸러 보기"><option value="all">전체</option></select>
+      <label class="f" style="margin:0 2px 0 6px">출처</label>
       <select id="lotFilter" style="width:auto" title="출처별로 걸러 보기">
         <option value="all">전체</option>
         <option value="measured">실측만</option>
@@ -1415,8 +1417,20 @@ function refreshStatus(){
 
 function renderLotTable(){
   const tb=$("lotTable").querySelector("tbody");
+  // 활물질 필터 옵션을 데이터에 존재하는 활물질로 동적 갱신 (선택 유지)
+  const mf=$("lotMatFilter");
+  if(mf){
+    const actives=[...new Set(DB.lots.map(l=>lotMat(l).active))].sort();
+    const cur=mf.value;
+    mf.innerHTML=`<option value="all">전체</option>`+actives.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join("");
+    mf.value=actives.includes(cur)?cur:"all";
+  }
   const f=$("lotFilter")?$("lotFilter").value:"all";
-  const rows=DB.lots.filter(l=>f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true);
+  const mfv=mf?mf.value:"all";
+  const rows=DB.lots.filter(l=>{
+    const srcOk=f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true;
+    return srcOk&&(mfv==="all"||lotMat(l).active===mfv);
+  });
   if($("lotCount"))$("lotCount").textContent=`표시 ${rows.length}건`+(rows.length>80?" · 최근 80":"");
   tb.innerHTML=rows.slice(-80).reverse().map(l=>{
     const l2=l.stages?.L2;
@@ -1761,6 +1775,7 @@ document.querySelectorAll(".collapseBtn").forEach(b=>b.addEventListener("click",
   b.textContent=open?"＋":"－";b.setAttribute("aria-expanded",open?"false":"true");
 }));
 $("lotFilter").addEventListener("change",renderLotTable);   // Lot 목록 출처 필터
+$("lotMatFilter").addEventListener("change",renderLotTable);   // Lot 목록 활물질 필터
 const bwEmpty=`<div class="empty">목표를 설정하고 탐색을 실행하세요.</div>`;
 // 순방향 입력 초기화 — 조성·목표값을 빈칸으로 비운다
 $("btnResetFw").addEventListener("click",()=>{
@@ -2015,12 +2030,17 @@ $("btnLoadReal").addEventListener("click",()=>{const ver=$("restoreVer").value;r
 $("btnExport").addEventListener("click",()=>download("dry_process_lots.json",JSON.stringify(DB.lots,null,2)));
 $("btnExportDocx").addEventListener("click",()=>{
   const f=$("lotFilter")?$("lotFilter").value:"all";
-  const lots=DB.lots.filter(l=>f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true);
+  const mfv=$("lotMatFilter")?$("lotMatFilter").value:"all";
+  const lots=DB.lots.filter(l=>{
+    const srcOk=f==="measured"?l.source==="measured":f==="generated"?l.source!=="measured":true;
+    return srcOk&&(mfv==="all"||lotMat(l).active===mfv);
+  });
   if(!lots.length){alert("내보낼 Lot이 없습니다.");return;}
-  const label={all:"전체",measured:"실측만",generated:"가상 생성만"}[f]||"전체";
+  const srcLabel={all:"전체",measured:"실측만",generated:"가상 생성만"}[f]||"전체";
+  const label=`${mfv==="all"?"전체 활물질":mfv} · ${srcLabel}`;
   const d=new Date(),pad=n=>String(n).padStart(2,"0");
   const fs=`${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-  downloadBlob(`lots_${f}_${fs}.docx`,buildLotsDocx(lots,label));
+  downloadBlob(`lots_${mfv==="all"?"all":mfv.replace(/[^A-Za-z0-9]+/g,"")}_${f}_${fs}.docx`,buildLotsDocx(lots,label));
 });
 $("btnClear").addEventListener("click",()=>{if(confirm("모든 Lot·모델·이력을 삭제할까요? (localStorage 초기화)")){DB={lots:[],versions:[],evals:[]};MODEL=null;localStorage.removeItem("dry_process_db");localStorage.removeItem("dry_process_model");refreshStatus();}});
 $("btnOutlier").addEventListener("click",()=>{
