@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer
 from . import lookup as lookup_mod
-from . import presets, screening, store, worker
+from . import presets, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
 MAX_ATOMS = int(os.environ.get("RHOBENCH_MAX_ATOMS", "60"))
@@ -93,12 +93,21 @@ class CustomMaterial(BaseModel):
     name: Optional[str] = None
 
 
+class CustomGeometry(BaseModel):
+    """업로드된 3D 구조 — [원소, x, y, z] 목록 (Å). rescan이면 좌표를 버리고
+    conformer 탐색부터 다시 한다."""
+    atoms: list[list] = Field(min_length=1, max_length=500)
+    source: str = Field("upload", max_length=20)
+    rescan: bool = False
+
+
 class JobRequest(BaseModel):
     compareFunctionals: list[str] = []  # 지정 시 범함수마다 작업을 만들어 비교
     materialIds: list[str] = []
     customMaterials: list[CustomMaterial] = []  # 물질 보관함 등 외부 등록 소재
     customSmiles: Optional[str] = None
     customName: Optional[str] = None
+    customGeometry: Optional[CustomGeometry] = None  # customSmiles의 업로드 3D 좌표
     settings: JobSettings = JobSettings()
 
 
@@ -408,6 +417,30 @@ def binder_pfas(req: PfasCheckRequest, _: bool = Depends(require_login)):
     return binder.pfas_check(req.smiles)
 
 
+class StructureParseRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=5_000_000)
+    filename: str = Field("", max_length=300)
+    charge: int = Field(0, ge=-4, le=4)   # XYZ 결합 추정용 (SDF/MOL은 무관)
+
+
+@app.post("/api/structures/parse")
+def structures_parse(req: StructureParseRequest, _: bool = Depends(require_login)):
+    """3D 구조 파일(SDF/MOL·XYZ) 텍스트를 후보 목록으로 해석한다.
+
+    단건 계산·배치 스크리닝 공용. 좌표는 초기 구조로 쓰이며(conformer 탐색
+    생략), «구조 재탐색» 옵션으로 기존 경로로 되돌릴 수 있다.
+    """
+    parsed = structfile.parse_structures(req.content, req.filename, req.charge)
+    for m in parsed["molecules"]:
+        if m["ok"] and m["n_atoms"] and m["n_atoms"] > MAX_ATOMS:
+            m["ok"] = False
+            m["error"] = f"원자 수 {m['n_atoms']}개 — 상한 {MAX_ATOMS}개 초과"
+    parsed["n_ok"] = sum(1 for m in parsed["molecules"] if m["ok"])
+    parsed["n_error"] = sum(1 for m in parsed["molecules"] if not m["ok"])
+    parsed["max_atoms"] = MAX_ATOMS
+    return parsed
+
+
 class ScreeningParseRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2_000_000)
     structure: str = "모노머"
@@ -416,6 +449,7 @@ class ScreeningParseRequest(BaseModel):
 class ScreeningCandidate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     smiles: str = Field(min_length=1, max_length=300)
+    geometry: Optional[CustomGeometry] = None   # 업로드 3D 구조 (선택)
 
 
 class ScreeningStage(BaseModel):
@@ -429,6 +463,7 @@ class ScreeningCampaignRequest(BaseModel):
     electrodes: list[str] = Field(min_length=1, max_length=5)
     marginV: float = Field(0.3, ge=0.0, le=2.0)
     stages: list[ScreeningStage] = Field(min_length=1, max_length=3)
+    rescanGeometry: bool = False   # 업로드 3D 좌표를 버리고 conformer 탐색부터
     settings: JobSettings = JobSettings()
 
 
@@ -483,15 +518,22 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
         raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
 
     # 후보를 서버에서 다시 검증한다 — 파싱 화면을 거치지 않은 API 호출 대비
+    structure = settings.get("structure", "모노머")
     validated = []
     for c in req.candidates:
         row = screening.parse_candidates(
-            f"{c.name},{c.smiles}", structure=settings.get("structure", "모노머"),
+            f"{c.name},{c.smiles}", structure=structure,
             max_atoms=MAX_ATOMS)["rows"]
         if not row or not row[0]["ok"]:
             err = row[0]["error"] if row else "해석 실패"
             raise HTTPException(400, f"{c.name}: {err}")
-        validated.append(row[0])
+        v = row[0]
+        # 업로드 3D 좌표 — 모노머 계산에서만 초기 구조로 사용한다.
+        # 올리고머 전개는 SMILES 를 새로 만들므로 좌표를 이어받을 수 없다.
+        if c.geometry is not None and structure == "모노머":
+            v["geometry"] = {**c.geometry.model_dump(),
+                             "rescan": c.geometry.rescan or req.rescanGeometry}
+        validated.append(v)
 
     camp = screening.create_campaign(
         name=req.name, candidates=validated, electrodes=req.electrodes,
@@ -650,8 +692,18 @@ def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
                         "smiles": resolve_custom(cm.smiles, name)})
     if req.customSmiles:
         name = req.customName or req.customSmiles
-        targets.append({"id": None, "name": name, "abbr": "사용자",
-                        "smiles": resolve_custom(req.customSmiles, name)})
+        target = {"id": None, "name": name, "abbr": "사용자",
+                  "smiles": resolve_custom(req.customSmiles, name)}
+        if req.customGeometry is not None:
+            if n_units > 1 and not req.customGeometry.rescan:
+                raise HTTPException(
+                    400, "2량체·3량체 전개 시에는 업로드 3D 좌표를 쓸 수 없습니다 — "
+                         "구조를 «모노머»로 두거나 «구조 재탐색»을 켜세요.")
+            for a in req.customGeometry.atoms:
+                if len(a) != 4 or not isinstance(a[0], str):
+                    raise HTTPException(400, "3D 좌표 형식 오류 — [원소, x, y, z] 목록이어야 합니다.")
+            target["geometry"] = req.customGeometry.model_dump()
+        targets.append(target)
     if not targets:
         raise HTTPException(400, "계산할 소재를 선택하거나 SMILES를 입력하세요.")
 

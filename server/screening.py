@@ -233,6 +233,7 @@ def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
                  "canonical": c.get("canonical") or c["smiles"],
                  "calcSmiles": c.get("calc_smiles") or c["smiles"],
                  "atoms": c.get("atoms"),
+                 "geometry": c.get("geometry"),   # 업로드 3D 구조 (선택)
                  "alive": True, "failed": False, "cutStage": None,
                  "error": None, "retries": {}, "jobs": {}, "verdict": None}
                 for i, c in enumerate(candidates)],
@@ -396,7 +397,9 @@ def _advance(camp: dict):
     # 제출 — 배치 전용 동시 실행 한도 안에서, 캐시가 있으면 계산 없이 연결
     slots = BATCH_PARALLEL - _batch_active_count()
     for c in pending:
-        cached = _find_cached(c["canonical"], _stage_settings(camp, stage_idx))
+        # 업로드 3D 구조가 있는 후보는 캐시를 쓰지 않는다 — 좌표가 다르면 다른 계산
+        cached = None if c.get("geometry") else \
+            _find_cached(c["canonical"], _stage_settings(camp, stage_idx))
         if cached is not None:
             c["jobs"][stage_key] = cached["id"]
             _log(camp, f"{c['name']}: 동일 조건 기존 결과 재사용 ({cached['id']})")
@@ -406,6 +409,8 @@ def _advance(camp: dict):
         settings = _stage_settings(camp, stage_idx)
         material = {"id": None, "name": c["name"], "abbr": "배치",
                     "smiles": c["calcSmiles"]}
+        if c.get("geometry"):
+            material["geometry"] = c["geometry"]
         job = store.create_job(material, settings)
         store.update_job(job["id"], {"campaign": {
             "id": camp["id"], "name": camp["name"], "stage": stage_idx,

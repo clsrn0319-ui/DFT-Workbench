@@ -285,6 +285,8 @@ async function submit() {
     customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name})),
     customSmiles: $("custom-smiles").value.trim() || null,
     customName: $("custom-name").value.trim() || null,
+    customGeometry: (window.CALC_GEOM && $("custom-smiles").value.trim())
+      ? {...window.CALC_GEOM, rescan: !!$("calc-3d-rescan")?.checked} : null,
     settings: {
       envType: env,
       explicitMolecules: collectExplicit(),
@@ -3061,27 +3063,7 @@ async function scrParse() {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({text, structure: $("scr-structure").value}),
     });
-    const {rows, n_ok, n_error, warning} = SCR_PARSED;
-    $("scr-parse-count").textContent = `유효 ${n_ok}개 · 제외 ${n_error}개`;
-    const bad = rows.filter(r => !r.ok);
-    $("scr-parse-out").innerHTML = `
-      ${warning ? `<p class="verdict-no small">${esc(warning)}</p>` : ""}
-      ${bad.length ? `<details class="small" style="margin-top:6px" open>
-        <summary>제외된 행 ${bad.length}개 — 사유</summary>
-        <div class="scroll-x"><table class="table" style="min-width:420px">
-          <tr><th>행</th><th>입력</th><th>사유</th></tr>
-          ${bad.map(r => `<tr><td>${r.line}</td><td class="mono">${esc(r.smiles || r.name)}</td>
-            <td>${esc(r.error)}</td></tr>`).join("")}
-        </table></div></details>` : ""}
-      ${n_ok ? `<details class="small" style="margin-top:6px">
-        <summary>등록될 후보 ${n_ok}개</summary>
-        <div class="scroll-x"><table class="table" style="min-width:420px">
-          <tr><th>이름</th><th>SMILES</th><th>계산 구조</th><th>원자</th></tr>
-          ${rows.filter(r => r.ok).map(r => `<tr><td>${esc(r.name)}</td>
-            <td class="mono">${esc(r.smiles)}</td>
-            <td class="mono muted">${esc(r.calc_smiles)}</td><td>${r.atoms}</td></tr>`).join("")}
-        </table></div></details>` : ""}`;
-    scrEstimate();
+    scrRenderParsed();
   } catch (e) {
     err.textContent = e.message;
   } finally { btn.disabled = false; }
@@ -3102,10 +3084,11 @@ async function scrSubmit() {
   const payload = {
     name: $("scr-name").value.trim(),
     candidates: SCR_PARSED.rows.filter(r => r.ok)
-      .map(r => ({name: r.name, smiles: r.smiles})),
+      .map(r => ({name: r.name, smiles: r.smiles, geometry: r.geometry || null})),
     electrodes,
     marginV: Math.max(0, +$("scr-margin").value || 0.3),
     stages,
+    rescanGeometry: !!$("scr-rescan")?.checked,
     settings: {
       envType: solventId ? "사용자 정의" : "진공·기체",
       solventId,
@@ -3248,9 +3231,21 @@ function scrWire() {
   $("scr-file").addEventListener("change", (e) => {
     const f = e.target.files[0];
     if (!f) return;
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
     const reader = new FileReader();
-    reader.onload = () => { $("scr-cands").value = reader.result; scrParse(); };
+    if (["sdf", "mol", "mdl", "xyz"].includes(ext)) {
+      // 3D 구조 파일 — 좌표를 초기 구조로 쓴다 (텍스트 목록 경로와 별개)
+      $("scr-3d-charge-wrap").style.display = ext === "xyz" ? "" : "none";
+      reader.onload = () => scrParse3D(reader.result, f.name);
+    } else {
+      $("scr-3d-charge-wrap").style.display = "none";
+      reader.onload = () => { $("scr-cands").value = reader.result; scrParse(); };
+    }
     reader.readAsText(f);
+  });
+  $("scr-3d-charge").addEventListener("change", () => {
+    const f = $("scr-file").files[0];
+    if (f) { const r = new FileReader(); r.onload = () => scrParse3D(r.result, f.name); r.readAsText(f); }
   });
   ["scr-st1", "scr-st2", "scr-st3", "scr-keep1", "scr-keep2"].forEach(id =>
     $(id).addEventListener("change", scrEstimate));
@@ -3290,3 +3285,153 @@ window.rbRenderScreen = function () {
   scrRenderList();
   if (SCR_DETAIL_ID) scrRenderDetail();
 };
+
+/* ---------- 3D 구조 파일 입력 (SDF/MOL 우선 · XYZ 보조) ---------- */
+
+// 검증 결과 표 — 텍스트 목록·3D 파일 두 경로가 공유한다
+function scrRenderParsed() {
+  const {rows, n_ok, n_error, warning} = SCR_PARSED;
+  const has3d = rows.some(r => r.geometry);
+  $("scr-parse-count").textContent = `유효 ${n_ok}개 · 제외 ${n_error}개`
+    + (has3d ? " · 3D 좌표 사용" : "");
+  $("scr-rescan-wrap").style.display = has3d ? "" : "none";
+  const bad = rows.filter(r => !r.ok);
+  $("scr-parse-out").innerHTML = `
+    ${warning ? `<p class="verdict-no small">${esc(warning)}</p>` : ""}
+    ${has3d ? `<p class="muted small" style="margin:6px 0 0">3D 파일의 좌표가 초기 구조로
+      쓰입니다 — conformer 탐색을 건너뜁니다. 업로드 구조가 미덥지 않으면
+      «구조 재탐색»을 켜세요.</p>` : ""}
+    ${bad.length ? `<details class="small" style="margin-top:6px" open>
+      <summary>제외된 행 ${bad.length}개 — 사유</summary>
+      <div class="scroll-x"><table class="table" style="min-width:420px">
+        <tr><th>행</th><th>입력</th><th>사유</th></tr>
+        ${bad.map(r => `<tr><td>${r.line}</td><td class="mono">${esc(r.smiles || r.name)}</td>
+          <td>${esc(r.error)}</td></tr>`).join("")}
+      </table></div></details>` : ""}
+    ${n_ok ? `<details class="small" style="margin-top:6px">
+      <summary>등록될 후보 ${n_ok}개</summary>
+      <div class="scroll-x"><table class="table" style="min-width:420px">
+        <tr><th>이름</th><th>SMILES</th><th>계산 구조</th><th>원자</th>${has3d ? "<th>비고</th>" : ""}</tr>
+        ${rows.filter(r => r.ok).map(r => `<tr><td>${esc(r.name)}</td>
+          <td class="mono">${esc(r.smiles)}</td>
+          <td class="mono muted">${r.geometry ? "업로드 3D 좌표" : esc(r.calc_smiles)}</td>
+          <td>${r.atoms}</td>${has3d ? `<td class="muted small">${esc(r.note || "")}</td>` : ""}</tr>`).join("")}
+      </table></div></details>` : ""}`;
+  scrEstimate();
+}
+
+// 3D 파일 경로 — /api/structures/parse 결과를 후보 목록으로 변환
+async function scrParse3D(content, filename) {
+  const err = $("scr-error");
+  err.textContent = "";
+  try {
+    const parsed = await scrFetch("/api/structures/parse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content, filename,
+                            charge: parseInt($("scr-3d-charge").value) || 0}),
+    });
+    // 3D 파일은 좌표가 분자별이라 올리고머 전개와 함께 쓸 수 없다
+    if ($("scr-structure").value !== "모노머") {
+      $("scr-structure").value = "모노머";
+      err.textContent = "3D 파일 업로드 시 구조는 «모노머»로 고정됩니다 (좌표는 분자 단위이므로).";
+    }
+    const seen = new Set();
+    const rows = parsed.molecules.map((m, i) => {
+      const row = {line: i + 1, name: m.name, smiles: m.smiles, ok: m.ok,
+                   error: m.error, calc_smiles: m.smiles, atoms: m.n_atoms,
+                   note: m.note || null, geometry: null};
+      if (row.ok && seen.has(m.smiles)) {
+        row.ok = false;
+        row.error = "중복 구조 (제외)";
+      } else if (row.ok) {
+        seen.add(m.smiles);
+        if (m.atoms) row.geometry = {atoms: m.atoms, source: m.source};
+        else row.note = (row.note ? row.note + " · " : "") + "좌표 없음 — conformer 탐색 사용";
+      }
+      return row;
+    });
+    SCR_PARSED = {rows, n_ok: rows.filter(r => r.ok).length,
+                  n_error: rows.filter(r => !r.ok).length};
+    $("scr-cands").value = `(3D 파일: ${filename} — ${SCR_PARSED.n_ok}개 분자)`;
+    scrRenderParsed();
+  } catch (e) {
+    err.textContent = e.message;
+  }
+}
+
+/* ----- 단건 DFT 계산 화면의 3D 파일 입력 ----- */
+window.CALC_GEOM = null;
+
+function calcGeomClear() {
+  window.CALC_GEOM = null;
+  $("calc-3d-info").textContent = "";
+  $("calc-3d-rescan-wrap").style.display = "none";
+  $("calc-3d-charge-wrap").style.display = "none";
+}
+
+async function calcLoad3D(content, filename) {
+  const info = $("calc-3d-info");
+  try {
+    const parsed = await fetch("/api/structures/parse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content, filename,
+                            charge: parseInt($("calc-3d-charge").value) || 0}),
+    }).then(async r => {
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.detail || `요청 실패 (${r.status})`);
+      return b;
+    });
+    $("calc-3d-charge-wrap").style.display = parsed.format === "xyz" ? "" : "none";
+    const good = parsed.molecules.find(m => m.ok);
+    if (!good) {
+      calcGeomClear();
+      $("calc-3d-charge-wrap").style.display = parsed.format === "xyz" ? "" : "none";
+      info.textContent = parsed.molecules[0]?.error || "파일에서 분자를 읽지 못했습니다";
+      return;
+    }
+    $("custom-smiles").value = good.smiles;
+    if (!$("custom-name").value.trim()) $("custom-name").value = good.name;
+    if (good.atoms) {
+      window.CALC_GEOM = {atoms: good.atoms, source: good.source};
+      $("calc-3d-rescan-wrap").style.display = "";
+      info.textContent = `${good.name} — ${good.n_atoms}원자 3D 구조 로드됨. `
+        + `업로드 좌표를 초기 구조로 사용합니다 (conformer 탐색 생략).`
+        + (good.note ? ` ※ ${good.note}` : "")
+        + (parsed.molecules.length > 1
+           ? ` ※ 파일에 분자 ${parsed.molecules.length}개 — 첫 분자만 사용합니다. `
+             + "여러 개를 한 번에 계산하려면 «배치 스크리닝»을 이용하세요." : "");
+    } else {
+      calcGeomClear();
+      $("custom-smiles").value = good.smiles;
+      info.textContent = `${good.name} — 결합 정보만 로드됨 (${good.note || "3D 좌표 없음"}). `
+        + "구조는 conformer 탐색으로 생성합니다.";
+    }
+  } catch (e) {
+    calcGeomClear();
+    info.textContent = e.message;
+  }
+}
+
+(function wireCalc3D() {
+  const fileEl = $("calc-3d-file");
+  if (!fileEl) return;
+  const readAndLoad = () => {
+    const f = fileEl.files[0];
+    if (!f) return;
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    $("calc-3d-charge-wrap").style.display = ext === "xyz" ? "" : "none";
+    const reader = new FileReader();
+    reader.onload = () => calcLoad3D(reader.result, f.name);
+    reader.readAsText(f);
+  };
+  fileEl.addEventListener("change", readAndLoad);
+  $("calc-3d-charge").addEventListener("change", readAndLoad);
+  // SMILES 를 손으로 고치면 업로드 좌표와 구조가 어긋나므로 좌표를 버린다
+  $("custom-smiles").addEventListener("input", () => {
+    if (window.CALC_GEOM) {
+      calcGeomClear();
+      $("calc-3d-info").textContent =
+        "SMILES 가 수정되어 업로드 3D 좌표를 사용하지 않습니다 (conformer 탐색으로 대체).";
+    }
+  });
+})();

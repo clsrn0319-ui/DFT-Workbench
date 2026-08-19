@@ -381,6 +381,18 @@ def run_job(job, update, is_cancelled=lambda: False):
             for m in (settings.get("explicitMolecules") or []))
         fragments = None
 
+        # 업로드된 3D 구조 — 초기 구조로 쓰고 conformer 탐색을 건너뛴다.
+        # «구조 재탐색»이 켜져 있으면 좌표를 버리고 기존 경로로 돌아간다.
+        user_geom = (job["material"].get("geometry") or {})
+        user_atoms = [tuple(a) for a in (user_geom.get("atoms") or [])] or None
+        if user_atoms and user_geom.get("rescan"):
+            log("업로드 3D 구조가 있지만 «구조 재탐색»이 켜져 있어 conformer 탐색부터 다시 수행합니다")
+            user_atoms = None
+        if user_atoms and explicit:
+            log("명시적 주변 분자 클러스터 계산은 배치 알고리즘이 좌표를 다시 만들므로 "
+                "업로드 3D 구조를 사용하지 않습니다")
+            user_atoms = None
+
         if explicit:
             # 1') 명시적 주변 분자 클러스터 생성 (cluster-continuum)
             stage("클러스터 생성 (명시적 주변 분자 배치)", 5)
@@ -403,6 +415,20 @@ def run_job(job, update, is_cancelled=lambda: False):
                 params["do_opt"] = False
                 log(f"클러스터 {len(atoms)}원자 > {MAX_CLUSTER_OPT_ATOMS} — "
                     f"DFT 최적화 생략, {cl_info['forcefield']} 구조 단일점 수행")
+        elif user_atoms:
+            # 1'') 사용자 제공 3D 구조 — conformer 탐색 생략, 그 좌표에서 출발
+            stage("사용자 제공 3D 구조 사용", 3)
+            atoms = user_atoms
+            geom_info = {"n_conformers": 1, "forcefield": "사용자 제공",
+                         "ff_energy": None}
+            ranked = [(0.0, atoms)]
+            conformer_populations = [{"rel_e_kcal": 0.0, "population_pct": 100.0}]
+            significant = [0]
+            kT_kcal = 1.98720425e-3 * temperature
+            log(f"업로드 3D 구조({user_geom.get('source') or '3D 파일'} · {len(atoms)}원자)를 "
+                "초기 구조로 사용 — conformer 탐색 생략"
+                + ("" if params["do_opt"] else
+                   " (이 프리셋은 DFT 최적화도 없어 업로드 좌표 그대로 단일점을 계산합니다)"))
         else:
             # 1) conformer 탐색 (+ DFT 재순위화)
             stage("구조 생성 (conformer 탐색)", 3)
