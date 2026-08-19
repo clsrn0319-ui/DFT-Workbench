@@ -437,6 +437,25 @@ svg .axis{stroke:var(--line)}
       </div>
       <button class="act" id="btnRegister">실측 Lot 등록</button>
     </div>
+    <h3 class="collapseHead secTitle"><span>실측 데이터 업로드 (활물질별) <span class="fid">FD-01</span></span>
+      <span class="headBtns"><button type="button" class="collapseBtn" data-target="secUpload" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
+    <div id="secUpload">
+      <p class="mini" style="margin:0 0 8px">JSON 파일(「JSON 내보내기」와 동일 형식의 Lot 배열)을 올리면 아래에서 고른 <b>전극 종류·활물질</b>로 태깅되어 <b>실측</b>으로 적재됩니다. 활물질별로 나눠 올려 소재를 구분하세요. 파일에 소재 정보(mat)가 이미 있으면 그 값을 우선합니다.</p>
+      <label class="f">전극 종류</label>
+      <select id="u_pole" style="margin-bottom:2px"><option value="cathode">양극 (cathode)</option><option value="anode">음극 (anode)</option></select>
+      <div class="row">
+        <div><label class="f">활물질</label><select id="u_mat_a"></select></div>
+        <div><label class="f">활물질 용량 (mAh/g)</label><input type="number" id="u_cap_spec" value="210" step="1" min="1"></div>
+      </div>
+      <div class="row">
+        <div><label class="f">도전재</label><select id="u_mat_c"></select></div>
+        <div><label class="f">바인더</label><select id="u_mat_b"></select></div>
+      </div>
+      <label class="f">데이터 파일 (.json)</label>
+      <input type="file" id="u_file" accept=".json,application/json">
+      <button class="act" id="btnUpload" style="margin-top:6px">업로드 · 선택 활물질로 태깅하여 적재</button>
+      <div id="uploadMsg" class="mini" style="margin-top:6px"></div>
+    </div>
     <h3 class="collapseHead secTitle"><span>데이터 입출력</span>
       <span class="headBtns"><button type="button" class="collapseBtn" data-target="secIO" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secIO">
@@ -1527,8 +1546,8 @@ function activeList(pole){return MATERIALS.active.filter(a=>a.pole===pole);}
 function applyActive(prefix){   // 선택 활물질 → 용량·라벨(·순방향이면 경고·심플렉스) 동기화
   const sel=$(prefix+"_mat_a");if(!sel)return;
   const a=sel.value;
-  $(prefix+"_cap_spec").value=matCap(a);
-  $("lbl_"+prefix+"_am").textContent=a;
+  const cap=$(prefix+"_cap_spec");if(cap)cap.value=matCap(a);
+  const lbl=$("lbl_"+prefix+"_am");if(lbl)lbl.textContent=a;
   if(prefix==="f"){syncForwardCap();fwMatWarnUpdate();drawTernary();$("f_am").dispatchEvent(new Event("input"));}
 }
 function fillActiveSelect(prefix){   // 전극 종류에 맞는 활물질 목록으로 채움
@@ -1542,8 +1561,8 @@ function fillActiveSelect(prefix){   // 전극 종류에 맞는 활물질 목록
 function fillMaterialSelects(){
   const cOpts=s=>MATERIALS.conductive.map(v=>`<option value="${v}"${v===s?" selected":""}>${v}</option>`).join("");
   const bOpts=s=>MATERIALS.binder.map(v=>`<option value="${v}"${v===s?" selected":""}>${v}</option>`).join("");
-  ["f","e"].forEach(p=>{if($(p+"_mat_c")){$(p+"_mat_c").innerHTML=cOpts("Super C");$(p+"_mat_b").innerHTML=bOpts("PTFE");}});
-  fillActiveSelect("f");fillActiveSelect("e");
+  ["f","e","u"].forEach(p=>{if($(p+"_mat_c")){$(p+"_mat_c").innerHTML=cOpts("Super C");$(p+"_mat_b").innerHTML=bOpts("PTFE");}});
+  ["f","e","u"].forEach(p=>{if($(p+"_mat_a"))fillActiveSelect(p);});
 }
 // 활물질이 학습 소재(NCM811)와 다르면 분포 밖 경고 (R3·R5 — 예측 참고용 명시)
 function fwMatWarnUpdate(){
@@ -1566,6 +1585,8 @@ if($("e_mat_a")){
   $("e_mat_c").addEventListener("change",()=>{$("lbl_e_c").textContent=$("e_mat_c").value;});
   $("e_mat_b").addEventListener("change",()=>{$("lbl_e_b").textContent=$("e_mat_b").value;});
 }
+if($("u_pole"))$("u_pole").addEventListener("change",()=>fillActiveSelect("u"));
+if($("u_mat_a"))$("u_mat_a").addEventListener("change",()=>applyActive("u"));
 ["f_am","f_b","f_c","f_cap","f_den"].forEach(id=>$(id).addEventListener("input",()=>{
   const am=+$("f_am").value,b=+$("f_b").value,c=+$("f_c").value,sum=am+b+c;
   $("compSum").innerHTML=Math.abs(sum-100)>0.01?
@@ -1957,6 +1978,37 @@ $("btnRegister").addEventListener("click",()=>{
     ep:{electrode_thickness_um:+$("e_t").value,electrode_density_gcc:+$("e_d").value,sheet_resistance_ohm_sq:+$("e_r").value,tensile_strength_mpa:null,electrode_adhesion_n_cm:null},ec:null});
   saveDB();refreshStatus();
   alert("실측 Lot 등록 완료 — 신규 실측 등록은 재학습 트리거입니다 (FT-08). 「5. 모델 관리」에서 재학습을 실행하세요.");
+});
+// 실측 데이터 업로드 (활물질별 태깅, 오프라인 JSON 파싱 — R7) FD-01
+$("btnUpload").addEventListener("click",()=>{
+  const msg=$("uploadMsg"),f=$("u_file").files[0];
+  if(!f){msg.innerHTML='<span style="color:var(--bad)">파일을 선택하세요.</span>';return;}
+  const rd=new FileReader();
+  rd.onerror=()=>{msg.innerHTML='<span style="color:var(--bad)">파일을 읽지 못했습니다.</span>';};
+  rd.onload=()=>{
+    let data;
+    try{data=JSON.parse(rd.result);}catch(e){msg.innerHTML='<span style="color:var(--bad)">JSON 파싱 실패: '+esc(e.message)+'</span>';return;}
+    let arr=Array.isArray(data)?data:(data&&Array.isArray(data.lots)?data.lots:null);
+    if(!arr){msg.innerHTML='<span style="color:var(--bad)">Lot 배열 형식(「JSON 내보내기」와 동일)이 아닙니다.</span>';return;}
+    const tag={pole:$("u_pole").value,active:$("u_mat_a").value,conductive:$("u_mat_c").value,binder:$("u_mat_b").value,cap:+$("u_cap_spec").value||210};
+    const existing=new Set(DB.lots.map(l=>l.lot_id));
+    let ok=0,skip=0;
+    arr.forEach((l,i)=>{
+      if(!l||!l.comp||l.comp.am==null||l.comp.b==null||l.comp.c==null){skip++;return;}
+      const lot=JSON.parse(JSON.stringify(l));
+      lot.source="measured";                       // 업로드는 실측으로 적재
+      lot.mat=lot.mat||tag;                          // 파일에 소재정보 있으면 우선, 없으면 선택 태그
+      if(!lot.lot_id||existing.has(lot.lot_id))lot.lot_id=`${lot.lot_id||tag.active}-up${i+1}`;
+      existing.add(lot.lot_id);
+      lot.area=lot.area??25;lot.foil=lot.foil??15;lot.side=lot.side||"single";
+      lot.proc=lot.proc||{};lot.stages=lot.stages||{};lot.ep=lot.ep||{};lot.ec=(lot.ec!==undefined)?lot.ec:null;
+      DB.lots.push(lot);ok++;
+    });
+    if(!ok){msg.innerHTML='<span style="color:var(--bad)">적재 가능한 Lot이 없습니다(조성 comp 필요). 형식을 확인하세요.</span>';return;}
+    saveDB();refreshStatus();$("u_file").value="";
+    msg.innerHTML=`✅ <b>${ok}건</b> 적재 — 활물질 <b>${esc(tag.active)}</b> · ${tag.pole==="anode"?"음극":"양극"} 태깅${skip?` · 형식 미달 ${skip}건 건너뜀`:""}. 「5. 모델 관리」에서 재학습하세요.`;
+  };
+  rd.readAsText(f);
 });
 $("btnLoadReal").addEventListener("click",()=>{const ver=$("restoreVer").value;restoreRealState(true,ver);refreshStatus();
   alert(`KETI 실측 ${REAL_LOTS.length} Lot 적재 완료 · 모델 ${MODEL?MODEL.version:"-"} 복원`);});
