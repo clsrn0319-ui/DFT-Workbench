@@ -175,9 +175,11 @@ svg .axis{stroke:var(--line)}
   <div class="card">
     <button type="button" class="ghost resetBtn" id="btnResetFw" style="float:right">↺ 초기화</button>
     <h2>조성 · 목표 사양 <span class="fid">FF-01 · FF-02</span></h2>
+    <label class="f">전극 종류</label>
+    <select id="f_pole" style="margin-bottom:2px"><option value="cathode">양극 (cathode)</option><option value="anode">음극 (anode)</option></select>
     <div class="row">
-      <div><label class="f">활물질</label><select id="f_mat_a"></select></div>
-      <div><label class="f">활물질 용량 (mAh/g)</label><input type="number" id="f_cap_spec" value="210" step="1" min="1" title="선택 활물질의 용량(비용량) — 면적당 용량 계산에 사용. 수정 가능"></div>
+      <div><label class="f" style="height:3em;display:flex;align-items:flex-end">활물질</label><select id="f_mat_a" style="height:34px;box-sizing:border-box"></select></div>
+      <div><label class="f" style="height:3em;display:flex;align-items:flex-end">활물질 용량 (mAh/g)</label><input type="number" id="f_cap_spec" value="210" step="1" min="1" style="height:34px;box-sizing:border-box" title="선택 활물질의 용량(비용량) — 면적당 용량 계산에 사용. 수정 가능"></div>
     </div>
     <div class="row">
       <div><label class="f">도전재</label><select id="f_mat_c"></select></div>
@@ -415,6 +417,8 @@ svg .axis{stroke:var(--line)}
       <span class="headBtns"><button type="button" class="collapseBtn" data-target="secRegister" aria-expanded="true" title="접기/펼치기">－</button></span></h3>
     <div id="secRegister">
       <label class="f">Lot ID</label><input type="text" id="e_lot" value="EXP-0001">
+      <label class="f">전극 종류</label>
+      <select id="e_pole" style="margin-bottom:2px"><option value="cathode">양극 (cathode)</option><option value="anode">음극 (anode)</option></select>
       <div class="row">
         <div><label class="f">활물질</label><select id="e_mat_a"></select></div>
         <div><label class="f">도전재</label><select id="e_mat_c"></select></div>
@@ -460,7 +464,7 @@ svg .axis{stroke:var(--line)}
       </select>
       <button type="button" class="collapseBtn" data-target="secLotList" aria-expanded="true" title="접기/펼치기">－</button></span></h2>
   <div id="secLotList" class="tblwrap"><table id="lotTable"><thead><tr>
-    <th>Lot</th><th>출처</th><th>AM/PTFE/SC (wt%)</th><th>면적 (cm²)</th><th>L2 두께 (μm)</th><th>L2 밀도 (g/cc)</th><th>시트 저항</th><th>셀 평가</th>
+    <th>Lot</th><th>출처</th><th>소재 (활물질·전극)</th><th>조성 (wt%)</th><th>면적 (cm²)</th><th>L2 두께 (μm)</th><th>L2 밀도 (g/cc)</th><th>시트 저항</th><th>셀 평가</th>
   </tr></thead><tbody></tbody></table></div>
 </div>
 </section>
@@ -483,11 +487,15 @@ let SPECIFIC_CAPACITY = 210.0;              // 현재 선택 활물질의 비용
 // ---------- 소재 사전 (오프라인 프리셋 — R7) ----------
 // 활물질은 비용량(mAh/g) 기본값 동반 — 면적당 용량 계산에 사용. 값은 수정 가능.
 const MATERIALS = {
-  active: [{n:"NCM811",cap:210},{n:"Natural Graphite",cap:360},{n:"Artificial Graphite",cap:350},{n:"Gr/Si",cap:450}],
+  active: [{n:"NCM811",cap:210,pole:"cathode"},
+           {n:"Natural Graphite",cap:360,pole:"anode"},
+           {n:"Artificial Graphite",cap:350,pole:"anode"},
+           {n:"Gr/Si",cap:450,pole:"anode"}],
   conductive: ["Super C","Super P","Ketjenblack","CNT","그래핀"],
   binder: ["PTFE","PVDF","CMC/SBR"],
 };
-const DEFAULT_MAT = {active:"NCM811",conductive:"Super C",binder:"PTFE",cap:210};
+const POLE_KO = {cathode:"양극 (cathode)",anode:"음극 (anode)"};
+const DEFAULT_MAT = {pole:"cathode",active:"NCM811",conductive:"Super C",binder:"PTFE",cap:210};
 const TRAINED_ACTIVE = "NCM811";           // 내장 모델이 학습한 활물질 — 그 외는 분포 밖(참고용)
 function matCap(name){const m=MATERIALS.active.find(a=>a.n===name);return m?m.cap:210;}
 function lotMat(l){return l&&l.mat?l.mat:DEFAULT_MAT;}   // 꼬리표 없는 기존 Lot 은 NCM811 기본
@@ -1393,10 +1401,12 @@ function renderLotTable(){
   if($("lotCount"))$("lotCount").textContent=`표시 ${rows.length}건`+(rows.length>80?" · 최근 80":"");
   tb.innerHTML=rows.slice(-80).reverse().map(l=>{
     const l2=l.stages?.L2;
+    const mt=lotMat(l);
     return `<tr><td class="t">${esc(l.lot_id)}</td><td class="t">${l.source==="measured"?'<span class="badge A">실측</span>':'<span class="badge C">생성</span>'}</td>
+    <td class="t">${esc(mt.active)}<span class="mini" style="color:var(--ink-3)"> · ${mt.pole==="anode"?"음극":"양극"}</span></td>
     <td>${fmt(l.comp.am,2)} / ${fmt(l.comp.b,2)} / ${fmt(l.comp.c,2)}</td><td>${fmt(l.area,0)}</td>
     <td>${fmt(l2?.t,1)}</td><td>${fmt(l2?.d,3)}</td><td>${fmt(dispV(SR_COL,l.ep?.sheet_resistance_ohm_sq),3)}</td>
-    <td class="t">${l.ec?"완료":"미완(결측 유지)"}</td></tr>`;}).join("")||`<tr><td colspan="8" class="t empty">데이터 없음</td></tr>`;
+    <td class="t">${l.ec?"완료":"미완(결측 유지)"}</td></tr>`;}).join("")||`<tr><td colspan="9" class="t empty">데이터 없음</td></tr>`;
 }
 function renderVersions(){
   const tb=$("verTable").querySelector("tbody");
@@ -1512,34 +1522,47 @@ document.querySelectorAll("#ternLegend .legToggle").forEach(el=>{
   el.addEventListener("click",()=>{const k=el.dataset.k;ternShow[k]=!ternShow[k];
     el.classList.toggle("off",!ternShow[k]);drawTernary();});
 });
-// ---------- 소재 선택 (활물질·도전재·바인더) ----------
+// ---------- 소재 선택 (전극 종류 → 활물질·도전재·바인더) ----------
+function activeList(pole){return MATERIALS.active.filter(a=>a.pole===pole);}
+function applyActive(prefix){   // 선택 활물질 → 용량·라벨(·순방향이면 경고·심플렉스) 동기화
+  const sel=$(prefix+"_mat_a");if(!sel)return;
+  const a=sel.value;
+  $(prefix+"_cap_spec").value=matCap(a);
+  $("lbl_"+prefix+"_am").textContent=a;
+  if(prefix==="f"){syncForwardCap();fwMatWarnUpdate();drawTernary();$("f_am").dispatchEvent(new Event("input"));}
+}
+function fillActiveSelect(prefix){   // 전극 종류에 맞는 활물질 목록으로 채움
+  const sel=$(prefix+"_mat_a");if(!sel)return;
+  const pole=$(prefix+"_pole")?$(prefix+"_pole").value:"cathode";
+  const list=activeList(pole),keep=sel.value;
+  sel.innerHTML=list.map(a=>`<option value="${a.n}">${a.n}</option>`).join("");
+  sel.value=list.some(a=>a.n===keep)?keep:(list[0]&&list[0].n);
+  applyActive(prefix);
+}
 function fillMaterialSelects(){
-  const opt=(v,sel)=>`<option value="${v}"${v===sel?" selected":""}>${v}</option>`;
-  const aOpts=s=>MATERIALS.active.map(a=>opt(a.n,s)).join("");
-  const cOpts=s=>MATERIALS.conductive.map(v=>opt(v,s)).join("");
-  const bOpts=s=>MATERIALS.binder.map(v=>opt(v,s)).join("");
-  if($("f_mat_a")){$("f_mat_a").innerHTML=aOpts("NCM811");$("f_mat_c").innerHTML=cOpts("Super C");$("f_mat_b").innerHTML=bOpts("PTFE");}
-  if($("e_mat_a")){$("e_mat_a").innerHTML=aOpts("NCM811");$("e_mat_c").innerHTML=cOpts("Super C");$("e_mat_b").innerHTML=bOpts("PTFE");}
+  const cOpts=s=>MATERIALS.conductive.map(v=>`<option value="${v}"${v===s?" selected":""}>${v}</option>`).join("");
+  const bOpts=s=>MATERIALS.binder.map(v=>`<option value="${v}"${v===s?" selected":""}>${v}</option>`).join("");
+  ["f","e"].forEach(p=>{if($(p+"_mat_c")){$(p+"_mat_c").innerHTML=cOpts("Super C");$(p+"_mat_b").innerHTML=bOpts("PTFE");}});
+  fillActiveSelect("f");fillActiveSelect("e");
 }
 // 활물질이 학습 소재(NCM811)와 다르면 분포 밖 경고 (R3·R5 — 예측 참고용 명시)
 function fwMatWarnUpdate(){
   const box=$("fwMatWarn");if(!box)return;
   const a=$("f_mat_a")?$("f_mat_a").value:"NCM811";
   box.innerHTML=a===TRAINED_ACTIVE?"":
-    `<span style="color:var(--warn)">⚠️ 내장 모델은 <b>${TRAINED_ACTIVE}</b> 학습 기준 — <b>${esc(a)}</b>의 물성·성능 예측은 <b>참고용</b>입니다(해당 소재 실측 등록·재학습 필요). 면적당 용량은 선택 비용량으로 계산됩니다.</span>`;
+    `<span style="color:var(--warn)">⚠️ 내장 모델은 <b>${TRAINED_ACTIVE}</b> 학습 기준 — <b>${esc(a)}</b>의 물성·성능 예측은 <b>참고용</b>입니다(해당 소재 실측 등록·재학습 필요). 면적당 용량은 선택 용량으로 계산됩니다.</span>`;
 }
 function syncForwardCap(){ SPECIFIC_CAPACITY=+$("f_cap_spec").value||210; if($("stCap"))$("stCap").textContent=fmt(SPECIFIC_CAPACITY,0); }
+if($("f_pole"))$("f_pole").addEventListener("change",()=>fillActiveSelect("f"));
 if($("f_mat_a")){
-  $("f_mat_a").addEventListener("change",()=>{
-    const a=$("f_mat_a").value;$("f_cap_spec").value=matCap(a);$("lbl_f_am").textContent=a;
-    syncForwardCap();fwMatWarnUpdate();drawTernary();$("f_am").dispatchEvent(new Event("input"));
-  });
+  $("f_mat_a").addEventListener("change",()=>applyActive("f"));
   $("f_cap_spec").addEventListener("input",()=>{syncForwardCap();$("f_am").dispatchEvent(new Event("input"));});
   $("f_mat_c").addEventListener("change",()=>{$("lbl_f_c").textContent=$("f_mat_c").value;drawTernary();});
   $("f_mat_b").addEventListener("change",()=>{$("lbl_f_b").textContent=$("f_mat_b").value;drawTernary();});
 }
+if($("e_pole"))$("e_pole").addEventListener("change",()=>fillActiveSelect("e"));
 if($("e_mat_a")){
-  $("e_mat_a").addEventListener("change",()=>{const a=$("e_mat_a").value;$("e_cap_spec").value=matCap(a);$("lbl_e_am").textContent=a;});
+  $("e_mat_a").addEventListener("change",()=>applyActive("e"));
   $("e_mat_c").addEventListener("change",()=>{$("lbl_e_c").textContent=$("e_mat_c").value;});
   $("e_mat_b").addEventListener("change",()=>{$("lbl_e_b").textContent=$("e_mat_b").value;});
 }
@@ -1929,7 +1952,7 @@ $("btnRegister").addEventListener("click",()=>{
   const am=+$("e_am").value,b=+$("e_b").value,c=+$("e_c").value;
   if(Math.abs(am+b+c-100)>0.01){alert("조성 합계 ≠ 100 wt% — 학습 제외 대상입니다 (FP-01)");return;}
   DB.lots.push({lot_id:$("e_lot").value||"EXP-"+Date.now(),source:"measured",area:25,foil:15,side:"single",
-    mat:{active:$("e_mat_a").value,conductive:$("e_mat_c").value,binder:$("e_mat_b").value,cap:+$("e_cap_spec").value||210},
+    mat:{pole:$("e_pole").value,active:$("e_mat_a").value,conductive:$("e_mat_c").value,binder:$("e_mat_b").value,cap:+$("e_cap_spec").value||210},
     comp:{am,b,c},proc:{},stages:{},
     ep:{electrode_thickness_um:+$("e_t").value,electrode_density_gcc:+$("e_d").value,sheet_resistance_ohm_sq:+$("e_r").value,tensile_strength_mpa:null,electrode_adhesion_n_cm:null},ec:null});
   saveDB();refreshStatus();
