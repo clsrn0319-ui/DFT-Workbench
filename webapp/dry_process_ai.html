@@ -1437,13 +1437,16 @@ function renderPoleStatus(){
 }
 function renderLotTable(){
   const tb=$("lotTable").querySelector("tbody");
-  // 활물질 필터 옵션을 데이터에 존재하는 활물질로 동적 갱신 (선택 유지)
+  // 활물질 필터 — 등록된 활물질 전체를 항상 표시(데이터 없어도) + 건수 병기 (선택 유지)
   const mf=$("lotMatFilter");
   if(mf){
-    const actives=[...new Set(DB.lots.map(l=>lotMat(l).active))].sort();
+    const inData=[...new Set(DB.lots.map(l=>lotMat(l).active))];
+    const reg=MATERIALS.active.map(a=>a.n);
+    const list=[...reg,...inData.filter(a=>!reg.includes(a))];   // 사전 순서 유지 + 사전 밖 소재는 뒤에
+    const cnt=a=>DB.lots.filter(l=>lotMat(l).active===a).length;
     const cur=mf.value;
-    mf.innerHTML=`<option value="all">전체</option>`+actives.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join("");
-    mf.value=actives.includes(cur)?cur:"all";
+    mf.innerHTML=`<option value="all">전체</option>`+list.map(a=>`<option value="${esc(a)}">${esc(a)} (${cnt(a)})</option>`).join("");
+    mf.value=list.includes(cur)?cur:"all";
   }
   const f=$("lotFilter")?$("lotFilter").value:"all";
   const mfv=mf?mf.value:"all";
