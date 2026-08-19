@@ -140,7 +140,7 @@ svg .axis{stroke:var(--line)}
 <button id="themeToggle" class="themeBtn" type="button" aria-label="다크/라이트 모드 전환">🌙</button>
 <div class="wrap">
 <header class="app">
-  <div class="eyebrow">KETI 차세대전지연구센터 · NCM811 / PTFE / Super C 고정 소재계</div>
+  <div class="eyebrow">KETI 차세대전지연구센터 · 활물질·도전재·바인더 선택 지원 (내장 모델 NCM811 학습 기준)</div>
   <h1>AI 기반 건식 공정 최적화 예측 프로그램</h1>
   <p class="sub">조성비 → 6단 공정 조건 → 단계별 물성 → 전기화학 성능 · 순방향 예측(F1) + 역방향 설계(F2) · 브라우저 단독 실행(오프라인)</p>
   <div class="rail" aria-label="공정 순서">
@@ -156,7 +156,7 @@ svg .axis{stroke:var(--line)}
     <span class="chip"><span class="dot" id="modelDot"></span>모델 <b id="stModel">미학습</b></span>
     <span class="chip">적재 Lot <b id="stLots">0</b></span>
     <span class="chip">실측 <b id="stMeasured">0</b> / 생성 <b id="stGenerated">0</b></span>
-    <span class="chip">비용량 상수 <b>210 mAh/g</b></span>
+    <span class="chip">비용량 <b id="stCap">210</b> mAh/g</span>
   </div>
 </header>
 
@@ -175,10 +175,19 @@ svg .axis{stroke:var(--line)}
   <div class="card">
     <button type="button" class="ghost resetBtn" id="btnResetFw" style="float:right">↺ 초기화</button>
     <h2>조성 · 목표 사양 <span class="fid">FF-01 · FF-02</span></h2>
-    <label class="f">NCM811 (wt%)</label><input type="number" id="f_am" value="96" step="0.1" min="80" max="99">
     <div class="row">
-      <div><label class="f">PTFE (wt%)</label><input type="number" id="f_b" value="2" step="0.1" min="0.5" max="10"></div>
-      <div><label class="f">Super C (wt%)</label><input type="number" id="f_c" value="2" step="0.1" min="0.5" max="10"></div>
+      <div><label class="f">활물질</label><select id="f_mat_a"></select></div>
+      <div><label class="f">비용량 (mAh/g)</label><input type="number" id="f_cap_spec" value="210" step="1" min="1" title="선택 활물질의 비용량 — 면적당 용량 계산에 사용"></div>
+    </div>
+    <div class="row">
+      <div><label class="f">도전재</label><select id="f_mat_c"></select></div>
+      <div><label class="f">바인더</label><select id="f_mat_b"></select></div>
+    </div>
+    <div id="fwMatWarn" class="mini" style="margin:2px 0 4px"></div>
+    <label class="f"><span id="lbl_f_am">NCM811</span> (wt%)</label><input type="number" id="f_am" value="96" step="0.1" min="80" max="99">
+    <div class="row">
+      <div><label class="f"><span id="lbl_f_b">PTFE</span> (wt%)</label><input type="number" id="f_b" value="2" step="0.1" min="0.5" max="10"></div>
+      <div><label class="f"><span id="lbl_f_c">Super C</span> (wt%)</label><input type="number" id="f_c" value="2" step="0.1" min="0.5" max="10"></div>
     </div>
     <div class="mini" id="compSum" style="margin-top:4px"></div>
     <div class="ternwrap" style="align-items:center;gap:6px">
@@ -407,10 +416,16 @@ svg .axis{stroke:var(--line)}
     <div id="secRegister">
       <label class="f">Lot ID</label><input type="text" id="e_lot" value="EXP-0001">
       <div class="row">
-        <div><label class="f">NCM811</label><input type="number" id="e_am" value="96" step="0.1"></div>
-        <div><label class="f">PTFE</label><input type="number" id="e_b" value="2" step="0.1"></div>
-        <div><label class="f">Super C</label><input type="number" id="e_c" value="2" step="0.1"></div>
+        <div><label class="f">활물질</label><select id="e_mat_a"></select></div>
+        <div><label class="f">도전재</label><select id="e_mat_c"></select></div>
+        <div><label class="f">바인더</label><select id="e_mat_b"></select></div>
       </div>
+      <div class="row">
+        <div><label class="f"><span id="lbl_e_am">NCM811</span> (wt%)</label><input type="number" id="e_am" value="96" step="0.1"></div>
+        <div><label class="f"><span id="lbl_e_b">PTFE</span> (wt%)</label><input type="number" id="e_b" value="2" step="0.1"></div>
+        <div><label class="f"><span id="lbl_e_c">Super C</span> (wt%)</label><input type="number" id="e_c" value="2" step="0.1"></div>
+      </div>
+      <div><label class="f">비용량 (mAh/g)</label><input type="number" id="e_cap_spec" value="210" step="1" min="1" title="선택 활물질의 비용량"></div>
       <div class="row">
         <div><label class="f">최종 두께 (μm)</label><input type="number" id="e_t" value="80"></div>
         <div><label class="f">합제밀도 (g/cc)</label><input type="number" id="e_d" value="3.1" step="0.01"></div>
@@ -464,7 +479,19 @@ svg .axis{stroke:var(--line)}
    ===================================================================== */
 
 // ---------- 상수 (도메인 고정) ----------
-const SPECIFIC_CAPACITY = 210.0;            // NCM811 mAh/g — 유일한 소재 상수
+let SPECIFIC_CAPACITY = 210.0;              // 현재 선택 활물질의 비용량 (기본 NCM811). 소재 선택 시 갱신
+// ---------- 소재 사전 (오프라인 프리셋 — R7) ----------
+// 활물질은 비용량(mAh/g) 기본값 동반 — 면적당 용량 계산에 사용. 값은 수정 가능.
+const MATERIALS = {
+  active: [{n:"NCM811",cap:210},{n:"NCM622",cap:185},{n:"NCM523",cap:175},{n:"NCM111",cap:155},
+           {n:"NCA",cap:200},{n:"LFP",cap:160},{n:"LCO",cap:150},{n:"LMFP",cap:150}],
+  conductive: ["Super C","Super P","Ketjenblack","CNT","그래핀"],
+  binder: ["PTFE","PVDF","CMC/SBR"],
+};
+const DEFAULT_MAT = {active:"NCM811",conductive:"Super C",binder:"PTFE",cap:210};
+const TRAINED_ACTIVE = "NCM811";           // 내장 모델이 학습한 활물질 — 그 외는 분포 밖(참고용)
+function matCap(name){const m=MATERIALS.active.find(a=>a.n===name);return m?m.cap:210;}
+function lotMat(l){return l&&l.mat?l.mat:DEFAULT_MAT;}   // 꼬리표 없는 기존 Lot 은 NCM811 기본
 const STAGES = ["M1","M2","M3","M4","R1","R2","L1","L2"];   // 스키마·모델 출력 전체 집합
 // 현재 운용 단계 — 2026-07 운용 결정: Rolling 은 1회만 진행 (R2 제외).
 // R2 실측 이력은 학습에 계속 사용되며, 다단 복귀 시 이 목록만 되돌리면 된다.
@@ -1417,10 +1444,11 @@ function drawTernary(){
   if(ternShow.input&&inWin)ternDots.push({x:cx,y:cy,cur:true,comp:{am,b,c}});
   const polygon=`<polygon points="${A}, ${B}, ${C}" fill="var(--inset)" stroke="var(--line)"/>`;
   // 확대·이동은 콘텐츠 그룹(ternView)에만 적용 — 축 라벨은 고정
+  const mN={a:($("f_mat_a")&&$("f_mat_a").value)||"NCM811",b:($("f_mat_b")&&$("f_mat_b").value)||"PTFE",c:($("f_mat_c")&&$("f_mat_c").value)||"Super C"};
   svg.innerHTML=`<g id="ternView">${polygon}${genPts}${measPts}${curVis}</g>`+
-   `<text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">NCM811 100</text>
-   <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">PTFE ${TERN_SPAN}</text>
-   <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">SuperC ${TERN_SPAN}</text>`;
+   `<text x="${A[0]}" y="${A[1]-4}" text-anchor="middle">${esc(mN.a)} 100</text>
+   <text x="${B[0]}" y="${B[1]+12}" text-anchor="start">${esc(mN.b)} ${TERN_SPAN}</text>
+   <text x="${C[0]}" y="${C[1]+12}" text-anchor="end">${esc(mN.c)} ${TERN_SPAN}</text>`;
   applyTernView();
 }
 // 겹친 점 묶음 툴팁 — 같은(가까운) 좌표의 모든 Lot 을 함께 표시
@@ -1485,6 +1513,37 @@ document.querySelectorAll("#ternLegend .legToggle").forEach(el=>{
   el.addEventListener("click",()=>{const k=el.dataset.k;ternShow[k]=!ternShow[k];
     el.classList.toggle("off",!ternShow[k]);drawTernary();});
 });
+// ---------- 소재 선택 (활물질·도전재·바인더) ----------
+function fillMaterialSelects(){
+  const opt=(v,sel)=>`<option value="${v}"${v===sel?" selected":""}>${v}</option>`;
+  const aOpts=s=>MATERIALS.active.map(a=>opt(a.n,s)).join("");
+  const cOpts=s=>MATERIALS.conductive.map(v=>opt(v,s)).join("");
+  const bOpts=s=>MATERIALS.binder.map(v=>opt(v,s)).join("");
+  if($("f_mat_a")){$("f_mat_a").innerHTML=aOpts("NCM811");$("f_mat_c").innerHTML=cOpts("Super C");$("f_mat_b").innerHTML=bOpts("PTFE");}
+  if($("e_mat_a")){$("e_mat_a").innerHTML=aOpts("NCM811");$("e_mat_c").innerHTML=cOpts("Super C");$("e_mat_b").innerHTML=bOpts("PTFE");}
+}
+// 활물질이 학습 소재(NCM811)와 다르면 분포 밖 경고 (R3·R5 — 예측 참고용 명시)
+function fwMatWarnUpdate(){
+  const box=$("fwMatWarn");if(!box)return;
+  const a=$("f_mat_a")?$("f_mat_a").value:"NCM811";
+  box.innerHTML=a===TRAINED_ACTIVE?"":
+    `<span style="color:var(--warn)">⚠️ 내장 모델은 <b>${TRAINED_ACTIVE}</b> 학습 기준 — <b>${esc(a)}</b>의 물성·성능 예측은 <b>참고용</b>입니다(해당 소재 실측 등록·재학습 필요). 면적당 용량은 선택 비용량으로 계산됩니다.</span>`;
+}
+function syncForwardCap(){ SPECIFIC_CAPACITY=+$("f_cap_spec").value||210; if($("stCap"))$("stCap").textContent=fmt(SPECIFIC_CAPACITY,0); }
+if($("f_mat_a")){
+  $("f_mat_a").addEventListener("change",()=>{
+    const a=$("f_mat_a").value;$("f_cap_spec").value=matCap(a);$("lbl_f_am").textContent=a;
+    syncForwardCap();fwMatWarnUpdate();drawTernary();$("f_am").dispatchEvent(new Event("input"));
+  });
+  $("f_cap_spec").addEventListener("input",()=>{syncForwardCap();$("f_am").dispatchEvent(new Event("input"));});
+  $("f_mat_c").addEventListener("change",()=>{$("lbl_f_c").textContent=$("f_mat_c").value;drawTernary();});
+  $("f_mat_b").addEventListener("change",()=>{$("lbl_f_b").textContent=$("f_mat_b").value;drawTernary();});
+}
+if($("e_mat_a")){
+  $("e_mat_a").addEventListener("change",()=>{const a=$("e_mat_a").value;$("e_cap_spec").value=matCap(a);$("lbl_e_am").textContent=a;});
+  $("e_mat_c").addEventListener("change",()=>{$("lbl_e_c").textContent=$("e_mat_c").value;});
+  $("e_mat_b").addEventListener("change",()=>{$("lbl_e_b").textContent=$("e_mat_b").value;});
+}
 ["f_am","f_b","f_c","f_cap","f_den"].forEach(id=>$(id).addEventListener("input",()=>{
   const am=+$("f_am").value,b=+$("f_b").value,c=+$("f_c").value,sum=am+b+c;
   $("compSum").innerHTML=Math.abs(sum-100)>0.01?
@@ -1498,6 +1557,7 @@ document.querySelectorAll("#ternLegend .legToggle").forEach(el=>{
 
 // ---------- SC-01 실행 ----------
 $("btnForward").addEventListener("click",()=>{
+  syncForwardCap();   // 선택 활물질 비용량을 물리 계산에 반영
   const am=+$("f_am").value,b=+$("f_b").value,c=+$("f_c").value;
   if(Math.abs(am+b+c-100)>0.01){alert("조성 합계가 100 wt% 가 아닙니다");return;}
   const r=runForward({am,b,c,cap:+$("f_cap").value,den:+$("f_den").value,foil:+$("f_foil").value,
@@ -1870,6 +1930,7 @@ $("btnRegister").addEventListener("click",()=>{
   const am=+$("e_am").value,b=+$("e_b").value,c=+$("e_c").value;
   if(Math.abs(am+b+c-100)>0.01){alert("조성 합계 ≠ 100 wt% — 학습 제외 대상입니다 (FP-01)");return;}
   DB.lots.push({lot_id:$("e_lot").value||"EXP-"+Date.now(),source:"measured",area:25,foil:15,side:"single",
+    mat:{active:$("e_mat_a").value,conductive:$("e_mat_c").value,binder:$("e_mat_b").value,cap:+$("e_cap_spec").value||210},
     comp:{am,b,c},proc:{},stages:{},
     ep:{electrode_thickness_um:+$("e_t").value,electrode_density_gcc:+$("e_d").value,sheet_resistance_ohm_sq:+$("e_r").value,tensile_strength_mpa:null,electrode_adhesion_n_cm:null},ec:null});
   saveDB();refreshStatus();
@@ -2090,6 +2151,6 @@ function restoreRealState(force,version){
 }
 loadDB();
 if(!DB.lots.length)restoreRealState(false);   // 최초 실행 — 실측 데이터·사전학습 모델 자동 적재
-fillTargetSelects();refreshStatus();
+fillMaterialSelects();fwMatWarnUpdate();fillTargetSelects();refreshStatus();
 $("f_am").dispatchEvent(new Event("input"));
 </script>
