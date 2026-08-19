@@ -767,6 +767,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-binderrank #rbv-binderrank{display:block}
 #rb-real.mode-chain #rbv-chain{display:block}
 #rb-real.mode-mech #rbv-mech{display:block}
+#rb-real.mode-screen #rbv-screen{display:block}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -1157,6 +1158,93 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   </div>
 </div>
 </div>
+
+<div id="rbv-screen" class="rbv">
+  <h1>배치 스크리닝</h1>
+  <p class="rb-note">바인더 후보 목록(CSV·SMILES)을 한 번에 등록하면 깔때기(빠름 → 표준 → 정밀) 방식으로
+    자동 DFT 계산하고, 활물질 구동 전위 대비 <b>적합 / 조건부 / 부적합</b>을 판정해 순위표로 돌려줍니다.
+    단건 계산은 배치보다 항상 먼저 처리되므로 캠페인이 돌아도 일상 사용에 지장이 없습니다.</p>
+
+  <div class="card">
+    <div class="card-head"><h2>캠페인</h2>
+      <div class="toolbar">
+        <button class="btn" id="scr-refresh" type="button">새로고침</button>
+        <button class="btn primary" id="scr-new-btn" type="button">+ 새 캠페인</button>
+      </div></div>
+    <div id="scr-campaign-list" class="empty small">캠페인이 없습니다.</div>
+  </div>
+
+  <div class="card" id="scr-wizard" style="display:none">
+    <div class="card-head"><h2>새 캠페인</h2>
+      <button class="btn ghost" id="scr-wizard-close" type="button">닫기</button></div>
+
+    <h3 style="font-size:13px;color:var(--accent)">1. 후보 목록</h3>
+    <p class="muted small" style="margin:4px 0 8px">한 줄에 하나 — <span class="mono">이름,SMILES</span> (CSV)
+      또는 <span class="mono">SMILES</span> 만. 헤더 행·중복 구조는 자동 처리됩니다.
+      파일(.csv/.txt/.smi)을 불러올 수도 있습니다.</p>
+    <textarea class="input" id="scr-cands" rows="8" style="width:100%;font-family:var(--mono,monospace)"
+      placeholder="VDF,C=C(F)F&#10;AA,C=CC(=O)O&#10;C=C(C)C(=O)OC"></textarea>
+    <div class="toolbar" style="margin-top:8px">
+      <input type="file" id="scr-file" accept=".csv,.txt,.smi" class="small">
+      <label class="small">구조
+        <select class="input" id="scr-structure">
+          <option>모노머</option><option>2량체</option><option>3량체</option>
+        </select></label>
+      <button class="btn primary" id="scr-parse-btn" type="button">목록 검증</button>
+      <span class="muted small" id="scr-parse-count"></span>
+    </div>
+    <div id="scr-parse-out"></div>
+
+    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">2. 판정 기준 · 환경</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
+      <span class="small">대상 활물질</span><span id="scr-electrodes"></span>
+      <label class="small">안정성 마진
+        <input class="input" id="scr-margin" type="number" value="0.3" min="0" max="2" step="0.05"
+          style="width:70px;padding:4px 8px"> V</label>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
+      <label class="small">용매 <select class="input" id="scr-solvent"></select></label>
+      <label class="small">온도 <input class="input" id="scr-temp" type="number" value="298.15" step="1"
+        style="width:80px;padding:4px 8px"> K</label>
+      <label class="small">기준 전극 <select class="input" id="scr-ref"></select></label>
+      <label class="small">범함수 <select class="input" id="scr-func"></select></label>
+    </div>
+
+    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">3. 깔때기 단계</h3>
+    <p class="muted small" style="margin:4px 0 8px">싼 계산으로 다수를 거르고, 비싼 계산은 통과한 소수에만 씁니다.
+      각 단계의 «통과 수»는 안정성 여유 상위 N개가 다음 단계로 진출한다는 뜻입니다.</p>
+    <div id="scr-stages">
+      <label class="compare-check small"><input type="checkbox" id="scr-st1" checked> 1차 — 빠름 (사전 선별)
+        · 통과 <input class="input" id="scr-keep1" type="number" value="20" min="1"
+          style="width:64px;padding:3px 6px">개</label><br>
+      <label class="compare-check small"><input type="checkbox" id="scr-st2" checked> 2차 — 표준 (연구용)
+        · 통과 <input class="input" id="scr-keep2" type="number" value="5" min="1"
+          style="width:64px;padding:3px 6px">개</label><br>
+      <label class="compare-check small"><input type="checkbox" id="scr-st3"> 3차 — 정밀 (최종 확인)</label>
+    </div>
+
+    <div class="toolbar" style="margin-top:14px">
+      <input class="input grow" id="scr-name" placeholder="캠페인 이름 (예: NCM811 바인더 1차)">
+      <button class="btn primary" id="scr-submit" type="button">캠페인 시작</button>
+    </div>
+    <p class="muted small" id="scr-estimate" style="margin:6px 0 0"></p>
+    <div class="form-error" id="scr-error"></div>
+  </div>
+
+  <div class="card" id="scr-detail" style="display:none">
+    <div class="card-head"><h2 id="scr-detail-title">캠페인 상세</h2>
+      <div class="toolbar">
+        <button class="btn" id="scr-pause" type="button">일시정지</button>
+        <button class="btn" id="scr-resume" type="button">재개</button>
+        <button class="btn" id="scr-cancel" type="button">취소</button>
+        <button class="btn" id="scr-export-csv" type="button">판정표 CSV</button>
+        <button class="btn" id="scr-export-json" type="button">JSON</button>
+        <button class="btn" id="scr-delete" type="button">삭제</button>
+        <button class="btn ghost" id="scr-detail-close" type="button">닫기</button>
+      </div></div>
+    <div id="scr-detail-body"></div>
+  </div>
+</div>
 </section>
 <script src="/static/app.js"></script>
 <script>
@@ -1171,7 +1259,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       {label: "화학물질 조회", mode: "lookup"},
       {label: "물질 보관함", proxy: "물질 보관함"},
       {label: "용매 라이브러리", proxy: "용매 라이브러리"}]},
-    {group: "계산", items: [{label: "DFT 계산", mode: "calc"}]},
+    {group: "계산", items: [
+      {label: "DFT 계산", mode: "calc"},
+      {label: "배치 스크리닝", mode: "screen"}]},
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
       {label: "물질 비교", mode: "compare"}]},
@@ -1202,7 +1292,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.scrollTop = 0;
     setActive(label);
     real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
-      "mode-binderrank", "mode-chain", "mode-mech");
+      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1213,6 +1303,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "binderrank" && window.rbRenderBinderRank) try { window.rbRenderBinderRank(); } catch (e) {}
     if (mode === "chain" && window.rbRenderChain) try { window.rbRenderChain(); } catch (e) {}
     if (mode === "mech" && window.rbRenderMech) try { window.rbRenderMech(); } catch (e) {}
+    if (mode === "screen" && window.rbRenderScreen) try { window.rbRenderScreen(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };

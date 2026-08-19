@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer
 from . import lookup as lookup_mod
-from . import presets, store, worker
+from . import presets, screening, store, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
 MAX_ATOMS = int(os.environ.get("RHOBENCH_MAX_ATOMS", "60"))
@@ -32,6 +32,12 @@ SESSION_COOKIE = "rb_session"
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 app = FastAPI(title="RhoBench DFT Workbench", version="1.0")
+
+
+@app.on_event("startup")
+def _resume_campaigns():
+    """서버 재시작 시 진행 중이던 배치 스크리닝 캠페인을 이어서 진행한다."""
+    screening.ensure_started()
 
 
 class ExpertSettings(BaseModel):
@@ -400,6 +406,194 @@ class PfasCheckRequest(BaseModel):
 def binder_pfas(req: PfasCheckRequest, _: bool = Depends(require_login)):
     """구조만으로 PFAS 해당 여부를 즉시 판정 (DFT 계산 불필요)."""
     return binder.pfas_check(req.smiles)
+
+
+class ScreeningParseRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2_000_000)
+    structure: str = "모노머"
+
+
+class ScreeningCandidate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    smiles: str = Field(min_length=1, max_length=300)
+
+
+class ScreeningStage(BaseModel):
+    accuracy: str
+    keep: Optional[int] = Field(None, ge=1, le=10_000)
+
+
+class ScreeningCampaignRequest(BaseModel):
+    name: str = Field("", max_length=100)
+    candidates: list[ScreeningCandidate] = Field(min_length=1)
+    electrodes: list[str] = Field(min_length=1, max_length=5)
+    marginV: float = Field(0.3, ge=0.0, le=2.0)
+    stages: list[ScreeningStage] = Field(min_length=1, max_length=3)
+    settings: JobSettings = JobSettings()
+
+
+@app.get("/api/screening/meta")
+def screening_meta(_: bool = Depends(require_login)):
+    """배치 스크리닝 화면 구성용 — 전극·프리셋·한도·추정 단가."""
+    return {"electrodes": esw.ELECTRODE_WINDOWS,
+            "accuracy": {k: v["desc"] for k, v in presets.ACCURACY.items()},
+            "estimate_s": screening.ESTIMATE_S,
+            "max_candidates": screening.MAX_CANDIDATES,
+            "batch_parallel": screening.BATCH_PARALLEL,
+            "max_atoms": MAX_ATOMS,
+            "default_margin_v": 0.3,
+            "purpose": screening.SCREEN_PURPOSE,
+            "thermo_note": screening.THERMO_NOTE}
+
+
+@app.post("/api/screening/parse")
+def screening_parse(req: ScreeningParseRequest, _: bool = Depends(require_login)):
+    """후보 목록 텍스트(CSV·SMILES 줄 목록)를 검증한다 — 제출 전 확인용."""
+    if req.structure not in ("모노머", "2량체", "3량체"):
+        raise HTTPException(400, f"알 수 없는 구조: {req.structure}")
+    parsed = screening.parse_candidates(req.text, structure=req.structure,
+                                        max_atoms=MAX_ATOMS)
+    if parsed["n_ok"] > screening.MAX_CANDIDATES:
+        parsed["warning"] = (f"유효 후보 {parsed['n_ok']}개 — 캠페인 상한 "
+                             f"{screening.MAX_CANDIDATES}개를 초과합니다. 나눠서 제출하세요.")
+    return parsed
+
+
+@app.post("/api/screening/campaigns")
+def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_login)):
+    for e in req.electrodes:
+        if e not in esw.ELECTRODE_BY_KEY:
+            raise HTTPException(400, f"알 수 없는 전극: {e}")
+    for st in req.stages:
+        if st.accuracy not in presets.ACCURACY:
+            raise HTTPException(400, f"알 수 없는 정확도 프리셋: {st.accuracy}")
+    if len(req.candidates) > screening.MAX_CANDIDATES:
+        raise HTTPException(400, f"후보는 캠페인당 {screening.MAX_CANDIDATES}개까지입니다 "
+                                 f"(요청 {len(req.candidates)}개).")
+    n_running = sum(1 for c in screening.list_campaigns()
+                    if c["status"] in ("RUNNING", "PAUSED"))
+    if n_running >= 1:
+        raise HTTPException(400, "이미 진행 중(또는 일시정지)인 캠페인이 있습니다 — "
+                                 "완료·취소 후 시작하세요 (서버 자원 보호).")
+
+    settings = req.settings.model_dump()
+    if settings["envType"] == "진공·기체":
+        settings["solventId"] = None
+    if settings["solventId"] and settings["solventId"] not in presets.SOLVENTS_BY_ID:
+        raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
+
+    # 후보를 서버에서 다시 검증한다 — 파싱 화면을 거치지 않은 API 호출 대비
+    validated = []
+    for c in req.candidates:
+        row = screening.parse_candidates(
+            f"{c.name},{c.smiles}", structure=settings.get("structure", "모노머"),
+            max_atoms=MAX_ATOMS)["rows"]
+        if not row or not row[0]["ok"]:
+            err = row[0]["error"] if row else "해석 실패"
+            raise HTTPException(400, f"{c.name}: {err}")
+        validated.append(row[0])
+
+    camp = screening.create_campaign(
+        name=req.name, candidates=validated, electrodes=req.electrodes,
+        margin_v=req.marginV, stages=[st.model_dump() for st in req.stages],
+        settings=settings)
+    return {"campaign": screening.campaign_summary(camp),
+            "estimate": screening.estimate(len(validated),
+                                           [st.model_dump() for st in req.stages])}
+
+
+@app.get("/api/screening/campaigns")
+def screening_list(_: bool = Depends(require_login)):
+    return {"campaigns": [screening.campaign_summary(c)
+                          for c in screening.list_campaigns()]}
+
+
+def _campaign_or_404(cid: str) -> dict:
+    camp = screening.get_campaign(cid)
+    if camp is None:
+        raise HTTPException(404, "캠페인을 찾을 수 없습니다.")
+    return camp
+
+
+@app.get("/api/screening/campaigns/{cid}")
+def screening_detail(cid: str, _: bool = Depends(require_login)):
+    return screening.campaign_view(_campaign_or_404(cid))
+
+
+@app.post("/api/screening/campaigns/{cid}/pause")
+def screening_pause(cid: str, _: bool = Depends(require_login)):
+    _campaign_or_404(cid)
+    if not screening.set_status(cid, "PAUSED"):
+        raise HTTPException(400, "일시정지할 수 없는 상태입니다.")
+    return {"ok": True}
+
+
+@app.post("/api/screening/campaigns/{cid}/resume")
+def screening_resume(cid: str, _: bool = Depends(require_login)):
+    _campaign_or_404(cid)
+    if not screening.set_status(cid, "RUNNING"):
+        raise HTTPException(400, "재개할 수 없는 상태입니다.")
+    return {"ok": True}
+
+
+@app.post("/api/screening/campaigns/{cid}/cancel")
+def screening_cancel(cid: str, _: bool = Depends(require_login)):
+    _campaign_or_404(cid)
+    if not screening.set_status(cid, "CANCELLED"):
+        raise HTTPException(400, "취소할 수 없는 상태입니다.")
+    return {"ok": True}
+
+
+@app.delete("/api/screening/campaigns/{cid}")
+def screening_delete(cid: str, _: bool = Depends(require_login)):
+    _campaign_or_404(cid)
+    if not screening.delete_campaign(cid):
+        raise HTTPException(400, "진행 중인 캠페인은 먼저 취소해야 삭제할 수 있습니다.")
+    return {"ok": True}
+
+
+@app.get("/api/screening/campaigns/{cid}/export")
+def screening_export(cid: str, format: str = "csv",
+                     _: bool = Depends(require_login)):
+    """판정표 내보내기 — 계산 조건이 함께 기록되어 재현 가능하다."""
+    view = screening.campaign_view(_campaign_or_404(cid))
+    if format == "json":
+        return JSONResponse(
+            content={"exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"), **view},
+            headers={"Content-Disposition":
+                     f'attachment; filename="{cid}_screening.json"'})
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    elec = view["electrodes"]
+    head = ["rank", "name", "smiles", "grade", "provisional",
+            "worst_margin_v", "reduction_v", "oxidation_v"]
+    head += [f"margin_v[{e}]" for e in elec] + [f"grade[{e}]" for e in elec]
+    head += ["state", "error", "job_ids",
+             "campaign", "stages", "margin_setting_v", "solvent", "temperature_k",
+             "functional", "reference_electrode"]
+    writer.writerow(head)
+    s = view["settings"]
+    const = [view["name"], " → ".join(st["accuracy"] for st in view["stages"]),
+             view["margin_v"], s.get("solventId") or "vacuum", s.get("temperature"),
+             (s.get("expert") or {}).get("functional"), s.get("referenceElectrode")]
+    for c in sorted(view["candidates"],
+                    key=lambda x: (x.get("rank") is None, x.get("rank") or 0)):
+        v = c.get("verdict") or {}
+        per = {p["electrode"]: p for p in v.get("per_electrode", [])}
+        writer.writerow(
+            [c.get("rank", ""), c["name"], c["smiles"], v.get("grade", "판정 불가"),
+             "예" if c.get("provisional") else "",
+             v.get("worst_margin_v", ""), v.get("reduction_v", ""),
+             v.get("oxidation_v", "")]
+            + [per.get(e, {}).get("margin_v", "") for e in elec]
+            + [per.get(e, {}).get("grade", "") for e in elec]
+            + [c["state"], c.get("detail") or "",
+               " ".join(c["jobs"].values())] + const)
+    return Response(
+        content="﻿" + buf.getvalue(),  # BOM - Excel 한글 깨짐 방지
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{cid}_screening.csv"'})
 
 
 class LookupRequest(BaseModel):

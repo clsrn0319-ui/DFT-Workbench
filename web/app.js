@@ -2905,3 +2905,388 @@ window.rbEswDiagClose = function () {
   const box = document.getElementById("esw-diag");
   if (box) box.innerHTML = "";
 };
+
+/* ---------- 배치 스크리닝 (기획서 05 구현) ---------- */
+let SCR_META = null;
+let SCR_PARSED = null;      // 마지막 검증 결과
+let SCR_DETAIL_ID = null;   // 열려 있는 캠페인 id
+let SCR_TIMER = null;
+let SCR_WIRED = false;
+
+const SCR_GRADE_BADGE = {
+  "적합": "verdict-ok", "조건부": "verdict-mid",
+  "부적합": "verdict-no", "판정 불가": "failed",
+};
+const SCR_STATUS_LABEL = {
+  RUNNING: "진행 중", PAUSED: "일시정지", DONE: "완료", CANCELLED: "취소됨",
+};
+
+async function scrFetch(url, opts) {
+  const res = await fetch(url, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `요청 실패 (${res.status})`);
+  return body;
+}
+
+async function scrMeta() {
+  if (!SCR_META) SCR_META = await scrFetch("/api/screening/meta");
+  return SCR_META;
+}
+
+function scrEta(s) {
+  if (s == null) return "";
+  if (s < 90) return `${Math.round(s)}초`;
+  if (s < 5400) return `${Math.round(s / 60)}분`;
+  return `${(s / 3600).toFixed(1)}시간`;
+}
+
+/* ----- 캠페인 목록 ----- */
+async function scrRenderList() {
+  const box = $("scr-campaign-list");
+  if (!box) return;
+  let campaigns;
+  try {
+    ({campaigns} = await scrFetch("/api/screening/campaigns"));
+  } catch (e) { box.textContent = e.message; return; }
+  if (!campaigns.length) {
+    box.className = "empty small";
+    box.textContent = "캠페인이 없습니다 — «+ 새 캠페인»으로 시작하세요.";
+    return;
+  }
+  box.className = "";
+  box.innerHTML = campaigns.map(c => {
+    const pct = c.n_alive ? Math.round(100 * c.n_done_stage / c.n_alive) : 0;
+    const badge = c.status === "RUNNING" ? "running" : c.status === "DONE" ? "published"
+      : c.status === "PAUSED" ? "queued" : "failed";
+    return `<div class="job-row" style="cursor:pointer" data-scr-open="${esc(c.id)}">
+      <div class="job-main">
+        <div><b>${esc(c.name)}</b> <span class="mono small muted">${esc(c.id)}</span></div>
+        <div class="small muted">후보 ${c.n_candidates}개 · ${c.stages.map(esc).join(" → ")}
+          · ${(c.electrodes || []).map(esc).join(", ")} · 마진 ${c.margin_v} V</div>
+        ${["RUNNING", "PAUSED"].includes(c.status)
+          ? `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+             <div class="small muted">${c.stageIndex + 1}단계(${esc(c.stages[c.stageIndex] || "")})
+               ${c.n_done_stage}/${c.n_alive} 완료${c.n_failed ? ` · 실패 ${c.n_failed}` : ""}
+               ${c.autoPaused ? " · <b>실패율 초과로 자동 일시정지</b>" : ""}</div>` : ""}
+      </div>
+      <span class="badge ${badge}">${SCR_STATUS_LABEL[c.status] || esc(c.status)}</span>
+    </div>`;
+  }).join("");
+  box.querySelectorAll("[data-scr-open]").forEach(el => el.addEventListener("click", () => {
+    SCR_DETAIL_ID = el.dataset.scrOpen;
+    $("scr-wizard").style.display = "none";
+    scrRenderDetail();
+  }));
+}
+
+/* ----- 새 캠페인 마법사 ----- */
+async function scrOpenWizard() {
+  const meta = await scrMeta();
+  $("scr-wizard").style.display = "";
+  $("scr-detail").style.display = "none";
+  SCR_DETAIL_ID = null;
+  // 전극 체크박스 — ESW 진단과 같은 구동 범위를 쓴다
+  const eBox = $("scr-electrodes");
+  if (!eBox.childElementCount) {
+    eBox.innerHTML = meta.electrodes.map(e =>
+      `<label class="compare-check small" style="margin-right:10px">
+        <input type="checkbox" data-scr-elec="${esc(e.key)}"
+          ${["graphite", "ncm811"].includes(e.key) ? "checked" : ""}>
+        ${esc(e.label)} <span class="muted">(${e.low.toFixed(2)}~${e.high.toFixed(2)} V)</span></label>`
+    ).join("");
+    eBox.querySelectorAll("input").forEach(i => i.addEventListener("change", scrEstimate));
+  }
+  const sSel = $("scr-solvent");
+  if (!sSel.options.length) {
+    sSel.add(new Option("(용매 없음 — 진공·기체)", ""));
+    for (const s of PRESETS.solvents) sSel.add(new Option(`${s.abbr} — ${s.name}`, s.id));
+    sSel.value = PRESETS.defaults.solventId;
+  }
+  const rSel = $("scr-ref");
+  if (!rSel.options.length) {
+    for (const r of PRESETS.referenceElectrodes) rSel.add(new Option(r, r));
+    rSel.value = "Li/Li+";
+  }
+  const fSel = $("scr-func");
+  if (!fSel.options.length) {
+    for (const f of PRESETS.functionals) fSel.add(new Option(f, f));
+    fSel.value = PRESETS.defaults.expert.functional;
+  }
+  scrEstimate();
+}
+
+function scrStages() {
+  const stages = [];
+  if ($("scr-st1").checked)
+    stages.push({accuracy: "빠름", keep: Math.max(1, +$("scr-keep1").value || 20)});
+  if ($("scr-st2").checked)
+    stages.push({accuracy: "표준", keep: Math.max(1, +$("scr-keep2").value || 5)});
+  if ($("scr-st3").checked) stages.push({accuracy: "정밀"});
+  if (stages.length) delete stages[stages.length - 1].keep;  // 마지막 단계는 전원 판정
+  return stages;
+}
+
+async function scrEstimate() {
+  const out = $("scr-estimate");
+  if (!out) return;
+  const meta = await scrMeta();
+  const n = SCR_PARSED ? SCR_PARSED.rows.filter(r => r.ok).length : 0;
+  const stages = scrStages();
+  if (!n || !stages.length) {
+    out.textContent = n ? "깔때기 단계를 하나 이상 선택하세요."
+      : "후보 목록을 검증하면 예상 계산량이 여기 표시됩니다.";
+    return;
+  }
+  let remain = n, total = 0;
+  const parts = [];
+  for (const st of stages) {
+    const sec = remain * (meta.estimate_s[st.accuracy] || 1200) / meta.batch_parallel;
+    parts.push(`${st.accuracy} ${remain}개(≈${scrEta(sec)})`);
+    total += sec;
+    if (st.keep) remain = Math.min(remain, st.keep);
+  }
+  out.innerHTML = `예상 계산량 — ${parts.join(" → ")} ⇒ <b>총 ≈${scrEta(total)}</b>
+    <span class="muted">(워커 ${meta.batch_parallel}개 기준 어림값 — 분자 크기에 따라 달라집니다)</span>`;
+}
+
+async function scrParse() {
+  const err = $("scr-error");
+  err.textContent = "";
+  const text = $("scr-cands").value.trim();
+  if (!text) { err.textContent = "후보 목록을 입력하거나 파일을 불러오세요."; return; }
+  const btn = $("scr-parse-btn");
+  btn.disabled = true;
+  try {
+    SCR_PARSED = await scrFetch("/api/screening/parse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text, structure: $("scr-structure").value}),
+    });
+    const {rows, n_ok, n_error, warning} = SCR_PARSED;
+    $("scr-parse-count").textContent = `유효 ${n_ok}개 · 제외 ${n_error}개`;
+    const bad = rows.filter(r => !r.ok);
+    $("scr-parse-out").innerHTML = `
+      ${warning ? `<p class="verdict-no small">${esc(warning)}</p>` : ""}
+      ${bad.length ? `<details class="small" style="margin-top:6px" open>
+        <summary>제외된 행 ${bad.length}개 — 사유</summary>
+        <div class="scroll-x"><table class="table" style="min-width:420px">
+          <tr><th>행</th><th>입력</th><th>사유</th></tr>
+          ${bad.map(r => `<tr><td>${r.line}</td><td class="mono">${esc(r.smiles || r.name)}</td>
+            <td>${esc(r.error)}</td></tr>`).join("")}
+        </table></div></details>` : ""}
+      ${n_ok ? `<details class="small" style="margin-top:6px">
+        <summary>등록될 후보 ${n_ok}개</summary>
+        <div class="scroll-x"><table class="table" style="min-width:420px">
+          <tr><th>이름</th><th>SMILES</th><th>계산 구조</th><th>원자</th></tr>
+          ${rows.filter(r => r.ok).map(r => `<tr><td>${esc(r.name)}</td>
+            <td class="mono">${esc(r.smiles)}</td>
+            <td class="mono muted">${esc(r.calc_smiles)}</td><td>${r.atoms}</td></tr>`).join("")}
+        </table></div></details>` : ""}`;
+    scrEstimate();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally { btn.disabled = false; }
+}
+
+async function scrSubmit() {
+  const err = $("scr-error");
+  err.textContent = "";
+  if (!SCR_PARSED || !SCR_PARSED.rows.some(r => r.ok)) {
+    err.textContent = "먼저 «목록 검증»으로 후보를 확정하세요."; return;
+  }
+  const electrodes = [...document.querySelectorAll("[data-scr-elec]:checked")]
+    .map(i => i.dataset.scrElec);
+  if (!electrodes.length) { err.textContent = "대상 활물질을 하나 이상 선택하세요."; return; }
+  const stages = scrStages();
+  if (!stages.length) { err.textContent = "깔때기 단계를 하나 이상 선택하세요."; return; }
+  const solventId = $("scr-solvent").value || null;
+  const payload = {
+    name: $("scr-name").value.trim(),
+    candidates: SCR_PARSED.rows.filter(r => r.ok)
+      .map(r => ({name: r.name, smiles: r.smiles})),
+    electrodes,
+    marginV: Math.max(0, +$("scr-margin").value || 0.3),
+    stages,
+    settings: {
+      envType: solventId ? "사용자 정의" : "진공·기체",
+      solventId,
+      temperature: +$("scr-temp").value || 298.15,
+      structure: $("scr-structure").value,
+      referenceElectrode: $("scr-ref").value,
+      expert: {...PRESETS.defaults.expert, functional: $("scr-func").value},
+    },
+  };
+  const btn = $("scr-submit");
+  btn.disabled = true;
+  try {
+    const {campaign} = await scrFetch("/api/screening/campaigns", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    $("scr-wizard").style.display = "none";
+    SCR_DETAIL_ID = campaign.id;
+    await scrRenderList();
+    await scrRenderDetail();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally { btn.disabled = false; }
+}
+
+/* ----- 캠페인 상세 (대시보드 + 판정표) ----- */
+async function scrRenderDetail() {
+  if (!SCR_DETAIL_ID) return;
+  const card = $("scr-detail");
+  let v;
+  try {
+    v = await scrFetch(`/api/screening/campaigns/${SCR_DETAIL_ID}`);
+  } catch (e) {
+    card.style.display = "";
+    $("scr-detail-body").innerHTML = `<p class="verdict-no small">${esc(e.message)}</p>`;
+    return;
+  }
+  card.style.display = "";
+  $("scr-detail-title").textContent =
+    `${v.name} — ${SCR_STATUS_LABEL[v.status] || v.status}`;
+  const running = ["RUNNING", "PAUSED"].includes(v.status);
+  $("scr-pause").style.display = v.status === "RUNNING" ? "" : "none";
+  $("scr-resume").style.display = v.status === "PAUSED" ? "" : "none";
+  $("scr-cancel").style.display = running ? "" : "none";
+  $("scr-delete").style.display = running ? "none" : "";
+
+  const stageBars = v.stages.map((st, i) => {
+    const denom = st.n_entered || v.counts.alive || 1;
+    const pct = Math.min(100, Math.round(100 * st.n_done / Math.max(1, denom)));
+    return `<div style="margin:4px 0">
+      <span class="small">${i + 1}차 — ${esc(st.accuracy)}
+        <span class="muted">(${esc(st.state)}${st.keep ? ` · 통과 ${st.keep}` : ""})</span></span>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <span class="small muted">${st.n_done}/${denom} 완료</span></div>`;
+  }).join("");
+
+  const c = v.counts;
+  const summary = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">
+    <span class="badge verdict-ok">적합 ${c.fit}</span>
+    <span class="badge verdict-mid">조건부 ${c.conditional}</span>
+    <span class="badge verdict-no">부적합 ${c.unfit}</span>
+    <span class="badge failed">판정 불가 ${c.failed}</span>
+    <span class="badge queued">탈락(깔때기) ${c.cut}</span>
+    <span class="muted small" style="align-self:center">총 ${c.total}개
+      ${v.eta_s != null ? ` · 남은 시간 ≈${scrEta(v.eta_s)}` : ""}</span></div>`;
+
+  const elecs = v.electrodes;
+  const rows = [...v.candidates].sort((a, b) =>
+    (a.rank == null) - (b.rank == null) || (a.rank || 0) - (b.rank || 0));
+  const tbl = `<div class="scroll-x"><table class="table" style="min-width:760px">
+    <tr><th>순위</th><th>후보</th><th>상태</th><th>판정</th>
+      ${elecs.map(e => `<th class="small">${esc(e)}<br>여유(V)</th>`).join("")}
+      <th>산화(V)</th><th>환원(V)</th><th></th></tr>
+    ${rows.map(cd => {
+      const vd = cd.verdict || {};
+      const per = {};
+      (vd.per_electrode || []).forEach(p => per[p.electrode] = p);
+      const grade = vd.grade || (cd.failed ? "판정 불가" : "—");
+      const lastJob = Object.values(cd.jobs || {}).pop();
+      return `<tr>
+        <td>${cd.rank || ""}</td>
+        <td><b>${esc(cd.name)}</b><br><span class="mono small muted">${esc(cd.smiles)}</span></td>
+        <td class="small">${esc(cd.state)}${cd.progress != null && cd.state === "계산 중"
+            ? ` ${cd.progress}%` : ""}${cd.detail
+            ? `<br><span class="muted">${esc(cd.detail)}</span>` : ""}</td>
+        <td><span class="badge ${SCR_GRADE_BADGE[grade] || "queued"}">${esc(grade)}</span>
+          ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}</td>
+        ${elecs.map(e => {
+          const p = per[e];
+          return `<td class="small ${p ? (p.grade === "적합" ? "verdict-ok"
+            : p.grade === "조건부" ? "verdict-mid" : "verdict-no") : "muted"}">
+            ${p ? p.margin_v.toFixed(2) : "—"}</td>`;
+        }).join("")}
+        <td class="small">${vd.oxidation_v != null ? (+vd.oxidation_v).toFixed(2) : "—"}</td>
+        <td class="small">${vd.reduction_v != null ? (+vd.reduction_v).toFixed(2) : "—"}</td>
+        <td>${lastJob ? `<button class="btn small" data-scr-job="${esc(lastJob)}"
+          type="button">상세</button>` : ""}</td></tr>`;
+    }).join("")}
+  </table></div>`;
+
+  $("scr-detail-body").innerHTML = `
+    ${summary}
+    <h3 style="font-size:13px;color:var(--accent)">단계 진행</h3>${stageBars}
+    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">판정표
+      <span class="muted small">— 여유(V) = 구동 범위와 ESW 사이의 최소 간격.
+      마진 ${v.margin_v} V 이상이면 적합</span></h3>
+    ${tbl}
+    <p class="rb-note small" style="margin-top:10px">${esc(v.thermo_note)}</p>
+    <details class="small" style="margin-top:8px"><summary class="muted">캠페인 로그</summary>
+      <ul class="log-list">${(v.logs || []).slice(-40).map(l => `<li>${esc(l)}</li>`).join("")}</ul>
+    </details>`;
+
+  $("scr-detail-body").querySelectorAll("[data-scr-job]").forEach(b =>
+    b.addEventListener("click", async () => {
+      try {
+        const job = await scrFetch(`/api/jobs/${b.dataset.scrJob}`);
+        if (window.rbOpenResults) window.rbOpenResults();
+        if (job.status === "PUBLISHED") showResult(job);
+      } catch (e) { /* 작업이 지워진 경우 — 무시 */ }
+    }));
+}
+
+async function scrAction(action) {
+  if (!SCR_DETAIL_ID) return;
+  try {
+    await scrFetch(`/api/screening/campaigns/${SCR_DETAIL_ID}/${action}`, {method: "POST"});
+  } catch (e) { alert(e.message); }
+  await scrRenderList();
+  await scrRenderDetail();
+}
+
+function scrWire() {
+  if (SCR_WIRED) return;
+  SCR_WIRED = true;
+  $("scr-new-btn").addEventListener("click", scrOpenWizard);
+  $("scr-wizard-close").addEventListener("click", () => $("scr-wizard").style.display = "none");
+  $("scr-refresh").addEventListener("click", () => { scrRenderList(); scrRenderDetail(); });
+  $("scr-parse-btn").addEventListener("click", scrParse);
+  $("scr-submit").addEventListener("click", scrSubmit);
+  $("scr-file").addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { $("scr-cands").value = reader.result; scrParse(); };
+    reader.readAsText(f);
+  });
+  ["scr-st1", "scr-st2", "scr-st3", "scr-keep1", "scr-keep2"].forEach(id =>
+    $(id).addEventListener("change", scrEstimate));
+  $("scr-detail-close").addEventListener("click", () => {
+    SCR_DETAIL_ID = null;
+    $("scr-detail").style.display = "none";
+  });
+  $("scr-pause").addEventListener("click", () => scrAction("pause"));
+  $("scr-resume").addEventListener("click", () => scrAction("resume"));
+  $("scr-cancel").addEventListener("click", () => {
+    if (confirm("캠페인을 취소할까요? 진행 중인 계산도 함께 취소됩니다.")) scrAction("cancel");
+  });
+  $("scr-delete").addEventListener("click", async () => {
+    if (!confirm("캠페인 기록을 삭제할까요? (완료된 개별 계산 결과는 남습니다)")) return;
+    try {
+      await scrFetch(`/api/screening/campaigns/${SCR_DETAIL_ID}`, {method: "DELETE"});
+      SCR_DETAIL_ID = null;
+      $("scr-detail").style.display = "none";
+      await scrRenderList();
+    } catch (e) { alert(e.message); }
+  });
+  $("scr-export-csv").addEventListener("click", () =>
+    window.open(`/api/screening/campaigns/${SCR_DETAIL_ID}/export?format=csv`, "_blank"));
+  $("scr-export-json").addEventListener("click", () =>
+    window.open(`/api/screening/campaigns/${SCR_DETAIL_ID}/export?format=json`, "_blank"));
+  // 진행 상황 폴링 — 화면이 열려 있는 동안만
+  SCR_TIMER = setInterval(() => {
+    const real = document.getElementById("rb-real");
+    if (!real || !real.classList.contains("mode-screen")) return;
+    scrRenderList();
+    if (SCR_DETAIL_ID && $("scr-detail").style.display !== "none") scrRenderDetail();
+  }, 4000);
+}
+
+window.rbRenderScreen = function () {
+  scrWire();
+  scrRenderList();
+  if (SCR_DETAIL_ID) scrRenderDetail();
+};
