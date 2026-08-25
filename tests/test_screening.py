@@ -293,3 +293,35 @@ def test_cut_buffer_not_applied_to_adiabatic(no_worker, monkeypatch):
     screening._advance(camp)
     alive = {c["name"] for c in camp["candidates"] if c["alive"]}
     assert alive == {"m1"}     # 보정 미적용 → 여유 0.45 > 0.40
+
+
+# ---------------------------------------------------------------- 배치 결과 슬림화
+def test_slim_removes_density_cloud(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "SLIM_BATCH", True)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    screening._advance(camp)
+    jid = _stage_jobs(camp, 0)["m0"]
+    store.update_job(jid, {"status": "PUBLISHED", "result": {
+        "descriptors": _desc(-1.0, 5.0),
+        "density_cloud": [[0.0, 0.0, 0.0]] * 100,
+        "structure_xyz": "3\n\nO 0 0 0\n", "notes": []}})
+    screening._advance(camp)
+    job = store.get_job(jid)
+    assert job["result"]["density_cloud"] is None
+    assert job["result"]["slimmed"] is True
+    assert job["result"]["structure_xyz"]                 # 3D 구조는 유지
+    assert any("용량 절약" in n for n in job["result"]["notes"])
+    assert camp["status"] == "DONE"                       # 판정에는 영향 없음
+
+
+def test_slim_disabled_keeps_cloud(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "SLIM_BATCH", False)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    screening._advance(camp)
+    jid = _stage_jobs(camp, 0)["m0"]
+    store.update_job(jid, {"status": "PUBLISHED", "result": {
+        "descriptors": _desc(-1.0, 5.0), "density_cloud": [[0.0, 0.0, 0.0]]}})
+    screening._advance(camp)
+    assert store.get_job(jid)["result"]["density_cloud"] is not None

@@ -41,6 +41,9 @@ FAIL_PAUSE_RATIO = float(os.environ.get("RHOBENCH_BATCH_FAIL_RATIO", "0.3"))
 # 수직(빠름) 전위는 구조 완화가 빠져 EA를 과소평가 — 환원 위험을 낮잡는다.
 # 깔때기 «컷 순위»에서만 환원 전위를 이만큼 올려 보수적으로 비교한다.
 VERTICAL_RED_BUFFER = float(os.environ.get("RHOBENCH_VERTICAL_RED_BUFFER", "0.5"))
+# 배치 작업 결과 슬림화 — 전자밀도 구름 등 무거운 시각화 데이터를 지워
+# 수백 개 캠페인에서 jobs.json 크기·로딩 시간을 줄인다 ("0"으로 끄기)
+SLIM_BATCH = os.environ.get("RHOBENCH_BATCH_SLIM", "1") != "0"
 
 RESTART_ERROR = "서버 재시작으로 중단됨"
 
@@ -344,6 +347,25 @@ def _batch_active_count() -> int:
                if j.get("campaign") and j["status"] in ("QUEUED", "RUNNING"))
 
 
+def _maybe_slim(job: dict):
+    """캠페인 작업의 무거운 시각화 데이터 제거 — 판정·비교·3D 구조는 유지.
+
+    전자밀도 구름은 결과당 수천 점이라 300개 캠페인이면 jobs.json 이 수십 MB로
+    불어난다. 단건으로 다시 계산하면 언제든 다시 생성된다.
+    """
+    if not SLIM_BATCH:
+        return
+    res = job.get("result") or {}
+    if not res or res.get("slimmed") or res.get("density_cloud") is None:
+        return
+    res["density_cloud"] = None
+    res["slimmed"] = True
+    res.setdefault("notes", []).append(
+        "배치 스크리닝 용량 절약 — 전자밀도 구름을 저장하지 않았습니다 "
+        "(단건으로 다시 계산하면 표시됩니다)")
+    store.update_job(job["id"], {"result": res})
+
+
 def _cut_score(c: dict, camp: dict, stage_idx: int):
     """깔때기 컷 순위 점수 — 안정성 여유(높을수록 생존).
 
@@ -387,6 +409,7 @@ def _advance(camp: dict):
             pending.append(c)
             continue
         if job["status"] == "PUBLISHED":
+            _maybe_slim(job)
             n_done += 1
         elif job["status"] == "FAILED":
             if RESTART_ERROR in (job.get("error") or ""):
