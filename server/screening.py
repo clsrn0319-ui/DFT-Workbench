@@ -38,6 +38,9 @@ MAX_CANDIDATES = int(os.environ.get("RHOBENCH_MAX_BATCH", "500"))
 BATCH_PARALLEL = max(1, int(os.environ.get("RHOBENCH_BATCH_PARALLEL", "1")))
 # 실패 누적률이 이 값을 넘으면 캠페인을 자동 일시정지하고 관리자 확인을 유도
 FAIL_PAUSE_RATIO = float(os.environ.get("RHOBENCH_BATCH_FAIL_RATIO", "0.3"))
+# 수직(빠름) 전위는 구조 완화가 빠져 EA를 과소평가 — 환원 위험을 낮잡는다.
+# 깔때기 «컷 순위»에서만 환원 전위를 이만큼 올려 보수적으로 비교한다.
+VERTICAL_RED_BUFFER = float(os.environ.get("RHOBENCH_VERTICAL_RED_BUFFER", "0.5"))
 
 RESTART_ERROR = "서버 재시작으로 중단됨"
 
@@ -175,9 +178,12 @@ def judge(desc: dict, electrodes: list[str], margin_v: float) -> dict:
       여유 < 0            → 부적합 (구동 범위 안에서 열역학적 분해)
     """
     red, ox = _potentials(desc)
+    basis = ("ΔG 기반" if desc.get("reduction_potential_gibbs_v") is not None
+             else "단열" if desc.get("ea_adiabatic_ev") is not None
+             or desc.get("ip_adiabatic_ev") is not None else "수직")
     if red is None or ox is None:
         return {"grade": "판정 불가", "per_electrode": [], "worst_margin_v": None,
-                "reduction_v": red, "oxidation_v": ox,
+                "reduction_v": red, "oxidation_v": ox, "basis": None,
                 "note": "산화·환원 전위가 없어 판정할 수 없습니다"}
     per = []
     for key in electrodes:
@@ -194,8 +200,12 @@ def judge(desc: dict, electrodes: list[str], margin_v: float) -> dict:
         grade = "부적합"
     else:
         grade = "조건부"
+    note = None
+    if basis == "수직":
+        note = ("수직 전위 기반 — 구조 완화·열보정이 빠져 환원 위험을 낮잡을 수 "
+                "있습니다. 표준·정밀 단계 재확인을 권장합니다.")
     return {"grade": grade, "per_electrode": per, "worst_margin_v": worst,
-            "reduction_v": red, "oxidation_v": ox, "note": None}
+            "reduction_v": red, "oxidation_v": ox, "basis": basis, "note": note}
 
 
 # ---------------------------------------------------------------- 캠페인
@@ -334,14 +344,28 @@ def _batch_active_count() -> int:
                if j.get("campaign") and j["status"] in ("QUEUED", "RUNNING"))
 
 
-def _rank_score(c: dict, camp: dict, stage_idx: int):
+def _cut_score(c: dict, camp: dict, stage_idx: int):
+    """깔때기 컷 순위 점수 — 안정성 여유(높을수록 생존).
+
+    수직 전위 기반 결과(빠름 프리셋)는 EA를 과소평가해 환원 위험을 낮잡으므로,
+    컷 비교에서만 환원 전위를 VERTICAL_RED_BUFFER 만큼 올려 보수적으로 본다.
+    최종 판정(judge)에는 보정을 넣지 않는다 — 등급은 계산값 그대로 두고,
+    낙관 가능성은 basis·note 로 표시한다.
+    """
     jid = c["jobs"].get(str(stage_idx))
     job = store.get_job(jid) if jid else None
     if not job or job["status"] != "PUBLISHED" or not job.get("result"):
         return None
     desc = job["result"].get("descriptors") or {}
-    v = judge(desc, camp["electrodes"], camp["margin_v"])
-    return v["worst_margin_v"]
+    red, ox = _potentials(desc)
+    if red is None or ox is None:
+        return None
+    if (desc.get("reduction_potential_gibbs_v") is None
+            and desc.get("ea_adiabatic_ev") is None):
+        red = red + VERTICAL_RED_BUFFER
+    return min(min(esw.ELECTRODE_BY_KEY[e]["low"] - red,
+                   ox - esw.ELECTRODE_BY_KEY[e]["high"])
+               for e in camp["electrodes"])
 
 
 def _advance(camp: dict):
@@ -433,8 +457,8 @@ def _advance(camp: dict):
 
     # 깔때기 — 안정성 여유 순으로 상위 keep 만 다음 단계로
     keep = camp["stages"][stage_idx].get("keep")
-    scored = sorted(done, key=lambda c: (_rank_score(c, camp, stage_idx) is None,
-                                         -(_rank_score(c, camp, stage_idx) or -1e9)))
+    scored = sorted(done, key=lambda c: (_cut_score(c, camp, stage_idx) is None,
+                                         -(_cut_score(c, camp, stage_idx) or -1e9)))
     survivors = scored if not keep else scored[:keep]
     survivor_ids = {c["idx"] for c in survivors}
     for c in done:
@@ -445,6 +469,9 @@ def _advance(camp: dict):
     _log(camp, f"{stage_idx + 1}단계({camp['stages'][stage_idx]['accuracy']}) 완료 — "
                f"{len(done)}개 중 {len(survivors)}개가 "
                f"{stage_idx + 2}단계({camp['stages'][stage_idx + 1]['accuracy']})로 진출")
+    if camp["stages"][stage_idx]["accuracy"] == "빠름":
+        _log(camp, f"컷 순위에는 수직 전위의 낙관을 상쇄하는 환원 보수 보정 "
+                   f"+{VERTICAL_RED_BUFFER} V 를 적용했습니다")
 
 
 def _finalize(camp: dict):

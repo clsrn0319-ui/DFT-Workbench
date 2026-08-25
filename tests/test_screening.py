@@ -248,3 +248,48 @@ def test_auto_pause_on_high_failure(no_worker, monkeypatch):
         store.update_job(jid, {"status": "FAILED", "error": "SCF 미수렴"})
     screening._advance(camp)        # 전원 확정 실패 → 실패율 100% → 자동 일시정지
     assert camp["status"] == "PAUSED" and camp["autoPaused"]
+
+
+# ---------------------------------------------------------------- 수직 전위 보정
+def test_judge_basis_and_vertical_note():
+    v = screening.judge(_desc(-1.0, 5.0), ["ncm811"], 0.3)
+    assert v["basis"] == "수직" and "수직" in v["note"]
+    v2 = screening.judge({"reduction_potential_gibbs_v": -1.0,
+                          "oxidation_potential_gibbs_v": 5.0}, ["ncm811"], 0.3)
+    assert v2["basis"] == "ΔG 기반" and v2["note"] is None
+    v3 = screening.judge({**_desc(-1.0, 5.0), "ea_adiabatic_ev": 0.4}, ["ncm811"], 0.3)
+    assert v3["basis"] == "단열"
+
+
+def test_cut_buffer_flips_vertical_ranking(no_worker, monkeypatch):
+    """수직 전위 단계의 컷 순위 — 환원 쪽이 한계인 후보는 보수 보정으로 밀린다."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "VERTICAL_RED_BUFFER", 0.5)
+    camp = _make_campaign(n=2, stages=[{"accuracy": "빠름", "keep": 1},
+                                       {"accuracy": "표준"}])
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    # m0: 산화 쪽 한계 (NCM811 여유 0.40 — 보정과 무관)
+    _fake_publish(jobs["m0"], -2.0, 4.70)
+    # m1: 환원 쪽 한계 (보정 없이 0.45 로 m0 을 이기지만, +0.5 보정 후 −0.05)
+    _fake_publish(jobs["m1"], 2.55, 9.0)
+    screening._advance(camp)
+    alive = {c["name"] for c in camp["candidates"] if c["alive"]}
+    assert alive == {"m0"}
+
+
+def test_cut_buffer_not_applied_to_adiabatic(no_worker, monkeypatch):
+    """단열·ΔG 기반 결과에는 보정을 걸지 않는다."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "VERTICAL_RED_BUFFER", 0.5)
+    camp = _make_campaign(n=2, stages=[{"accuracy": "표준", "keep": 1},
+                                       {"accuracy": "정밀"}])
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    store.update_job(jobs["m0"], {"status": "PUBLISHED", "result": {"descriptors": {
+        **_desc(-2.0, 4.70), "ea_adiabatic_ev": 0.0}}})
+    store.update_job(jobs["m1"], {"status": "PUBLISHED", "result": {"descriptors": {
+        **_desc(2.55, 9.0), "ea_adiabatic_ev": 0.0}}})
+    screening._advance(camp)
+    alive = {c["name"] for c in camp["candidates"] if c["alive"]}
+    assert alive == {"m1"}     # 보정 미적용 → 여유 0.45 > 0.40

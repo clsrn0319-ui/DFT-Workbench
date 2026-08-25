@@ -3177,7 +3177,8 @@ async function scrRenderDetail() {
             ? ` ${cd.progress}%` : ""}${cd.detail
             ? `<br><span class="muted">${esc(cd.detail)}</span>` : ""}</td>
         <td><span class="badge ${SCR_GRADE_BADGE[grade] || "queued"}">${esc(grade)}</span>
-          ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}</td>
+          ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}${vd.basis === "수직"
+            ? `<span class="muted small" title="${esc(vd.note || "")}"> · 수직</span>` : ""}</td>
         ${elecs.map(e => {
           const p = per[e];
           return `<td class="small ${p ? (p.grade === "적합" ? "verdict-ok"

@@ -477,6 +477,7 @@ def screening_meta(_: bool = Depends(require_login)):
             "batch_parallel": screening.BATCH_PARALLEL,
             "max_atoms": MAX_ATOMS,
             "default_margin_v": 0.3,
+            "vertical_red_buffer": screening.VERTICAL_RED_BUFFER,
             "purpose": screening.SCREEN_PURPOSE,
             "thermo_note": screening.THERMO_NOTE}
 

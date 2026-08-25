@@ -1229,7 +1229,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
     <h3 style="font-size:13px;color:var(--accent);margin-top:16px">3. 깔때기 단계</h3>
     <p class="muted small" style="margin:4px 0 8px">싼 계산으로 다수를 거르고, 비싼 계산은 통과한 소수에만 씁니다.
-      각 단계의 «통과 수»는 안정성 여유 상위 N개가 다음 단계로 진출한다는 뜻입니다.</p>
+      각 단계의 «통과 수»는 안정성 여유 상위 N개가 다음 단계로 진출한다는 뜻입니다.
+      <b>1차(빠름)는 수직 전위 기반이라 환원 위험을 낮잡을 수 있습니다</b> — 통과 수를 넉넉히 두세요.
+      서버는 1차 컷 순위에 환원 보수 보정을 자동 적용하지만, 등급 확정은 상위 단계가 안전합니다.</p>
     <div id="scr-stages">
       <label class="compare-check small"><input type="checkbox" id="scr-st1" checked> 1차 — 빠름 (사전 선별)
         · 통과 <input class="input" id="scr-keep1" type="number" value="20" min="1"
