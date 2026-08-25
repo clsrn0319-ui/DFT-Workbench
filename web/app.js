@@ -3063,6 +3063,7 @@ async function scrParse() {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({text, structure: $("scr-structure").value}),
     });
+    SCR_3D_CHARGE = 0;   // 텍스트 목록 경로 — 3D 전하 연동 해제
     scrRenderParsed();
   } catch (e) {
     err.textContent = e.message;
@@ -3095,7 +3096,8 @@ async function scrSubmit() {
       temperature: +$("scr-temp").value || 298.15,
       structure: $("scr-structure").value,
       referenceElectrode: $("scr-ref").value,
-      expert: {...PRESETS.defaults.expert, functional: $("scr-func").value},
+      expert: {...PRESETS.defaults.expert, functional: $("scr-func").value,
+               charge: SCR_3D_CHARGE},
     },
   };
   const btn = $("scr-submit");
@@ -3287,6 +3289,7 @@ window.rbRenderScreen = function () {
 };
 
 /* ---------- 3D 구조 파일 입력 (SDF/MOL 우선 · XYZ 보조) ---------- */
+let SCR_3D_CHARGE = 0;   // XYZ 결합 추정 전하 — 캠페인 계산 전하로 연동된다
 
 // 검증 결과 표 — 텍스트 목록·3D 파일 두 경로가 공유한다
 function scrRenderParsed() {
@@ -3330,6 +3333,7 @@ async function scrParse3D(content, filename) {
       body: JSON.stringify({content, filename,
                             charge: parseInt($("scr-3d-charge").value) || 0}),
     });
+    SCR_3D_CHARGE = parsed.format === "xyz" ? (parseInt($("scr-3d-charge").value) || 0) : 0;
     // 3D 파일은 좌표가 분자별이라 올리고머 전개와 함께 쓸 수 없다
     if ($("scr-structure").value !== "모노머") {
       $("scr-structure").value = "모노머";
@@ -3391,11 +3395,16 @@ async function calcLoad3D(content, filename) {
     }
     $("custom-smiles").value = good.smiles;
     if (!$("custom-name").value.trim()) $("custom-name").value = good.name;
+    // XYZ 결합 추정에 쓴 전하를 실제 DFT 계산 전하(전문가 설정)와 일치시킨다 —
+    // 어긋나면 결합은 음이온으로 추정하고 계산은 중성으로 도는 모순이 생긴다
+    const q3d = parsed.format === "xyz" ? (parseInt($("calc-3d-charge").value) || 0) : null;
+    if (q3d !== null && $("charge")) $("charge").value = q3d;
     if (good.atoms) {
       window.CALC_GEOM = {atoms: good.atoms, source: good.source};
       $("calc-3d-rescan-wrap").style.display = "";
       info.textContent = `${good.name} — ${good.n_atoms}원자 3D 구조 로드됨. `
         + `업로드 좌표를 초기 구조로 사용합니다 (conformer 탐색 생략).`
+        + (q3d ? ` ※ 전문가 설정의 전하를 ${q3d > 0 ? "+" + q3d : q3d}로 맞췄습니다.` : "")
         + (good.note ? ` ※ ${good.note}` : "")
         + (parsed.molecules.length > 1
            ? ` ※ 파일에 분자 ${parsed.molecules.length}개 — 첫 분자만 사용합니다. `
