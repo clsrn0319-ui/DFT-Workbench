@@ -1,0 +1,54 @@
+name,smiles
+# ===== 불소계 (기준군 포함 — PFAS 여부는 바인더 후보군 화면에서 판정) =====
+VDF (PVDF 단량체),C=C(F)F
+TFE (PTFE 단량체 — 현행 건식 표준),FC(F)=C(F)F
+HFP (PVDF-HFP 공단량체),FC(F)=C(F)C(F)(F)F
+CTFE (PCTFE 단량체),FC(F)=C(F)Cl
+# ===== 아크릴계 (수계 바인더 주력) =====
+아크릴산 AA (PAA),C=CC(=O)O
+메타크릴산 MAA (PMAA),C=C(C)C(=O)O
+메틸아크릴레이트 MA (PMA),C=CC(=O)OC
+메틸메타크릴레이트 MMA (PMMA),C=C(C)C(=O)OC
+에틸아크릴레이트 EA,C=CC(=O)OCC
+부틸아크릴레이트 BA,C=CC(=O)OCCCC
+2-하이드록시에틸아크릴레이트 HEA,C=CC(=O)OCCO
+글리시딜메타크릴레이트 GMA (에폭시 가교),C=C(C)C(=O)OCC1CO1
+에틸시아노아크릴레이트 ECA,C=C(C#N)C(=O)OCC
+이타콘산 (공단량체),C=C(CC(=O)O)C(=O)O
+말레산무수물 MAh (공단량체),O=C1OC(=O)C=C1
+# ===== 나이트릴·아마이드계 =====
+아크릴로나이트릴 AN (PAN),C=CC#N
+아크릴아마이드 AM (PAM),C=CC(N)=O
+N-이소프로필아크릴아마이드 NIPAM,C=CC(=O)NC(C)C
+AMPS (설폰산 공단량체),C=CC(=O)NC(C)(C)CS(=O)(=O)O
+# ===== 스타이렌·다이엔계 (SBR/NBR 구성 단위) =====
+스타이렌 ST (SBR·PS),C=Cc1ccccc1
+부타디엔 BD (SBR·NBR),C=CC=C
+이소프렌 IP,C=C(C)C=C
+스타이렌설폰산 SSA (이오노머),C=Cc1ccc(S(=O)(=O)O)cc1
+4-비닐피리딘 4VP,C=Cc1ccncc1
+1-비닐이미다졸 VIm,C=Cn1ccnc1
+# ===== 비닐에스터·알코올·피롤리돈계 =====
+비닐알코올 VA (PVA 반복 단위 모델),C=CO
+비닐아세테이트 VAc (PVAc),C=COC(C)=O
+N-비닐피롤리돈 NVP (PVP),C=CN1CCCC1=O
+비닐렌카보네이트 VC (가교성),O=C1OC=CO1
+# ===== 폴리올레핀계 =====
+에틸렌 (PE·UHMWPE),C=C
+프로필렌 (PP),C=CC
+# ===== 비(非)비닐 반복 단위 모델 — 모노머 구조로만 계산 =====
+PEO 반복 단위 모델,COCCOCCOC
+CMC 반복 단위 모델,OCC1OC(O)C(OCC(=O)O)C(O)C1O
+셀룰로스(글루코스) 단위 모델,OCC1OC(O)C(O)C(O)C1O
+알긴산 반복 단위 모델,OC1OC(C(=O)O)C(O)C(O)C1O
+키토산 반복 단위 모델,NC1C(O)OC(CO)C(O)C1O
+폴리이미드 반복 단위 모델,O=C1N(C)C(=O)c2ccccc21
+우레탄 결합 소형 모델,CNC(=O)OC
+# ===== 바이오·접착 모티프 =====
+도파민 (카테콜 접착 모티프),NCCc1ccc(O)c(O)c1
+갈산 (타닌계 모티프),O=C(O)c1cc(O)c(O)c(O)c1
+4-비닐과이어콜 (리그닌계),COc1cc(C=C)ccc1O
+# ===== 전도성 바인더 단위 =====
+아닐린 (PANI),Nc1ccccc1
+피롤 (PPy),c1cc[nH]c1
+EDOT (PEDOT),C1COc2cscc2O1
