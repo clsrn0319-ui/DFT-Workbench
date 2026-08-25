@@ -3192,9 +3192,31 @@ async function scrRenderDetail() {
     }).join("")}
   </table></div>`;
 
+  // 활물질별 분류 — «이 활물질에는 어떤 후보를 쓸 수 있나»를 한눈에
+  const classifyHtml = elecs.map(e => {
+    const groups = {"적합": [], "조건부": [], "부적합": []};
+    let label = e;
+    v.candidates.forEach(cd => {
+      const p = (cd.verdict?.per_electrode || []).find(x => x.electrode === e);
+      if (!p) return;
+      label = p.label || e;
+      if (groups[p.grade]) groups[p.grade].push({name: cd.name, m: p.margin_v, prov: cd.provisional});
+    });
+    Object.values(groups).forEach(g => g.sort((a, b) => b.m - a.m));
+    const chip = (x, cls) => `<span class="badge ${cls}" style="margin:2px 4px 2px 0"
+      title="여유 ${x.m.toFixed(2)} V${x.prov ? " · 잠정" : ""}">${esc(x.name)} ${x.m.toFixed(2)}${x.prov ? "*" : ""}</span>`;
+    return `<div style="margin:6px 0 10px"><b class="small">${esc(label)}</b><br>
+      ${groups["적합"].map(x => chip(x, "verdict-ok")).join("") || '<span class="muted small">적합 없음 </span>'}
+      ${groups["조건부"].map(x => chip(x, "verdict-mid")).join("")}
+      ${groups["부적합"].map(x => chip(x, "verdict-no")).join("")}</div>`;
+  }).join("");
+
   $("scr-detail-body").innerHTML = `
     ${summary}
     <h3 style="font-size:13px;color:var(--accent)">단계 진행</h3>${stageBars}
+    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">활물질별 분류
+      <span class="muted small">— 후보 뒤 숫자는 안정성 여유(V) · * 는 잠정 판정</span></h3>
+    ${classifyHtml || '<p class="muted small">아직 판정된 후보가 없습니다.</p>'}
     <h3 style="font-size:13px;color:var(--accent);margin-top:12px">판정표
       <span class="muted small">— 여유(V) = 구동 범위와 ESW 사이의 최소 간격.
       마진 ${v.margin_v} V 이상이면 적합</span></h3>
