@@ -590,3 +590,70 @@ def test_campaign_scoring_end_to_end(no_worker, monkeypatch):
     ranks = {c["name"]: c.get("rank") for c in view["candidates"]}
     assert ranks["m0"] == 1                            # 접착 우수 → 총점 우위
     assert view["scoring"]["enabled"] and view["protocol"]
+
+
+# ---------------------------------------------------------------- LUMO 불일치 경고
+def _mah_desc():
+    """말레산무수물 실측 사례 — 수직 EA는 안전, LUMO 추정은 위험."""
+    return {"reduction_potential_v": -0.349, "oxidation_potential_v": 9.587,
+            "lumo_ev": -2.86, "homo_ev": -8.474}
+
+
+def test_lumo_mismatch_fires_on_vertical():
+    v = screening.judge(_mah_desc(), ["graphite", "si"], 0.3)
+    assert v["grade"] == "적합"                      # 수직 EA 기준으로는 적합
+    lc = v["lumo_check"]
+    assert lc is not None
+    assert lc["naive_red_v"] == pytest.approx(2.86 - 1.44, abs=0.01)
+    assert len(lc["mismatch"]) == 2                  # 흑연·Si 모두 침범
+    assert "표준" in lc["note"]
+
+
+def test_lumo_mismatch_silent_when_adiabatic():
+    desc = {**_mah_desc(), "ea_adiabatic_ev": 1.0}   # 단열 기반이면 경고 없음
+    assert screening.judge(desc, ["graphite"], 0.3)["lumo_check"] is None
+
+
+def test_lumo_mismatch_silent_when_consistent():
+    # LUMO 가 높아 소박 추정도 안전 → 경고 없음
+    desc = {"reduction_potential_v": -2.0, "oxidation_potential_v": 6.0,
+            "lumo_ev": 1.0}
+    assert screening.judge(desc, ["graphite"], 0.3)["lumo_check"] is None
+    # EA 판정 자체가 이미 위반이면 (경고가 아니라 부적합) → 경고 없음
+    desc2 = {"reduction_potential_v": 1.0, "oxidation_potential_v": 6.0,
+             "lumo_ev": -2.9}
+    v2 = screening.judge(desc2, ["graphite"], 0.3)
+    assert v2["grade"] == "부적합" and v2["lumo_check"] is None
+
+
+def test_lumo_mismatch_respects_reference_electrode():
+    v = screening.judge(_mah_desc(), ["graphite"], 0.3, e_abs=4.44)  # SHE 기준
+    # naive = 2.86 − 4.44 = −1.58 V → 침범 없음
+    assert v["lumo_check"] is None
+
+
+def test_lumo_mismatch_in_score_reasons():
+    desc = {**_mah_desc(), "solvation_energy_kcal": -8.0}
+    v = screening.judge(desc, ["graphite"], 0.3)
+    out = scoring.evaluate(desc, v, ["graphite"])
+    assert any("LUMO 불일치" in r for r in out["reasons"])
+
+
+def test_campaign_verdict_carries_lumo_check(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    cands = screening.parse_candidates("MAh,O=C1OC(=O)C=C1")["rows"]
+    camp = screening.create_campaign(
+        name="lumo", candidates=[c for c in cands if c["ok"]],
+        electrodes=["graphite"], margin_v=0.3, stages=[{"accuracy": "빠름"}],
+        settings={"envType": "사용자 정의", "solventId": "sol-ecdmc",
+                  "temperature": 298.15, "structure": "모노머",
+                  "referenceElectrode": "Li/Li+", "accuracy": "빠름",
+                  "purpose": screening.SCREEN_PURPOSE,
+                  "expert": {"functional": "PBE0-D3(BJ)", "basis": None,
+                             "charge": 0, "multiplicity": 1}})
+    screening._advance(camp)
+    store.update_job(_stage_jobs(camp, 0)["MAh"], {
+        "status": "PUBLISHED", "result": {"descriptors": _mah_desc()}})
+    screening._advance(camp)
+    assert camp["status"] == "DONE"
+    assert camp["candidates"][0]["verdict"]["lumo_check"] is not None

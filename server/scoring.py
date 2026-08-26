@@ -213,6 +213,12 @@ def evaluate(desc: dict, verdict: dict | None, electrodes: list[str],
         reasons.append(f"최약 결합 BDE {bde:.0f} kJ/mol < {BDE_PENALTY_KJ:.0f} — "
                        f"분해 취약 감점 −{BDE_PENALTY_POINTS:.0f}")
 
+    lc = (verdict or {}).get("lumo_check")
+    if lc:
+        reasons.append(f"LUMO 불일치 — LUMO 추정 {lc['naive_red_v']:+.2f} V 가 "
+                       f"{', '.join(lc['mismatch'])} 침범, 수직 EA 판정과 상반 "
+                       "(표준 재계산 필요)")
+
     level, why = confidence_of(verdict, desc)
 
     return {

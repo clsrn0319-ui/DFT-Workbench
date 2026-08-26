@@ -219,7 +219,7 @@ def _potentials(desc: dict):
 
 
 def judge(desc: dict, electrodes: list[str], margin_v: float,
-          windows: dict | None = None) -> dict:
+          windows: dict | None = None, e_abs: float = 1.44) -> dict:
     """전극 구동 범위 전체가 ESW 안에 얼마나 여유 있게 들어오는지로 등급을 매긴다.
 
     여유(margin) = min(구동 하단 − 환원 전위, 산화 전위 − 구동 상단)
@@ -254,8 +254,29 @@ def judge(desc: dict, electrodes: list[str], margin_v: float,
     if basis == "수직":
         note = ("수직 전위 기반 — 구조 완화·열보정이 빠져 환원 위험을 낮잡을 수 "
                 "있습니다. 표준·정밀 단계 재확인을 권장합니다.")
+
+    # LUMO 불일치 경고 — 수직 EA 판정은 «안전»인데 LUMO 소박 추정
+    # (−LUMO − E_abs)은 구동 범위를 침범하는 경우. 수직 EA는 음이온의 구조
+    # 완화·평형 용매화가 빠져 환원 위험을 낮잡을 수 있고, 강한 전자 수용체
+    # (예: 말레산무수물)에서는 LUMO 쪽이 실제에 가깝다.
+    lumo_check = None
+    if basis == "수직" and desc.get("lumo_ev") is not None:
+        naive_red = round(-desc["lumo_ev"] - e_abs, 3)
+        wins_map = windows or esw.ELECTRODE_BY_KEY
+        mismatch = [wins_map[k]["label"] for k in electrodes
+                    if red <= wins_map[k]["low"] < naive_red]
+        if mismatch:
+            lumo_check = {
+                "naive_red_v": naive_red,
+                "mismatch": mismatch,
+                "note": (f"수직 EA 환원 전위({red:+.2f} V)는 안전으로 나오지만 "
+                         f"LUMO 추정({naive_red:+.2f} V)은 {', '.join(mismatch)} "
+                         "구동 범위를 침범합니다 — 수직 계산이 환원 위험을 낮잡았을 "
+                         "수 있으니 표준(단열·ΔG) 재계산으로 확정하세요."),
+            }
     return {"grade": grade, "per_electrode": per, "worst_margin_v": worst,
-            "reduction_v": red, "oxidation_v": ox, "basis": basis, "note": note}
+            "reduction_v": red, "oxidation_v": ox, "basis": basis, "note": note,
+            "lumo_check": lumo_check}
 
 
 # ---------------------------------------------------------------- 캠페인
@@ -411,6 +432,12 @@ def _find_cached(canonical: str, settings: dict):
 def _batch_active_count() -> int:
     return sum(1 for j in store.list_jobs()
                if j.get("campaign") and j["status"] in ("QUEUED", "RUNNING"))
+
+
+def _e_abs(camp: dict) -> float:
+    """캠페인 기준 전극의 절대 전위 — LUMO 소박 추정 환산용."""
+    ref = (camp.get("settings") or {}).get("referenceElectrode")
+    return presets.ABSOLUTE_POTENTIALS.get(ref, 1.44)
 
 
 def _windows(camp: dict) -> dict:
@@ -622,7 +649,7 @@ def _finalize(camp: dict):
         if job and job["status"] == "PUBLISHED" and job.get("result"):
             desc = job["result"].get("descriptors") or {}
             c["verdict"] = judge(desc, camp["electrodes"], camp["margin_v"],
-                                 windows=_windows(camp))
+                                 windows=_windows(camp), e_abs=_e_abs(camp))
             sc = camp.get("scoring") or {}
             if sc.get("enabled"):
                 c["score"] = scoring.evaluate(
@@ -714,7 +741,7 @@ def _candidate_view(c: dict, camp: dict) -> dict:
             if j and j["status"] == "PUBLISHED" and j.get("result"):
                 verdict = judge(j["result"].get("descriptors") or {},
                                 camp["electrodes"], camp["margin_v"],
-                                windows=_windows(camp))
+                                windows=_windows(camp), e_abs=_e_abs(camp))
                 provisional = True
                 break
     return {"idx": c["idx"], "name": c["name"], "smiles": c["smiles"],

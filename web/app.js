@@ -3011,9 +3011,25 @@ async function scrOpenWizard() {
   }
   const sSel = $("scr-solvent");
   if (!sSel.options.length) {
+    // 단건 계산과 동일하게 서버 프리셋 + 용매 라이브러리(사용자 혼합 용매 포함)
     sSel.add(new Option("(용매 없음 — 진공·기체)", ""));
-    for (const s of PRESETS.solvents) sSel.add(new Option(`${s.abbr} — ${s.name}`, s.id));
-    sSel.value = PRESETS.defaults.solventId;
+    const serverIds = new Set(PRESETS.solvents.map(s => s.id));
+    const knownAbbrs = new Set(PRESETS.solvents.filter(s => s.kind === "single").map(s => s.abbr));
+    const lib = loadLibrarySolvents();
+    for (const s of (lib || PRESETS.solvents)) {
+      const label = `${s.abbr}${s.kind === "mixed" ? " (혼합)" : ""} — ${s.name}`;
+      if (serverIds.has(s.id)) {
+        sSel.add(new Option(label, s.id));
+      } else if (s.kind === "mixed" && (s.components || []).length >= 2
+                 && s.components.every(c => knownAbbrs.has(c.abbr))) {
+        const payload = {name: s.abbr || s.name,
+                         components: s.components.map(c => ({abbr: c.abbr, ratio: c.ratio}))};
+        sSel.add(new Option(label + " · 라이브러리", "mix:" + JSON.stringify(payload)));
+      }
+    }
+    if ([...sSel.options].some(o => o.value === PRESETS.defaults.solventId)) {
+      sSel.value = PRESETS.defaults.solventId;
+    }
   }
   const rSel = $("scr-ref");
   if (!rSel.options.length) {
@@ -3106,7 +3122,9 @@ async function scrSubmit() {
   }
   const stages = scrStages();
   if (!stages.length) { err.textContent = "깔때기 단계를 하나 이상 선택하세요."; return; }
-  const solventId = $("scr-solvent").value || null;
+  const solvRaw = $("scr-solvent").value;
+  const isMix = solvRaw.startsWith("mix:");
+  const solventId = (!solvRaw || isMix) ? null : solvRaw;
   const payload = {
     name: $("scr-name").value.trim(),
     candidates: SCR_PARSED.rows.filter(r => r.ok)
@@ -3120,8 +3138,9 @@ async function scrSubmit() {
               preset: $("scr-score-preset")?.value || "균등",
               weights: scrCollectWeights()},
     settings: {
-      envType: solventId ? "사용자 정의" : "진공·기체",
+      envType: solvRaw ? "사용자 정의" : "진공·기체",
       solventId,
+      customMixedSolvent: isMix ? JSON.parse(solvRaw.slice(4)) : null,
       temperature: +$("scr-temp").value || 298.15,
       structure: $("scr-structure").value,
       referenceElectrode: $("scr-ref").value,
@@ -3184,7 +3203,12 @@ async function scrRenderDetail() {
     <span class="badge failed">판정 불가 ${c.failed}</span>
     <span class="badge queued">탈락(깔때기) ${c.cut}</span>
     <span class="muted small" style="align-self:center"><b>전체 ${v.overall_pct ?? 0}% 완료</b>
-      · 총 ${c.total}개${v.protocol ? ` · 프로토콜 ${esc(v.protocol)}` : ""}
+      · 총 ${c.total}개${(() => {
+        const s0 = v.settings || {};
+        const lb = s0.customMixedSolvent ? `${s0.customMixedSolvent.name} (혼합)`
+          : (PRESETS.solvents.find(x => x.id === s0.solventId)?.abbr || "진공");
+        return ` · 용매 ${esc(lb)}`;
+      })()}${v.protocol ? ` · 프로토콜 ${esc(v.protocol)}` : ""}
       ${v.eta_s != null ? ` · 남은 시간 ≈${scrEta(v.eta_s)}` : ""}</span></div>`;
 
   const elecs = v.electrodes;
@@ -3211,7 +3235,9 @@ async function scrRenderDetail() {
             ? `<br><span class="muted">${esc(cd.detail)}</span>` : ""}</td>
         <td><span class="badge ${SCR_GRADE_BADGE[grade] || "queued"}">${esc(grade)}</span>
           ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}${vd.basis === "수직"
-            ? `<span class="muted small" title="${esc(vd.note || "")}"> · 수직</span>` : ""}</td>
+            ? `<span class="muted small" title="${esc(vd.note || "")}"> · 수직</span>` : ""}${vd.lumo_check
+            ? `<br><span class="badge failed" style="border:1px solid currentColor"
+                 title="${esc(vd.lumo_check.note)}">⚠ LUMO 불일치</span>` : ""}</td>
         ${v.scoring?.enabled ? (() => {
           const sc = cd.score;
           if (!sc || sc.total == null) return '<td class="muted small">—</td><td></td>';

@@ -570,8 +570,15 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
     settings = req.settings.model_dump()
     if settings["envType"] == "진공·기체":
         settings["solventId"] = None
+        settings["customMixedSolvent"] = None
     if settings["solventId"] and settings["solventId"] not in presets.SOLVENTS_BY_ID:
         raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
+    if settings.get("customMixedSolvent"):
+        known = {s["abbr"] for s in presets.SOLVENTS if s["kind"] == "single"}
+        for comp in settings["customMixedSolvent"]["components"]:
+            if comp["abbr"] not in known:
+                raise HTTPException(
+                    400, f"혼합 용매 성분 '{comp['abbr']}'의 SMD 파라미터가 없어 계산할 수 없습니다.")
 
     # 후보를 서버에서 다시 검증한다 — 파싱 화면을 거치지 않은 API 호출 대비
     structure = settings.get("structure", "모노머")
@@ -671,7 +678,8 @@ def screening_export(cid: str, format: str = "csv",
     writer = csv.writer(buf)
     elec = view["electrodes"]
     head = ["rank", "name", "smiles", "grade", "provisional",
-            "worst_margin_v", "reduction_v", "oxidation_v"]
+            "worst_margin_v", "reduction_v", "oxidation_v",
+            "lumo_naive_red_v", "lumo_mismatch"]
     head += [f"margin_v[{e}]" for e in elec] + [f"grade[{e}]" for e in elec]
     scoring_on = bool((view.get("scoring") or {}).get("enabled"))
     if scoring_on:
@@ -696,7 +704,9 @@ def screening_export(cid: str, format: str = "csv",
             [c.get("rank", ""), c["name"], c["smiles"], v.get("grade", "판정 불가"),
              "예" if c.get("provisional") else "",
              v.get("worst_margin_v", ""), v.get("reduction_v", ""),
-             v.get("oxidation_v", "")]
+             v.get("oxidation_v", ""),
+             (v.get("lumo_check") or {}).get("naive_red_v", ""),
+             " / ".join((v.get("lumo_check") or {}).get("mismatch", []))]
             + [per.get(e, {}).get("margin_v", "") for e in elec]
             + [per.get(e, {}).get("grade", "") for e in elec]
             + (([sc.get("total", ""), sc.get("penalty", ""),
