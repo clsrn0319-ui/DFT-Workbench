@@ -44,6 +44,9 @@ VERTICAL_RED_BUFFER = float(os.environ.get("RHOBENCH_VERTICAL_RED_BUFFER", "0.5"
 # 배치 작업 결과 슬림화 — 전자밀도 구름 등 무거운 시각화 데이터를 지워
 # 수백 개 캠페인에서 jobs.json 크기·로딩 시간을 줄인다 ("0"으로 끄기)
 SLIM_BATCH = os.environ.get("RHOBENCH_BATCH_SLIM", "1") != "0"
+# 단계 간 구조 승계 — 이전 단계에서 확정한 구조를 다음 단계의 초기 구조로 넘겨
+# conformer 탐색·DFT 재순위화를 건너뛴다 (Boltzmann 앙상블 단계는 제외, "0"으로 끄기)
+CHAIN_GEOMETRY = os.environ.get("RHOBENCH_CHAIN_GEOMETRY", "1") != "0"
 
 RESTART_ERROR = "서버 재시작으로 중단됨"
 
@@ -347,6 +350,42 @@ def _batch_active_count() -> int:
                if j.get("campaign") and j["status"] in ("QUEUED", "RUNNING"))
 
 
+def _xyz_atoms(xyz: str):
+    """결과의 XYZ 블록 → [[원소, x, y, z], ...] (승계용). 형식이 어긋나면 None."""
+    try:
+        lines = xyz.strip().splitlines()
+        n = int(lines[0].split()[0])
+        atoms = []
+        for ln in lines[2:2 + n]:
+            t = ln.split()
+            atoms.append([t[0], float(t[1]), float(t[2]), float(t[3])])
+        return atoms if len(atoms) == n else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _chained_geometry(c: dict, camp: dict, stage_idx: int):
+    """이전 단계의 최적 구조를 이번 단계 초기 구조로 승계한다.
+
+    1차(빠름)가 이미 찾은 구조를 2차(표준)가 버리고 conformer 탐색부터 다시 하는
+    낭비를 없앤다 — 분자당 conformer 임베딩 + DFT 재순위화(SCF 수 회)가 절약된다.
+    Boltzmann 앙상블이 켜진 단계(정밀)는 여러 conformer 가중이 목적이므로 승계하지
+    않고, 사용자 업로드 구조보다 이전 단계 «계산 결과» 구조를 우선한다.
+    """
+    if not CHAIN_GEOMETRY or stage_idx == 0:
+        return c.get("geometry")
+    acc = camp["stages"][stage_idx]["accuracy"]
+    if presets.ACCURACY.get(acc, {}).get("ensemble"):
+        return c.get("geometry")
+    prev = store.get_job(c["jobs"].get(str(stage_idx - 1)))
+    xyz = ((prev or {}).get("result") or {}).get("structure_xyz")
+    atoms = _xyz_atoms(xyz) if xyz else None
+    if atoms:
+        return {"atoms": atoms, "source": f"{stage_idx}단계 결과 승계",
+                "rescan": False}
+    return c.get("geometry")
+
+
 def _maybe_slim(job: dict):
     """캠페인 작업의 무거운 시각화 데이터 제거 — 판정·비교·3D 구조는 유지.
 
@@ -456,8 +495,9 @@ def _advance(camp: dict):
         settings = _stage_settings(camp, stage_idx)
         material = {"id": None, "name": c["name"], "abbr": "배치",
                     "smiles": c["calcSmiles"]}
-        if c.get("geometry"):
-            material["geometry"] = c["geometry"]
+        geom = _chained_geometry(c, camp, stage_idx)
+        if geom:
+            material["geometry"] = geom
         job = store.create_job(material, settings)
         store.update_job(job["id"], {"campaign": {
             "id": camp["id"], "name": camp["name"], "stage": stage_idx,
@@ -495,6 +535,10 @@ def _advance(camp: dict):
     if camp["stages"][stage_idx]["accuracy"] == "빠름":
         _log(camp, f"컷 순위에는 수직 전위의 낙관을 상쇄하는 환원 보수 보정 "
                    f"+{VERTICAL_RED_BUFFER} V 를 적용했습니다")
+    next_acc = camp["stages"][stage_idx + 1]["accuracy"]
+    if CHAIN_GEOMETRY and not presets.ACCURACY.get(next_acc, {}).get("ensemble"):
+        _log(camp, f"{stage_idx + 2}단계는 이번 단계의 최적 구조에서 바로 시작합니다 "
+                   "(conformer 탐색·재순위화 생략 — 계산 시간 절약)")
 
 
 def _finalize(camp: dict):

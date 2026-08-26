@@ -325,3 +325,58 @@ def test_slim_disabled_keeps_cloud(no_worker, monkeypatch):
         "descriptors": _desc(-1.0, 5.0), "density_cloud": [[0.0, 0.0, 0.0]]}})
     screening._advance(camp)
     assert store.get_job(jid)["result"]["density_cloud"] is not None
+
+
+# ---------------------------------------------------------------- 단계 간 구조 승계
+_WATER_XYZ = "3\nstage-result\nO 0.0 0.0 0.1173\nH 0.0 0.7572 -0.4692\nH 0.0 -0.7572 -0.4692\n"
+
+
+def test_stage_chaining_passes_geometry(no_worker, monkeypatch):
+    """1차 최적 구조가 2차 작업의 초기 구조(material.geometry)로 승계된다."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "CHAIN_GEOMETRY", True)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "빠름", "keep": 1},
+                                       {"accuracy": "표준"}])
+    screening._advance(camp)
+    j0 = _stage_jobs(camp, 0)["m0"]
+    store.update_job(j0, {"status": "PUBLISHED", "result": {
+        "descriptors": _desc(-1.0, 5.0), "structure_xyz": _WATER_XYZ}})
+    screening._advance(camp)            # 단계 전환
+    assert camp["stageIndex"] == 1
+    screening._advance(camp)            # 2차 제출
+    j1 = _stage_jobs(camp, 1)["m0"]
+    geom = store.get_job(j1)["material"].get("geometry")
+    assert geom and len(geom["atoms"]) == 3
+    assert geom["atoms"][0][0] == "O"
+    assert "승계" in geom["source"]
+
+
+def test_stage_chaining_skips_ensemble_stage(no_worker, monkeypatch):
+    """Boltzmann 앙상블 단계(정밀)로는 승계하지 않는다 — 다중 conformer 가중이 목적."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "CHAIN_GEOMETRY", True)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "표준", "keep": 1},
+                                       {"accuracy": "정밀"}])
+    screening._advance(camp)
+    j0 = _stage_jobs(camp, 0)["m0"]
+    store.update_job(j0, {"status": "PUBLISHED", "result": {
+        "descriptors": _desc(-1.0, 5.0), "structure_xyz": _WATER_XYZ}})
+    screening._advance(camp)
+    screening._advance(camp)
+    j1 = _stage_jobs(camp, 1)["m0"]
+    assert store.get_job(j1)["material"].get("geometry") is None
+
+
+def test_stage_chaining_disabled_flag(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    monkeypatch.setattr(screening, "CHAIN_GEOMETRY", False)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "빠름", "keep": 1},
+                                       {"accuracy": "표준"}])
+    screening._advance(camp)
+    j0 = _stage_jobs(camp, 0)["m0"]
+    store.update_job(j0, {"status": "PUBLISHED", "result": {
+        "descriptors": _desc(-1.0, 5.0), "structure_xyz": _WATER_XYZ}})
+    screening._advance(camp)
+    screening._advance(camp)
+    j1 = _stage_jobs(camp, 1)["m0"]
+    assert store.get_job(j1)["material"].get("geometry") is None
