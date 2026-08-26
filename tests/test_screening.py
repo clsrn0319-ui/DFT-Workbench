@@ -474,3 +474,119 @@ def test_xlsx_to_text_roundtrip(tmp_path):
     assert out["n_ok"] == 2
     names = {r["name"] for r in out["rows"] if r["ok"]}
     assert names == {"VDF", "AA"}
+
+
+# ---------------------------------------------------------------- 5대 Score
+from server import scoring
+
+
+def _fp_desc(ads_si=-90.0, solv=-8.0, li=-180.0, bde=320.0, red=-1.0, ox=5.0):
+    """물성 지문 수준의 가짜 기술자."""
+    return {"reduction_potential_v": red, "oxidation_potential_v": ox,
+            "solvation_energy_kcal": solv, "li_binding_kj": li,
+            "bde_min_298_kj": bde,
+            "surface_adsorption": {"si": {"label": "Si", "energy_kj": ads_si}}}
+
+
+def test_score_full_axes_and_total():
+    desc = _fp_desc()
+    verdict = screening.judge(desc, ["si"], 0.3)
+    out = scoring.evaluate(desc, verdict, ["si"], preset="균등")
+    assert out["protocol"] == scoring.PROTOCOL_VERSION
+    for k, _ in scoring.AXES:
+        assert out["axes"][k]["score"] is not None
+    assert 0 <= out["total"] <= 100
+    assert out["hard_fail"] is False
+    assert out["penalty"] == 0
+    # window 축 — 목표 범위 안이면 100점
+    assert out["axes"]["affinity"]["score"] == 100
+    assert out["axes"]["ion"]["score"] == 100
+
+
+def test_score_missing_axes_renormalize():
+    desc = {"reduction_potential_v": -1.0, "oxidation_potential_v": 5.0}
+    verdict = screening.judge(desc, ["si"], 0.3)
+    out = scoring.evaluate(desc, verdict, ["si"], preset="균등")
+    assert out["axes"]["adhesion"]["score"] is None
+    assert out["total"] is not None                    # 전기화학 축만으로 계산
+    assert abs(sum(out["weights_used"].values()) - 1.0) < 1e-6
+    assert any("재정규화" in r for r in out["reasons"])
+
+
+def test_score_hard_filter_and_penalty():
+    desc = _fp_desc(bde=200.0, red=1.0)                # 취약 BDE + Si 전위 위반
+    verdict = screening.judge(desc, ["si"], 0.3)
+    out = scoring.evaluate(desc, verdict, ["si"])
+    assert verdict["grade"] == "부적합"
+    assert out["hard_fail"] is True
+    assert out["penalty"] == scoring.BDE_PENALTY_POINTS
+    assert any("Hard Filter" in r for r in out["reasons"])
+    assert any("분해 취약" in r for r in out["reasons"])
+    assert out["total"] == max(0, (out["total_raw"] or 0) - out["penalty"])
+
+
+def test_score_target_window_both_sides():
+    a = scoring.ANCHORS["ion"]
+    weak = scoring.evaluate(_fp_desc(li=a["hi"] + 60), None, ["si"])
+    strong = scoring.evaluate(_fp_desc(li=a["lo"] - 60), None, ["si"])
+    inside = scoring.evaluate(_fp_desc(li=(a["lo"] + a["hi"]) / 2), None, ["si"])
+    assert inside["axes"]["ion"]["score"] == 100
+    assert weak["axes"]["ion"]["score"] < 100          # 너무 약해도 감점
+    assert strong["axes"]["ion"]["score"] < 100        # 너무 강해도 감점
+
+
+def test_score_confidence_levels():
+    desc = _fp_desc()
+    v_vert = screening.judge(desc, ["si"], 0.3)
+    assert scoring.evaluate(desc, v_vert, ["si"])["confidence"] == "Low"
+    desc_g = {**desc, "reduction_potential_gibbs_v": -1.0,
+              "oxidation_potential_gibbs_v": 5.0}
+    v_g = screening.judge(desc_g, ["si"], 0.3)
+    assert scoring.evaluate(desc_g, v_g, ["si"])["confidence"] == "High"
+    desc_bad = {**desc_g, "n_imaginary_freqs": 1}
+    assert scoring.evaluate(desc_bad, v_g, ["si"])["confidence"] == "Low"
+
+
+def test_normalize_weights():
+    w = scoring.normalize_weights({"adhesion": 3, "ion": 1}, "균등")
+    assert abs(sum(w.values()) - 1.0) < 1e-9
+    assert w["adhesion"] > w["ion"] > 0
+
+
+def test_fgroups_tagging():
+    rows = screening.parse_candidates("AA,C=CC(=O)O\nAN,C=CC#N")["rows"]
+    tags = {r["name"]: r["fgroups"] for r in rows}
+    assert "–COOH" in tags["AA"] and "C=C" in tags["AA"]
+    assert "–CN" in tags["AN"]
+    assert "–COOH" not in tags["AN"]
+
+
+def test_campaign_scoring_end_to_end(no_worker, monkeypatch):
+    """스코어링 캠페인 — 마지막 단계 purpose 승격 + 총점 순위 + CSV용 필드."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    cands = screening.parse_candidates("m0,CO\nm1,CCO")["rows"]
+    camp = screening.create_campaign(
+        name="score", candidates=[c for c in cands if c["ok"]],
+        electrodes=["si"], margin_v=0.3, stages=[{"accuracy": "빠름"}],
+        settings={"envType": "진공·기체", "solventId": None, "temperature": 298.15,
+                  "structure": "모노머", "referenceElectrode": "Li/Li+",
+                  "accuracy": "빠름", "purpose": screening.SCREEN_PURPOSE,
+                  "expert": {"functional": "PBE0-D3(BJ)", "basis": None,
+                             "charge": 0, "multiplicity": 1}},
+        scoring_cfg={"enabled": True, "preset": "Si 음극", "weights": None})
+    assert camp["protocol"] == scoring.PROTOCOL_VERSION
+    # 마지막(유일) 단계는 물성 지문으로 승격
+    assert "지문" in screening._stage_settings(camp, 0)["purpose"]
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    store.update_job(jobs["m0"], {"status": "PUBLISHED",
+                                  "result": {"descriptors": _fp_desc(ads_si=-110.0)}})
+    store.update_job(jobs["m1"], {"status": "PUBLISHED",
+                                  "result": {"descriptors": _fp_desc(ads_si=-40.0)}})
+    screening._advance(camp)
+    assert camp["status"] == "DONE"
+    assert camp["candidates"][0]["score"]["total"] is not None
+    view = screening.campaign_view(camp)
+    ranks = {c["name"]: c.get("rank") for c in view["candidates"]}
+    assert ranks["m0"] == 1                            # 접착 우수 → 총점 우위
+    assert view["scoring"]["enabled"] and view["protocol"]

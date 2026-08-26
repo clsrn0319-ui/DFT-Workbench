@@ -2918,6 +2918,10 @@ let SCR_DETAIL_ID = null;   // 열려 있는 캠페인 id
 let SCR_TIMER = null;
 let SCR_WIRED = false;
 let SCR_CUSTOM_ELECS = [];   // 사용자 정의 활물질 {label, low, high}
+let SCR_PX = "adhesion";     // Pareto 뷰 축 선택
+let SCR_PY = "electrochem";
+const SCR_AXIS_LABEL = {adhesion: "접착", electrochem: "전기화학 안정성",
+  affinity: "전해액 친화도", ion: "이온 상호작용", chemstab: "화학적 안정성"};
 
 const SCR_GRADE_BADGE = {
   "적합": "verdict-ok", "조건부": "verdict-mid",
@@ -3026,6 +3030,13 @@ async function scrOpenWizard() {
     bSel.add(new Option("(프리셋 기본)", ""));
     for (const b of PRESETS.basisSets) bSel.add(new Option(b, b));
   }
+  const pSel = $("scr-score-preset");
+  if (pSel && !pSel.options.length) {
+    for (const name of Object.keys(meta.weight_presets || {})) pSel.add(new Option(name, name));
+    pSel.value = "균등";
+    pSel.addEventListener("change", () => scrRenderScoreWeights(pSel.value));
+    scrRenderScoreWeights(pSel.value);
+  }
   scrEstimate();
 }
 
@@ -3105,6 +3116,9 @@ async function scrSubmit() {
     marginV: Math.max(0, +$("scr-margin").value || 0.3),
     stages,
     rescanGeometry: !!$("scr-rescan")?.checked,
+    scoring: {enabled: !!$("scr-score-on")?.checked,
+              preset: $("scr-score-preset")?.value || "균등",
+              weights: scrCollectWeights()},
     settings: {
       envType: solventId ? "사용자 정의" : "진공·기체",
       solventId,
@@ -3170,7 +3184,7 @@ async function scrRenderDetail() {
     <span class="badge failed">판정 불가 ${c.failed}</span>
     <span class="badge queued">탈락(깔때기) ${c.cut}</span>
     <span class="muted small" style="align-self:center"><b>전체 ${v.overall_pct ?? 0}% 완료</b>
-      · 총 ${c.total}개
+      · 총 ${c.total}개${v.protocol ? ` · 프로토콜 ${esc(v.protocol)}` : ""}
       ${v.eta_s != null ? ` · 남은 시간 ≈${scrEta(v.eta_s)}` : ""}</span></div>`;
 
   const elecs = v.electrodes;
@@ -3178,6 +3192,7 @@ async function scrRenderDetail() {
     (a.rank == null) - (b.rank == null) || (a.rank || 0) - (b.rank || 0));
   const tbl = `<div class="scroll-x"><table class="table" style="min-width:760px">
     <tr><th>순위</th><th>후보</th><th>상태</th><th>판정</th>
+      ${v.scoring?.enabled ? "<th>총점</th><th>신뢰도</th>" : ""}
       ${elecs.map(e => `<th class="small">${esc(e)}<br>여유(V)</th>`).join("")}
       <th>산화(V)</th><th>환원(V)</th><th></th></tr>
     ${rows.map(cd => {
@@ -3188,13 +3203,27 @@ async function scrRenderDetail() {
       const lastJob = Object.values(cd.jobs || {}).pop();
       return `<tr>
         <td>${cd.rank || ""}</td>
-        <td><b>${esc(cd.name)}</b><br><span class="mono small muted">${esc(cd.smiles)}</span></td>
+        <td><b>${esc(cd.name)}</b><br><span class="mono small muted">${esc(cd.smiles)}</span>${
+          (cd.fgroups || []).length
+            ? `<br><span class="muted small">${cd.fgroups.map(esc).join(" · ")}</span>` : ""}</td>
         <td class="small">${esc(cd.state)}${cd.progress != null && cd.state === "계산 중"
             ? ` ${cd.progress}%` : ""}${cd.detail
             ? `<br><span class="muted">${esc(cd.detail)}</span>` : ""}</td>
         <td><span class="badge ${SCR_GRADE_BADGE[grade] || "queued"}">${esc(grade)}</span>
           ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}${vd.basis === "수직"
             ? `<span class="muted small" title="${esc(vd.note || "")}"> · 수직</span>` : ""}</td>
+        ${v.scoring?.enabled ? (() => {
+          const sc = cd.score;
+          if (!sc || sc.total == null) return '<td class="muted small">—</td><td></td>';
+          const tip = Object.entries(sc.axes || {})
+            .map(([k, a]) => `${SCR_AXIS_LABEL[k] || k}: ${a.score == null ? "—" : Math.round(a.score)}`)
+            .join("  ") + ((sc.reasons || []).length ? "\n" + sc.reasons.join("\n") : "");
+          return `<td title="${esc(tip)}">${sc.hard_fail
+              ? `<span class="badge verdict-no">탈락</span> <span class="muted small">${sc.total}</span>`
+              : `<b>${sc.total}</b>`}${sc.penalty
+              ? `<span class="verdict-no small"> −${sc.penalty}</span>` : ""}</td>
+            <td class="small" title="${esc(sc.confidence_note || "")}">${esc(sc.confidence || "")}</td>`;
+        })() : ""}
         ${elecs.map(e => {
           const p = per[e];
           return `<td class="small ${p ? (p.grade === "적합" ? "verdict-ok"
@@ -3227,9 +3256,16 @@ async function scrRenderDetail() {
       ${groups["부적합"].map(x => chip(x, "verdict-no")).join("")}</div>`;
   }).join("");
 
+  let paretoHtml = "";
+  if (v.scoring?.enabled) {
+    const pts = v.candidates.filter(c => c.score && c.score.total != null);
+    if (pts.length >= 2) paretoHtml = scrParetoBlock(pts);
+  }
+
   $("scr-detail-body").innerHTML = `
     ${summary}
     <h3 style="font-size:13px;color:var(--accent)">단계 진행</h3>${stageBars}
+    ${paretoHtml}
     <h3 style="font-size:13px;color:var(--accent);margin-top:12px">활물질별 분류
       <span class="muted small">— 후보 뒤 숫자는 안정성 여유(V) · * 는 잠정 판정</span></h3>
     ${classifyHtml || '<p class="muted small">아직 판정된 후보가 없습니다.</p>'}
@@ -3242,6 +3278,8 @@ async function scrRenderDetail() {
       <ul class="log-list">${(v.logs || []).slice(-40).map(l => `<li>${esc(l)}</li>`).join("")}</ul>
     </details>`;
 
+  $("scr-px")?.addEventListener("change", (e) => { SCR_PX = e.target.value; scrRenderDetail(); });
+  $("scr-py")?.addEventListener("change", (e) => { SCR_PY = e.target.value; scrRenderDetail(); });
   $("scr-detail-body").querySelectorAll("[data-scr-job]").forEach(b =>
     b.addEventListener("click", async () => {
       try {
@@ -3380,6 +3418,66 @@ async function scrParseXlsx(buf, filename) {
   } catch (e) { err.textContent = e.message; }
 }
 
+async function scrRenderScoreWeights(preset) {
+  const meta = await scrMeta();
+  const box = $("scr-score-weights");
+  if (!box) return;
+  const w = (meta.weight_presets || {})[preset] || {};
+  box.innerHTML = (meta.score_axes || []).map(([k, label]) =>
+    `<label class="small" style="margin-right:8px">${esc(label)}
+      <input class="input" data-scr-w="${k}" type="number" min="0" step="0.05"
+        value="${w[k] ?? 0.2}" style="width:64px;padding:3px 6px"></label>`).join("")
+    + '<span class="muted small">— 합은 서버가 자동으로 1로 정규화합니다</span>';
+}
+
+function scrCollectWeights() {
+  const out = {};
+  document.querySelectorAll("[data-scr-w]").forEach(i => {
+    out[i.dataset.scrW] = parseFloat(i.value) || 0;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+// Pareto 뷰 (기획서 10.1) — 두 축 모두 높은 후보(전선)를 강조
+function scrParetoBlock(cands) {
+  const opts = sel => Object.entries(SCR_AXIS_LABEL).map(([k, l]) =>
+    `<option value="${k}" ${k === sel ? "selected" : ""}>${l}</option>`).join("");
+  const pts = cands.map(c => ({name: c.name, fail: c.score.hard_fail,
+                               x: c.score.axes?.[SCR_PX]?.score,
+                               y: c.score.axes?.[SCR_PY]?.score}))
+    .filter(p => p.x != null && p.y != null);
+  if (pts.length < 2) return "";
+  const front = pts.filter(p => !p.fail && !pts.some(q => q !== p && !q.fail
+    && q.x >= p.x && q.y >= p.y && (q.x > p.x || q.y > p.y)));
+  const W = 440, H = 300, P = 40;
+  const sx = vv => P + (vv / 100) * (W - 2 * P);
+  const sy = vv => H - P - (vv / 100) * (H - 2 * P);
+  const dots = pts.map(p => `
+    <circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="${front.includes(p) ? 6 : 4}"
+      fill="${p.fail ? "#c0392b" : front.includes(p) ? "#1a7f6e" : "#8fa8a3"}" opacity="0.85">
+      <title>${esc(p.name)} — ${SCR_AXIS_LABEL[SCR_PX]} ${Math.round(p.x)} · ${SCR_AXIS_LABEL[SCR_PY]} ${Math.round(p.y)}</title>
+    </circle>
+    ${front.includes(p) ? `<text x="${Math.min(sx(p.x) + 7, W - 60)}" y="${sy(p.y) - 7}"
+      font-size="10" fill="currentColor">${esc(p.name)}</text>` : ""}`).join("");
+  return `<h3 style="font-size:13px;color:var(--accent);margin-top:12px">Pareto 뷰
+      <span class="muted small">— 진한 초록 = Pareto 전선(두 축 모두 우수) · 빨강 = Hard Filter 탈락</span></h3>
+    <div class="toolbar">
+      <label class="small">X축 <select class="input" id="scr-px">${opts(SCR_PX)}</select></label>
+      <label class="small">Y축 <select class="input" id="scr-py">${opts(SCR_PY)}</select></label>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" style="max-width:480px;display:block">
+      <line x1="${P}" y1="${H - P}" x2="${W - P}" y2="${H - P}" stroke="currentColor" opacity="0.4"/>
+      <line x1="${P}" y1="${H - P}" x2="${P}" y2="${P}" stroke="currentColor" opacity="0.4"/>
+      ${[0, 50, 100].map(t => `
+        <text x="${sx(t)}" y="${H - P + 14}" font-size="9" text-anchor="middle" fill="currentColor" opacity="0.7">${t}</text>
+        <text x="${P - 6}" y="${sy(t) + 3}" font-size="9" text-anchor="end" fill="currentColor" opacity="0.7">${t}</text>`).join("")}
+      <text x="${W / 2}" y="${H - 6}" font-size="10" text-anchor="middle" fill="currentColor">${esc(SCR_AXIS_LABEL[SCR_PX])}</text>
+      <text x="12" y="${H / 2}" font-size="10" text-anchor="middle" fill="currentColor"
+        transform="rotate(-90 12 ${H / 2})">${esc(SCR_AXIS_LABEL[SCR_PY])}</text>
+      ${dots}
+    </svg>`;
+}
+
 function scrRenderCustomElecs() {
   const box = $("scr-ce-list");
   if (!box) return;
@@ -3426,11 +3524,12 @@ function scrRenderParsed() {
     ${n_ok ? `<details class="small" style="margin-top:6px">
       <summary>등록될 후보 ${n_ok}개</summary>
       <div class="scroll-x"><table class="table" style="min-width:420px">
-        <tr><th>이름</th><th>SMILES</th><th>계산 구조</th><th>원자</th>${has3d ? "<th>비고</th>" : ""}</tr>
+        <tr><th>이름</th><th>SMILES</th><th>계산 구조</th><th>원자</th><th>작용기</th>${has3d ? "<th>비고</th>" : ""}</tr>
         ${rows.filter(r => r.ok).map(r => `<tr><td>${esc(r.name)}</td>
           <td class="mono">${esc(r.smiles)}</td>
           <td class="mono muted">${r.geometry ? "업로드 3D 좌표" : esc(r.calc_smiles)}</td>
-          <td>${r.atoms}</td>${has3d ? `<td class="muted small">${esc(r.note || "")}</td>` : ""}</tr>`).join("")}
+          <td>${r.atoms}</td><td class="muted small">${(r.fgroups || []).map(esc).join(" · ")}</td>
+          ${has3d ? `<td class="muted small">${esc(r.note || "")}</td>` : ""}</tr>`).join("")}
       </table></div></details>` : ""}`;
   scrEstimate();
 }

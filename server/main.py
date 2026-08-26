@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer
 from . import lookup as lookup_mod
-from . import presets, screening, store, structfile, worker
+from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
 MAX_ATOMS = int(os.environ.get("RHOBENCH_MAX_ATOMS", "60"))
@@ -464,6 +464,13 @@ class CustomElectrode(BaseModel):
     high: float = Field(ge=-0.5, le=6.0)
 
 
+class ScoringConfig(BaseModel):
+    """5대 DFT Score 설정 (기획서 7장) — 켜면 마지막 단계에서 물성 지문까지 계산."""
+    enabled: bool = False
+    preset: str = "균등"
+    weights: Optional[dict] = None   # 축 키 → 가중치 (서버가 합=1 로 재정규화)
+
+
 class ScreeningCampaignRequest(BaseModel):
     name: str = Field("", max_length=100)
     candidates: list[ScreeningCandidate] = Field(min_length=1)
@@ -472,6 +479,7 @@ class ScreeningCampaignRequest(BaseModel):
     marginV: float = Field(0.3, ge=0.0, le=2.0)
     stages: list[ScreeningStage] = Field(min_length=1, max_length=3)
     rescanGeometry: bool = False   # 업로드 3D 좌표를 버리고 conformer 탐색부터
+    scoring: ScoringConfig = ScoringConfig()
     settings: JobSettings = JobSettings()
 
 
@@ -486,6 +494,10 @@ def screening_meta(_: bool = Depends(require_login)):
             "max_atoms": MAX_ATOMS,
             "default_margin_v": 0.3,
             "vertical_red_buffer": screening.VERTICAL_RED_BUFFER,
+            "score_axes": scoring.AXES,
+            "weight_presets": scoring.WEIGHT_PRESETS,
+            "score_anchors": scoring.ANCHORS,
+            "protocol_version": scoring.PROTOCOL_VERSION,
             "purpose": screening.SCREEN_PURPOSE,
             "thermo_note": screening.THERMO_NOTE}
 
@@ -579,10 +591,17 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
                              "rescan": c.geometry.rescan or req.rescanGeometry}
         validated.append(v)
 
+    scoring_cfg = None
+    if req.scoring.enabled:
+        if req.scoring.preset not in scoring.WEIGHT_PRESETS:
+            raise HTTPException(400, f"알 수 없는 가중치 프리셋: {req.scoring.preset}")
+        scoring_cfg = {"enabled": True, "preset": req.scoring.preset,
+                       "weights": scoring.normalize_weights(
+                           req.scoring.weights, req.scoring.preset)}
     camp = screening.create_campaign(
         name=req.name, candidates=validated, electrodes=electrodes,
         margin_v=req.marginV, stages=[st.model_dump() for st in req.stages],
-        settings=settings, custom_electrodes=customs)
+        settings=settings, custom_electrodes=customs, scoring_cfg=scoring_cfg)
     return {"campaign": screening.campaign_summary(camp),
             "estimate": screening.estimate(len(validated),
                                            [st.model_dump() for st in req.stages])}
@@ -654,17 +673,24 @@ def screening_export(cid: str, format: str = "csv",
     head = ["rank", "name", "smiles", "grade", "provisional",
             "worst_margin_v", "reduction_v", "oxidation_v"]
     head += [f"margin_v[{e}]" for e in elec] + [f"grade[{e}]" for e in elec]
-    head += ["state", "error", "job_ids",
+    scoring_on = bool((view.get("scoring") or {}).get("enabled"))
+    if scoring_on:
+        head += ["total_score", "penalty", "hard_fail", "confidence"]
+        head += [f"score[{k}]" for k, _ in scoring.AXES]
+        head += ["score_reasons"]
+    head += ["functional_groups", "state", "error", "job_ids",
              "campaign", "stages", "margin_setting_v", "solvent", "temperature_k",
-             "functional", "reference_electrode"]
+             "functional", "reference_electrode", "protocol"]
     writer.writerow(head)
     s = view["settings"]
     const = [view["name"], " → ".join(st["accuracy"] for st in view["stages"]),
              view["margin_v"], s.get("solventId") or "vacuum", s.get("temperature"),
-             (s.get("expert") or {}).get("functional"), s.get("referenceElectrode")]
+             (s.get("expert") or {}).get("functional"), s.get("referenceElectrode"),
+             view.get("protocol") or ""]
     for c in sorted(view["candidates"],
                     key=lambda x: (x.get("rank") is None, x.get("rank") or 0)):
         v = c.get("verdict") or {}
+        sc = c.get("score") or {}
         per = {p["electrode"]: p for p in v.get("per_electrode", [])}
         writer.writerow(
             [c.get("rank", ""), c["name"], c["smiles"], v.get("grade", "판정 불가"),
@@ -673,7 +699,12 @@ def screening_export(cid: str, format: str = "csv",
              v.get("oxidation_v", "")]
             + [per.get(e, {}).get("margin_v", "") for e in elec]
             + [per.get(e, {}).get("grade", "") for e in elec]
-            + [c["state"], c.get("detail") or "",
+            + (([sc.get("total", ""), sc.get("penalty", ""),
+                 "예" if sc.get("hard_fail") else "", sc.get("confidence", "")]
+                + [((sc.get("axes") or {}).get(k) or {}).get("score", "")
+                   for k, _ in scoring.AXES]
+                + [" / ".join(sc.get("reasons") or [])]) if scoring_on else [])
+            + [" · ".join(c.get("fgroups") or []), c["state"], c.get("detail") or "",
                " ".join(c["jobs"].values())] + const)
     return Response(
         content="﻿" + buf.getvalue(),  # BOM - Excel 한글 깨짐 방지

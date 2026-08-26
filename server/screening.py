@@ -27,7 +27,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
-from . import esw, geometry, presets, store, worker
+from . import esw, geometry, presets, scoring, store, worker
 
 DATA_DIR = Path(os.environ.get(
     "RHOBENCH_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
@@ -92,6 +92,30 @@ def _log(camp: dict, msg: str):
     camp.setdefault("logs", []).append(f"[{time.strftime('%m-%d %H:%M:%S')}] {msg}")
 
 
+# 작용기 태그 (기획서 9.1) — 표·필터용 표시. 위에서 아래로 검사하며 겹침 허용.
+FG_SMARTS = [
+    ("–COOH", "C(=O)[OX2H1]"),
+    ("–SO₃H", "S(=O)(=O)[OX2H]"),
+    ("에스터", "C(=O)O[#6]"),
+    ("아마이드", "C(=O)[NX3]"),
+    ("–CN", "[NX1]#[CX2]"),
+    ("–NH₂", "[NX3;H2;!$(NC=O)]"),
+    ("–OH", "[OX2H;!$([OX2H]C=O)]"),
+    ("–F", "[F]"),
+    ("방향족", "a"),
+    ("C=C", "[CX3]=[CX3]"),
+]
+_FG_PATTERNS = [(name, Chem.MolFromSmarts(sm)) for name, sm in FG_SMARTS]
+
+
+def _fgroups(smiles: str) -> list[str]:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return []
+    return [name for name, patt in _FG_PATTERNS
+            if patt is not None and mol.HasSubstructMatch(patt)]
+
+
 # ---------------------------------------------------------------- 후보 파싱
 def _canonical(smiles: str):
     mol = Chem.MolFromSmiles(smiles)
@@ -145,6 +169,7 @@ def parse_candidates(text: str, structure: str = "모노머",
             continue
         seen[canonical] = line_no
         row["canonical"] = canonical
+        row["fgroups"] = _fgroups(canonical)
         calc_smiles = smiles
         if n_units > 1:
             try:
@@ -238,6 +263,11 @@ def _stage_settings(camp: dict, stage_idx: int) -> dict:
     s = dict(camp["settings"])
     s["accuracy"] = camp["stages"][stage_idx]["accuracy"]
     s["purpose"] = SCREEN_PURPOSE
+    # 5대 Score 캠페인은 마지막 단계에서 물성 지문(접착·Li⁺·용매화·BDE)까지
+    # 계산한다 — 그 전 단계는 전위만으로 깔때기를 돌려 비용을 아낀다 (기획서 11.1)
+    if ((camp.get("scoring") or {}).get("enabled")
+            and stage_idx == len(camp["stages"]) - 1):
+        s["purpose"] = "물성 지문 (확장 기술자 전체)"
     # 후보는 이미 올리고머로 전개되어 있다 — 엔진이 다시 전개하지 않도록
     s["structure"] = "모노머"
     return s
@@ -245,7 +275,8 @@ def _stage_settings(camp: dict, stage_idx: int) -> dict:
 
 def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
                     margin_v: float, stages: list[dict], settings: dict,
-                    custom_electrodes: list | None = None) -> dict:
+                    custom_electrodes: list | None = None,
+                    scoring_cfg: dict | None = None) -> dict:
     """검증된 후보 목록으로 캠페인을 만들고 즉시 시작한다."""
     with _lock:
         _load()
@@ -262,6 +293,8 @@ def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
             "finishedAt": None,
             "electrodes": electrodes,
             "customElectrodes": custom_electrodes or [],
+            "scoring": scoring_cfg,          # 5대 Score 설정 (기획서 7장)
+            "protocol": scoring.PROTOCOL_VERSION,
             "margin_v": margin_v,
             "stages": [{"accuracy": st["accuracy"], "keep": st.get("keep")}
                        for st in stages],
@@ -275,6 +308,7 @@ def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
                  "calcSmiles": c.get("calc_smiles") or c["smiles"],
                  "atoms": c.get("atoms"),
                  "geometry": c.get("geometry"),   # 업로드 3D 구조 (선택)
+                 "fgroups": c.get("fgroups") or [],
                  "alive": True, "failed": False, "cutStage": None,
                  "error": None, "retries": {}, "jobs": {}, "verdict": None}
                 for i, c in enumerate(candidates)],
@@ -589,6 +623,11 @@ def _finalize(camp: dict):
             desc = job["result"].get("descriptors") or {}
             c["verdict"] = judge(desc, camp["electrodes"], camp["margin_v"],
                                  windows=_windows(camp))
+            sc = camp.get("scoring") or {}
+            if sc.get("enabled"):
+                c["score"] = scoring.evaluate(
+                    desc, c["verdict"], camp["electrodes"],
+                    weights=sc.get("weights"), preset=sc.get("preset") or "균등")
     camp["status"] = "DONE"
     camp["finishedAt"] = time.time()
     graded = [c for c in camp["candidates"] if c.get("verdict")]
@@ -683,6 +722,7 @@ def _candidate_view(c: dict, camp: dict) -> dict:
             "state": state, "detail": detail,
             "alive": c["alive"], "failed": c["failed"], "cutStage": c["cutStage"],
             "jobs": c["jobs"], "verdict": verdict, "provisional": provisional,
+            "score": c.get("score"), "fgroups": c.get("fgroups") or [],
             "progress": (job or {}).get("progress") if job else None}
 
 
@@ -743,9 +783,15 @@ def campaign_view(camp: dict) -> dict:
 
     cands = [_candidate_view(c, camp) for c in camp["candidates"]]
     # 순위 — 판정 가능한 후보를 안정성 여유 내림차순으로
-    ranked = sorted([c for c in cands if c["verdict"] and
-                     c["verdict"]["worst_margin_v"] is not None],
-                    key=lambda c: -c["verdict"]["worst_margin_v"])
+    if (camp.get("scoring") or {}).get("enabled"):
+        # 5대 Score 캠페인 — Hard Filter 탈락은 뒤로, 나머지는 총점 내림차순
+        ranked = sorted([c for c in cands
+                         if c.get("score") and c["score"]["total"] is not None],
+                        key=lambda c: (c["score"]["hard_fail"], -c["score"]["total"]))
+    else:
+        ranked = sorted([c for c in cands if c["verdict"] and
+                         c["verdict"]["worst_margin_v"] is not None],
+                        key=lambda c: -c["verdict"]["worst_margin_v"])
     for rank, c in enumerate(ranked, start=1):
         c["rank"] = rank
 
@@ -787,6 +833,8 @@ def campaign_view(camp: dict) -> dict:
             "stages": stages, "candidates": cands, "counts": counts,
             "eta_s": eta_s, "batch_parallel": BATCH_PARALLEL,
             "overall_pct": _overall_pct(camp),
+            "scoring": camp.get("scoring"),
+            "protocol": camp.get("protocol"),
             "thermo_note": THERMO_NOTE}
 
 

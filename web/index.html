@@ -1255,6 +1255,17 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       <label class="compare-check small"><input type="checkbox" id="scr-st3"> 3차 — 정밀 (최종 확인)</label>
     </div>
 
+    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">4. 5대 DFT Score (선택)</h3>
+    <p class="muted small" style="margin:4px 0 8px">켜면 마지막 단계에서 물성 지문(표면 흡착·Li⁺ 결합·용매화·BDE)까지
+      계산해 <b>접착 · 전기화학 안정성 · 전해액 친화도 · 이온 상호작용 · 화학적 안정성</b>의 0~100점과
+      가중 총점 순위를 산출합니다 (마지막 단계 시간 증가). 친화도·이온 축은 목표 범위(target window)식 채점이며,
+      Hard Filter(전위 창 위반)와 감점 사유는 점수와 분리해 표시됩니다.</p>
+    <div class="toolbar">
+      <label class="compare-check small"><input type="checkbox" id="scr-score-on"> 5대 Score 산출</label>
+      <label class="small">가중치 프리셋 <select class="input" id="scr-score-preset"></select></label>
+    </div>
+    <div id="scr-score-weights" style="margin:6px 0"></div>
+
     <div class="toolbar" style="margin-top:14px">
       <input class="input grow" id="scr-name" placeholder="캠페인 이름 (예: NCM811 바인더 1차)">
       <button class="btn primary" id="scr-submit" type="button">캠페인 시작</button>
