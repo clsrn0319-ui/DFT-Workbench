@@ -1297,11 +1297,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
       {label: "물질 비교", mode: "compare"}]},
-    {group: "건식 바인더", items: [
-      {label: "바인더 후보군", mode: "binder"},
-      {label: "후보 순위", mode: "binderrank"},
-      {label: "사슬 길이 수렴", mode: "chain"},
-      {label: "기계 물성 · 상태", mode: "mech"}]},
+    // 건식 바인더 그룹(바인더 후보군·후보 순위·사슬 길이 수렴·기계 물성·상태)은
+    // 현 단계에서 쓰지 않아 메뉴에서 제외 — 화면·백엔드는 남아 있어 여기만
+    // 되살리면 다시 나타난다.
     {group: "참고", items: [
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
