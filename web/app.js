@@ -3269,6 +3269,8 @@ async function scrRenderDetail() {
   $("scr-resume").style.display = v.status === "PAUSED" ? "" : "none";
   $("scr-cancel").style.display = running ? "" : "none";
   $("scr-delete").style.display = ["RUNNING", "PAUSED"].includes(v.status) ? "none" : "";
+  $("scr-reverify").style.display = (v.status === "DONE"
+    && v.candidates.some(x => x.verdict?.lumo_check)) ? "" : "none";
 
   const stageBars = v.stages.map((st, i) => {
     const denom = st.n_entered || v.counts.alive || 1;
@@ -3476,6 +3478,17 @@ function scrWire() {
       SCR_DETAIL_ID = null;
       $("scr-detail").style.display = "none";
       await scrRenderList();
+    } catch (e) { alert(e.message); }
+  });
+  $("scr-reverify").addEventListener("click", async () => {
+    if (!confirm("LUMO 불일치 후보만 표준 정확도로 다시 계산하는 후속 캠페인을 만들까요?\n"
+        + "(표준은 후보당 수십 분 — 완료되면 확정 판정으로 갱신됩니다)")) return;
+    try {
+      const {campaign} = await scrFetch(
+        `/api/screening/campaigns/${SCR_DETAIL_ID}/reverify`, {method: "POST"});
+      SCR_DETAIL_ID = campaign.id;
+      await scrRenderList();
+      await scrRenderDetail();
     } catch (e) { alert(e.message); }
   });
   $("scr-export-csv").addEventListener("click", () =>

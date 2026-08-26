@@ -672,3 +672,74 @@ def test_campaign_verdict_carries_lumo_check(no_worker, monkeypatch):
     screening._advance(camp)
     assert camp["status"] == "DONE"
     assert camp["candidates"][0]["verdict"]["lumo_check"] is not None
+
+
+# ---------------------------------------------------------------- 재판정·재검증
+def test_view_rejudges_stale_stored_verdicts(no_worker, monkeypatch):
+    """저장된 옛 판정(강등 이전)이 있어도 화면·집계는 최신 판정 로직을 따른다."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    cands = screening.parse_candidates("MAh,O=C1OC(=O)C=C1")["rows"]
+    camp = screening.create_campaign(
+        name="stale", candidates=[c for c in cands if c["ok"]],
+        electrodes=["graphite"], margin_v=0.3, stages=[{"accuracy": "빠름"}],
+        settings={"envType": "사용자 정의", "solventId": "sol-ecdmc",
+                  "temperature": 298.15, "structure": "모노머",
+                  "referenceElectrode": "Li/Li+", "accuracy": "빠름",
+                  "purpose": screening.SCREEN_PURPOSE,
+                  "expert": {"functional": "PBE0-D3(BJ)", "basis": None,
+                             "charge": 0, "multiplicity": 1}})
+    screening._advance(camp)
+    store.update_job(_stage_jobs(camp, 0)["MAh"], {
+        "status": "PUBLISHED", "result": {"descriptors": _mah_desc()}})
+    screening._advance(camp)
+    # 옛 코드가 남긴 판정을 흉내 — 강등·lumo_check 없는 «적합»
+    camp["candidates"][0]["verdict"] = {
+        "grade": "적합", "per_electrode": [], "worst_margin_v": 0.36,
+        "reduction_v": -0.349, "oxidation_v": 9.587, "basis": "수직", "note": None}
+    view = screening.campaign_view(camp)
+    cd = view["candidates"][0]
+    assert cd["verdict"]["grade"] == "조건부"          # 소급 강등
+    assert cd["verdict"]["lumo_check"] is not None
+    assert view["counts"]["conditional"] == 1 and view["counts"]["fit"] == 0
+
+
+def test_reverify_lumo_creates_followup(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    text = "MAh,O=C1OC(=O)C=C1\n물,O"
+    cands = screening.parse_candidates(text)["rows"]
+    camp = screening.create_campaign(
+        name="원본", candidates=[c for c in cands if c["ok"]],
+        electrodes=["graphite"], margin_v=0.3, stages=[{"accuracy": "빠름"}],
+        settings={"envType": "사용자 정의", "solventId": "sol-ecdmc",
+                  "temperature": 298.15, "structure": "모노머",
+                  "referenceElectrode": "Li/Li+", "accuracy": "빠름",
+                  "purpose": screening.SCREEN_PURPOSE,
+                  "expert": {"functional": "PBE0-D3(BJ)", "basis": None,
+                             "charge": 0, "multiplicity": 1}})
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    store.update_job(jobs["MAh"], {"status": "PUBLISHED",
+                                   "result": {"descriptors": _mah_desc()}})
+    store.update_job(jobs["물"], {"status": "PUBLISHED",
+                                  "result": {"descriptors": _desc(-5.3, 10.8)}})
+    screening._advance(camp)
+    assert camp["status"] == "DONE"
+
+    new = screening.reverify_lumo(camp)
+    assert "재검증" in new["name"]
+    assert [s["accuracy"] for s in new["stages"]] == ["표준"]
+    assert len(new["candidates"]) == 1                 # 불일치 후보(MAh)만
+    assert new["candidates"][0]["name"] == "MAh"
+    assert new["settings"]["accuracy"] == "표준"
+    assert new["settings"]["solventId"] == "sol-ecdmc"
+    assert new["electrodes"] == ["graphite"]
+
+
+def test_reverify_lumo_no_targets(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    camp = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    screening._advance(camp)
+    _fake_publish(_stage_jobs(camp, 0)["m0"], -1.0, 5.0)
+    screening._advance(camp)
+    with pytest.raises(ValueError):
+        screening.reverify_lumo(camp)

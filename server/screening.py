@@ -751,24 +751,33 @@ def _candidate_view(c: dict, camp: dict) -> dict:
                  "PUBLISHED": "완료", "FAILED": "재시도 대기"}.get(job["status"], "대기")
         detail = job.get("stage") if job["status"] == "RUNNING" else None
 
-    # 판정: 최종 판정이 있으면 그것을, 없으면 마지막 완료 단계의 잠정 판정
-    verdict = c.get("verdict")
-    provisional = False
+    # 판정 — 저장본을 쓰지 않고 항상 다시 판정한다 (binder_rank 와 같은 원칙):
+    # 순수 함수라 비용이 없고, 판정 로직이 개선되면(예: LUMO 불일치 강등)
+    # 이미 끝난 캠페인의 화면·집계·CSV 에도 즉시 반영된다. 마지막 완료 단계 기준.
+    verdict, provisional, desc = None, False, None
+    for si in range(len(camp["stages"]) - 1, -1, -1):
+        j = store.get_job(c["jobs"].get(str(si)))
+        if j and j["status"] == "PUBLISHED" and j.get("result"):
+            desc = j["result"].get("descriptors") or {}
+            verdict = judge(desc, camp["electrodes"], camp["margin_v"],
+                            windows=_windows(camp), e_abs=_e_abs(camp))
+            provisional = (si < len(camp["stages"]) - 1
+                           or camp["status"] not in ("DONE", "CANCELLED"))
+            break
     if verdict is None:
-        for si in range(len(camp["stages"]) - 1, -1, -1):
-            j = store.get_job(c["jobs"].get(str(si)))
-            if j and j["status"] == "PUBLISHED" and j.get("result"):
-                verdict = judge(j["result"].get("descriptors") or {},
-                                camp["electrodes"], camp["margin_v"],
-                                windows=_windows(camp), e_abs=_e_abs(camp))
-                provisional = True
-                break
+        verdict = c.get("verdict")   # 작업이 지워진 경우에만 저장본 폴백
+    score = c.get("score")
+    sc_cfg = camp.get("scoring") or {}
+    if sc_cfg.get("enabled") and desc is not None and verdict is not None:
+        score = scoring.evaluate(desc, verdict, camp["electrodes"],
+                                 weights=sc_cfg.get("weights"),
+                                 preset=sc_cfg.get("preset") or "균등")
     return {"idx": c["idx"], "name": c["name"], "smiles": c["smiles"],
             "calcSmiles": c["calcSmiles"], "atoms": c["atoms"],
             "state": state, "detail": detail,
             "alive": c["alive"], "failed": c["failed"], "cutStage": c["cutStage"],
             "jobs": c["jobs"], "verdict": verdict, "provisional": provisional,
-            "score": c.get("score"), "fgroups": c.get("fgroups") or [],
+            "score": score, "fgroups": c.get("fgroups") or [],
             "progress": (job or {}).get("progress") if job else None}
 
 
@@ -882,6 +891,35 @@ def campaign_view(camp: dict) -> dict:
             "scoring": camp.get("scoring"),
             "protocol": camp.get("protocol"),
             "thermo_note": THERMO_NOTE}
+
+
+def reverify_lumo(camp: dict) -> dict:
+    """LUMO 불일치 후보만 모아 표준 정확도로 다시 확인하는 후속 캠페인.
+
+    같은 전극·마진·용매·설정을 그대로 쓰고 정확도만 «표준»(단열·ΔG 전위)으로
+    올린다 — 수직 EA 와 LUMO 추정이 상반된 후보의 확정 판정이 목적이다.
+    다른 캠페인이 돌고 있으면 대기열로 들어간다.
+    """
+    view = campaign_view(camp)
+    targets = [c for c in view["candidates"]
+               if (c.get("verdict") or {}).get("lumo_check")]
+    if not targets:
+        raise ValueError("LUMO 불일치 후보가 없습니다.")
+    rows = []
+    for t in targets:
+        r = parse_candidates(f"{t['name']},{t['smiles']}")["rows"]
+        if r and r[0]["ok"]:
+            rows.append(r[0])
+    if not rows:
+        raise ValueError("재검증할 후보를 해석하지 못했습니다.")
+    settings = dict(camp["settings"])
+    settings["accuracy"] = "표준"
+    return create_campaign(
+        name=f"{camp['name']} — LUMO 재검증(표준)", candidates=rows,
+        electrodes=camp["electrodes"], margin_v=camp["margin_v"],
+        stages=[{"accuracy": "표준"}], settings=settings,
+        custom_electrodes=camp.get("customElectrodes"),
+        scoring_cfg=camp.get("scoring"))
 
 
 def campaign_summary(camp: dict) -> dict:

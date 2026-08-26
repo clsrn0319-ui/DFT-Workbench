@@ -664,6 +664,19 @@ def screening_delete(cid: str, _: bool = Depends(require_login)):
     return {"ok": True}
 
 
+@app.post("/api/screening/campaigns/{cid}/reverify")
+def screening_reverify(cid: str, _: bool = Depends(require_login)):
+    """LUMO 불일치 후보만 표준 정확도로 재검증하는 후속 캠페인을 만든다."""
+    camp = _campaign_or_404(cid)
+    if camp["status"] not in ("DONE", "CANCELLED"):
+        raise HTTPException(400, "완료된 캠페인에서만 재검증을 시작할 수 있습니다.")
+    try:
+        new = screening.reverify_lumo(camp)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"campaign": screening.campaign_summary(new)}
+
+
 @app.get("/api/screening/campaigns/{cid}/export")
 def screening_export(cid: str, format: str = "csv",
                      _: bool = Depends(require_login)):
