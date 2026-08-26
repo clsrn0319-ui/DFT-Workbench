@@ -380,3 +380,97 @@ def test_stage_chaining_disabled_flag(no_worker, monkeypatch):
     screening._advance(camp)
     j1 = _stage_jobs(camp, 1)["m0"]
     assert store.get_job(j1)["material"].get("geometry") is None
+
+
+# ---------------------------------------------------------------- 대기열·진행률
+def test_campaign_queue_and_promote(no_worker, monkeypatch):
+    """두 번째 캠페인은 대기열(QUEUED)로 등록되고, 앞 캠페인이 끝나면 자동 시작."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    camp1 = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    camp2 = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    assert camp1["status"] == "RUNNING"
+    assert camp2["status"] == "QUEUED"
+    assert screening._promote_queued() is False      # 아직 camp1 실행 중
+    screening._advance(camp1)
+    _fake_publish(_stage_jobs(camp1, 0)["m0"], -1.0, 5.0)
+    screening._advance(camp1)
+    assert camp1["status"] == "DONE"
+    assert screening._promote_queued() is True
+    assert camp2["status"] == "RUNNING"
+
+
+def test_queued_campaign_cancel_but_no_pause(no_worker):
+    camp1 = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    camp2 = _make_campaign(n=1, stages=[{"accuracy": "빠름"}])
+    assert screening.set_status(camp2["id"], "PAUSED") is False   # 대기 중은 일시정지 불가
+    assert screening.set_status(camp2["id"], "CANCELLED") is True
+
+
+def test_overall_pct(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    camp = _make_campaign(n=2, stages=[{"accuracy": "빠름"}])
+    assert screening._overall_pct(camp) == 0
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    _fake_publish(jobs["m0"], -1.0, 5.0)
+    assert screening._overall_pct(camp) == 50        # 단일 단계 2개 중 1개 완료
+    _fake_publish(jobs["m1"], -1.0, 5.0)
+    screening._advance(camp)
+    assert camp["status"] == "DONE"
+    assert screening._overall_pct(camp) == 100
+    assert screening.campaign_summary(camp)["overall_pct"] == 100
+
+
+# ---------------------------------------------------------------- 사용자 정의 활물질
+def test_judge_with_custom_window():
+    win = {"lnmo": {"key": "lnmo", "label": "LNMO", "side": "사용자",
+                    "low": 3.5, "high": 4.75, "nominal": 4.75}}
+    v = screening.judge(_desc(-1.0, 5.2), ["lnmo"], 0.3, windows=win)
+    assert v["grade"] == "적합"
+    assert v["per_electrode"][0]["label"] == "LNMO"
+    assert v["per_electrode"][0]["margin_v"] == pytest.approx(0.45)
+    v2 = screening.judge(_desc(-1.0, 4.6), ["lnmo"], 0.3, windows=win)
+    assert v2["grade"] == "부적합"                    # 상한 4.75 미달
+
+
+def test_campaign_with_custom_electrode(no_worker, monkeypatch):
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    cands = screening.parse_candidates("m0,CO")["rows"]
+    camp = screening.create_campaign(
+        name="사용자전극", candidates=[c for c in cands if c["ok"]],
+        electrodes=["custom-1"], margin_v=0.3,
+        stages=[{"accuracy": "빠름"}],
+        settings={"envType": "진공·기체", "solventId": None, "temperature": 298.15,
+                  "structure": "모노머", "referenceElectrode": "Li/Li+",
+                  "accuracy": "빠름", "purpose": screening.SCREEN_PURPOSE,
+                  "expert": {"functional": "PBE0-D3(BJ)", "basis": None,
+                             "charge": 0, "multiplicity": 1}},
+        custom_electrodes=[{"key": "custom-1", "label": "LNMO", "low": 3.5,
+                            "high": 4.75, "nominal": 4.75, "side": "사용자"}])
+    screening._advance(camp)
+    _fake_publish(_stage_jobs(camp, 0)["m0"], -1.0, 5.2)
+    screening._advance(camp)
+    assert camp["status"] == "DONE"
+    vd = camp["candidates"][0]["verdict"]
+    assert vd["grade"] == "적합"
+    assert vd["per_electrode"][0]["label"] == "LNMO"
+
+
+# ---------------------------------------------------------------- 엑셀 업로드
+def test_xlsx_to_text_roundtrip(tmp_path):
+    import io
+
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["name", "smiles"])
+    ws.append(["VDF", "C=C(F)F"])
+    ws.append(["AA", "C=CC(=O)O"])
+    ws.append([None, None])                          # 빈 행은 무시
+    buf = io.BytesIO()
+    wb.save(buf)
+    text = screening.xlsx_to_text(buf.getvalue())
+    out = screening.parse_candidates(text)
+    assert out["n_ok"] == 2
+    names = {r["name"] for r in out["rows"] if r["ok"]}
+    assert names == {"VDF", "AA"}

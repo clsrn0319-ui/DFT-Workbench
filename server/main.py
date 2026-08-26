@@ -457,10 +457,18 @@ class ScreeningStage(BaseModel):
     keep: Optional[int] = Field(None, ge=1, le=10_000)
 
 
+class CustomElectrode(BaseModel):
+    """사용자 정의 활물질 — 구동 전위 범위(V vs Li/Li+)를 직접 지정한다."""
+    label: str = Field(min_length=1, max_length=40)
+    low: float = Field(ge=-0.5, le=6.0)
+    high: float = Field(ge=-0.5, le=6.0)
+
+
 class ScreeningCampaignRequest(BaseModel):
     name: str = Field("", max_length=100)
     candidates: list[ScreeningCandidate] = Field(min_length=1)
-    electrodes: list[str] = Field(min_length=1, max_length=5)
+    electrodes: list[str] = Field(default=[], max_length=5)
+    customElectrodes: list[CustomElectrode] = Field(default=[], max_length=5)
     marginV: float = Field(0.3, ge=0.0, le=2.0)
     stages: list[ScreeningStage] = Field(min_length=1, max_length=3)
     rescanGeometry: bool = False   # 업로드 3D 좌표를 버리고 conformer 탐색부터
@@ -495,23 +503,58 @@ def screening_parse(req: ScreeningParseRequest, _: bool = Depends(require_login)
     return parsed
 
 
+class ScreeningParseXlsxRequest(BaseModel):
+    contentB64: str = Field(min_length=1, max_length=20_000_000)   # base64 인코딩 .xlsx
+    structure: str = "모노머"
+
+
+@app.post("/api/screening/parse-xlsx")
+def screening_parse_xlsx(req: ScreeningParseXlsxRequest,
+                         _: bool = Depends(require_login)):
+    """엑셀(.xlsx) 후보 목록 검증 — 첫 시트를 CSV 로 변환해 같은 검증을 거친다."""
+    if req.structure not in ("모노머", "2량체", "3량체"):
+        raise HTTPException(400, f"알 수 없는 구조: {req.structure}")
+    import base64
+    import binascii
+    try:
+        data = base64.b64decode(req.contentB64, validate=True)
+    except binascii.Error:
+        raise HTTPException(400, "파일 인코딩이 올바르지 않습니다.")
+    try:
+        text = screening.xlsx_to_text(data)
+    except Exception as exc:  # noqa: BLE001 — openpyxl 오류를 사용자 문구로
+        raise HTTPException(400, f"엑셀 파일을 읽지 못했습니다: {exc}")
+    if not text.strip():
+        raise HTTPException(400, "엑셀 첫 시트가 비어 있습니다.")
+    parsed = screening.parse_candidates(text, structure=req.structure,
+                                        max_atoms=MAX_ATOMS)
+    if parsed["n_ok"] > screening.MAX_CANDIDATES:
+        parsed["warning"] = (f"유효 후보 {parsed['n_ok']}개 — 캠페인 상한 "
+                             f"{screening.MAX_CANDIDATES}개를 초과합니다. 나눠서 제출하세요.")
+    return parsed
+
+
 @app.post("/api/screening/campaigns")
 def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_login)):
     for e in req.electrodes:
         if e not in esw.ELECTRODE_BY_KEY:
             raise HTTPException(400, f"알 수 없는 전극: {e}")
+    customs = []
+    for i, ce in enumerate(req.customElectrodes, start=1):
+        if ce.low >= ce.high:
+            raise HTTPException(400, f"{ce.label}: 구동 하한이 상한보다 작아야 합니다.")
+        customs.append({"key": f"custom-{i}", "label": ce.label,
+                        "low": ce.low, "high": ce.high, "nominal": ce.high,
+                        "side": "사용자", "note": "사용자 정의 활물질"})
+    electrodes = req.electrodes + [c["key"] for c in customs]
+    if not electrodes:
+        raise HTTPException(400, "대상 활물질을 선택하거나 사용자 정의 활물질을 추가하세요.")
     for st in req.stages:
         if st.accuracy not in presets.ACCURACY:
             raise HTTPException(400, f"알 수 없는 정확도 프리셋: {st.accuracy}")
     if len(req.candidates) > screening.MAX_CANDIDATES:
         raise HTTPException(400, f"후보는 캠페인당 {screening.MAX_CANDIDATES}개까지입니다 "
                                  f"(요청 {len(req.candidates)}개).")
-    n_running = sum(1 for c in screening.list_campaigns()
-                    if c["status"] in ("RUNNING", "PAUSED"))
-    if n_running >= 1:
-        raise HTTPException(400, "이미 진행 중(또는 일시정지)인 캠페인이 있습니다 — "
-                                 "완료·취소 후 시작하세요 (서버 자원 보호).")
-
     settings = req.settings.model_dump()
     if settings["envType"] == "진공·기체":
         settings["solventId"] = None
@@ -537,9 +580,9 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
         validated.append(v)
 
     camp = screening.create_campaign(
-        name=req.name, candidates=validated, electrodes=req.electrodes,
+        name=req.name, candidates=validated, electrodes=electrodes,
         margin_v=req.marginV, stages=[st.model_dump() for st in req.stages],
-        settings=settings)
+        settings=settings, custom_electrodes=customs)
     return {"campaign": screening.campaign_summary(camp),
             "estimate": screening.estimate(len(validated),
                                            [st.model_dump() for st in req.stages])}

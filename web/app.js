@@ -1348,7 +1348,10 @@ function render3D(r) {
   if (VIEW_MODE === "cloud") {
     note.textContent = cloud
       ? "전자구름: 점의 밀집도가 전자 밀도 ρ(r)에 비례 — 점이 촘촘할수록 전자가 많이 머무는 영역 · 드래그 회전 / 휠 확대"
-      : "이 결과에는 전자밀도 데이터가 없습니다 (이전 버전에서 계산된 작업). 다시 계산하면 표시됩니다.";
+      : (r.slimmed
+        ? "배치 스크리닝 결과는 용량 절약을 위해 전자구름 점 데이터를 저장하지 않습니다 — "
+          + "구조·물성 값은 그대로이며, «DFT 계산»에서 단건으로 다시 계산하면 전자구름도 표시됩니다."
+        : "이 결과에는 전자밀도 데이터가 없습니다 (이전 버전에서 계산된 작업). 다시 계산하면 표시됩니다.");
   }
 
   const RCOV = {H:.31,C:.76,N:.71,O:.66,F:.57,S:1.05,P:1.07,Cl:1.02,Br:1.2,I:1.39,Li:1.28};
@@ -2914,13 +2917,15 @@ let SCR_PARSED = null;      // 마지막 검증 결과
 let SCR_DETAIL_ID = null;   // 열려 있는 캠페인 id
 let SCR_TIMER = null;
 let SCR_WIRED = false;
+let SCR_CUSTOM_ELECS = [];   // 사용자 정의 활물질 {label, low, high}
 
 const SCR_GRADE_BADGE = {
   "적합": "verdict-ok", "조건부": "verdict-mid",
   "부적합": "verdict-no", "판정 불가": "failed",
 };
 const SCR_STATUS_LABEL = {
-  RUNNING: "진행 중", PAUSED: "일시정지", DONE: "완료", CANCELLED: "취소됨",
+  QUEUED: "대기 중", RUNNING: "진행 중", PAUSED: "일시정지",
+  DONE: "완료", CANCELLED: "취소됨",
 };
 
 async function scrFetch(url, opts) {
@@ -2957,9 +2962,9 @@ async function scrRenderList() {
   }
   box.className = "";
   box.innerHTML = campaigns.map(c => {
-    const pct = c.n_alive ? Math.round(100 * c.n_done_stage / c.n_alive) : 0;
+    const pct = c.overall_pct ?? (c.n_alive ? Math.round(100 * c.n_done_stage / c.n_alive) : 0);
     const badge = c.status === "RUNNING" ? "running" : c.status === "DONE" ? "published"
-      : c.status === "PAUSED" ? "queued" : "failed";
+      : ["PAUSED", "QUEUED"].includes(c.status) ? "queued" : "failed";
     return `<div class="job-row" style="cursor:pointer" data-scr-open="${esc(c.id)}">
       <div class="job-main">
         <div><b>${esc(c.name)}</b> <span class="mono small muted">${esc(c.id)}</span></div>
@@ -2967,9 +2972,11 @@ async function scrRenderList() {
           · ${(c.electrodes || []).map(esc).join(", ")} · 마진 ${c.margin_v} V</div>
         ${["RUNNING", "PAUSED"].includes(c.status)
           ? `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-             <div class="small muted">${c.stageIndex + 1}단계(${esc(c.stages[c.stageIndex] || "")})
+             <div class="small muted"><b>전체 ${pct}% 완료</b> · ${c.stageIndex + 1}단계(${esc(c.stages[c.stageIndex] || "")})
                ${c.n_done_stage}/${c.n_alive} 완료${c.n_failed ? ` · 실패 ${c.n_failed}` : ""}
                ${c.autoPaused ? " · <b>실패율 초과로 자동 일시정지</b>" : ""}</div>` : ""}
+      ${c.status === "QUEUED"
+        ? `<div class="small muted">앞 캠페인이 끝나면 자동으로 시작됩니다</div>` : ""}
       </div>
       <span class="badge ${badge}">${SCR_STATUS_LABEL[c.status] || esc(c.status)}</span>
     </div>`;
@@ -3013,6 +3020,11 @@ async function scrOpenWizard() {
   if (!fSel.options.length) {
     for (const f of PRESETS.functionals) fSel.add(new Option(f, f));
     fSel.value = PRESETS.defaults.expert.functional;
+  }
+  const bSel = $("scr-basis");
+  if (bSel && !bSel.options.length) {
+    bSel.add(new Option("(프리셋 기본)", ""));
+    for (const b of PRESETS.basisSets) bSel.add(new Option(b, b));
   }
   scrEstimate();
 }
@@ -3078,7 +3090,9 @@ async function scrSubmit() {
   }
   const electrodes = [...document.querySelectorAll("[data-scr-elec]:checked")]
     .map(i => i.dataset.scrElec);
-  if (!electrodes.length) { err.textContent = "대상 활물질을 하나 이상 선택하세요."; return; }
+  if (!electrodes.length && !SCR_CUSTOM_ELECS.length) {
+    err.textContent = "대상 활물질을 선택하거나 사용자 정의 활물질을 추가하세요."; return;
+  }
   const stages = scrStages();
   if (!stages.length) { err.textContent = "깔때기 단계를 하나 이상 선택하세요."; return; }
   const solventId = $("scr-solvent").value || null;
@@ -3087,6 +3101,7 @@ async function scrSubmit() {
     candidates: SCR_PARSED.rows.filter(r => r.ok)
       .map(r => ({name: r.name, smiles: r.smiles, geometry: r.geometry || null})),
     electrodes,
+    customElectrodes: SCR_CUSTOM_ELECS,
     marginV: Math.max(0, +$("scr-margin").value || 0.3),
     stages,
     rescanGeometry: !!$("scr-rescan")?.checked,
@@ -3097,7 +3112,7 @@ async function scrSubmit() {
       structure: $("scr-structure").value,
       referenceElectrode: $("scr-ref").value,
       expert: {...PRESETS.defaults.expert, functional: $("scr-func").value,
-               charge: SCR_3D_CHARGE},
+               basis: $("scr-basis")?.value || null, charge: SCR_3D_CHARGE},
     },
   };
   const btn = $("scr-submit");
@@ -3131,11 +3146,11 @@ async function scrRenderDetail() {
   card.style.display = "";
   $("scr-detail-title").textContent =
     `${v.name} — ${SCR_STATUS_LABEL[v.status] || v.status}`;
-  const running = ["RUNNING", "PAUSED"].includes(v.status);
+  const running = ["RUNNING", "PAUSED", "QUEUED"].includes(v.status);
   $("scr-pause").style.display = v.status === "RUNNING" ? "" : "none";
   $("scr-resume").style.display = v.status === "PAUSED" ? "" : "none";
   $("scr-cancel").style.display = running ? "" : "none";
-  $("scr-delete").style.display = running ? "none" : "";
+  $("scr-delete").style.display = ["RUNNING", "PAUSED"].includes(v.status) ? "none" : "";
 
   const stageBars = v.stages.map((st, i) => {
     const denom = st.n_entered || v.counts.alive || 1;
@@ -3154,7 +3169,8 @@ async function scrRenderDetail() {
     <span class="badge verdict-no">부적합 ${c.unfit}</span>
     <span class="badge failed">판정 불가 ${c.failed}</span>
     <span class="badge queued">탈락(깔때기) ${c.cut}</span>
-    <span class="muted small" style="align-self:center">총 ${c.total}개
+    <span class="muted small" style="align-self:center"><b>전체 ${v.overall_pct ?? 0}% 완료</b>
+      · 총 ${c.total}개
       ${v.eta_s != null ? ` · 남은 시간 ≈${scrEta(v.eta_s)}` : ""}</span></div>`;
 
   const elecs = v.electrodes;
@@ -3255,18 +3271,7 @@ function scrWire() {
   $("scr-submit").addEventListener("click", scrSubmit);
   $("scr-file").addEventListener("change", (e) => {
     const f = e.target.files[0];
-    if (!f) return;
-    const ext = (f.name.split(".").pop() || "").toLowerCase();
-    const reader = new FileReader();
-    if (["sdf", "mol", "mdl", "xyz"].includes(ext)) {
-      // 3D 구조 파일 — 좌표를 초기 구조로 쓴다 (텍스트 목록 경로와 별개)
-      $("scr-3d-charge-wrap").style.display = ext === "xyz" ? "" : "none";
-      reader.onload = () => scrParse3D(reader.result, f.name);
-    } else {
-      $("scr-3d-charge-wrap").style.display = "none";
-      reader.onload = () => { $("scr-cands").value = reader.result; scrParse(); };
-    }
-    reader.readAsText(f);
+    if (f) scrHandleFile(f);
   });
   $("scr-3d-charge").addEventListener("change", () => {
     const f = $("scr-file").files[0];
@@ -3277,6 +3282,20 @@ function scrWire() {
   $("scr-detail-close").addEventListener("click", () => {
     SCR_DETAIL_ID = null;
     $("scr-detail").style.display = "none";
+  });
+  $("scr-ce-add").addEventListener("click", () => {
+    const err = $("scr-error");
+    const label = $("scr-ce-name").value.trim();
+    const low = parseFloat($("scr-ce-low").value);
+    const high = parseFloat($("scr-ce-high").value);
+    if (!label || !isFinite(low) || !isFinite(high) || low >= high) {
+      err.textContent = "사용자 정의 활물질: 이름과 구동 전위(하한 < 상한, V vs Li/Li⁺)를 입력하세요.";
+      return;
+    }
+    err.textContent = "";
+    SCR_CUSTOM_ELECS.push({label, low, high});
+    $("scr-ce-name").value = "";
+    scrRenderCustomElecs();
   });
   $("scr-pause").addEventListener("click", () => scrAction("pause"));
   $("scr-resume").addEventListener("click", () => scrAction("resume"));
@@ -3296,6 +3315,20 @@ function scrWire() {
     window.open(`/api/screening/campaigns/${SCR_DETAIL_ID}/export?format=csv`, "_blank"));
   $("scr-export-json").addEventListener("click", () =>
     window.open(`/api/screening/campaigns/${SCR_DETAIL_ID}/export?format=json`, "_blank"));
+  // 드래그 앤 드롭 — 후보 목록 입력창에 파일을 끌어다 놓으면 파일 선택과 동일
+  const dz = $("scr-cands");
+  ["dragenter", "dragover"].forEach(ev => dz.addEventListener(ev, (e) => {
+    e.preventDefault();
+    dz.style.outline = "2px dashed var(--accent, #2a7)";
+  }));
+  dz.addEventListener("dragleave", () => { dz.style.outline = ""; });
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.style.outline = "";
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) scrHandleFile(f);
+  });
+
   // 진행 상황 폴링 — 화면이 열려 있는 동안만
   SCR_TIMER = setInterval(() => {
     const real = document.getElementById("rb-real");
@@ -3303,6 +3336,62 @@ function scrWire() {
     scrRenderList();
     if (SCR_DETAIL_ID && $("scr-detail").style.display !== "none") scrRenderDetail();
   }, 4000);
+}
+
+// 파일 하나를 확장자에 맞는 경로로 보낸다 — 파일 선택·드래그 앤 드롭 공용
+function scrHandleFile(f) {
+  const err = $("scr-error");
+  err.textContent = "";
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  const reader = new FileReader();
+  if (["sdf", "mol", "mdl", "xyz"].includes(ext)) {
+    // 3D 구조 파일 — 좌표를 초기 구조로 쓴다 (텍스트 목록 경로와 별개)
+    $("scr-3d-charge-wrap").style.display = ext === "xyz" ? "" : "none";
+    reader.onload = () => scrParse3D(reader.result, f.name);
+    reader.readAsText(f);
+  } else if (ext === "xlsx") {
+    $("scr-3d-charge-wrap").style.display = "none";
+    reader.onload = () => scrParseXlsx(reader.result, f.name);
+    reader.readAsArrayBuffer(f);
+  } else if (ext === "xls") {
+    err.textContent = "구형 .xls 형식은 지원하지 않습니다 — 엑셀에서 «.xlsx»로 다시 저장해 주세요.";
+  } else {
+    $("scr-3d-charge-wrap").style.display = "none";
+    reader.onload = () => { $("scr-cands").value = reader.result; scrParse(); };
+    reader.readAsText(f);
+  }
+}
+
+async function scrParseXlsx(buf, filename) {
+  const err = $("scr-error");
+  err.textContent = "";
+  try {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    SCR_PARSED = await scrFetch("/api/screening/parse-xlsx", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({contentB64: btoa(bin), structure: $("scr-structure").value}),
+    });
+    SCR_3D_CHARGE = 0;
+    $("scr-cands").value = `(엑셀 파일: ${filename} — 유효 ${SCR_PARSED.n_ok}개)`;
+    scrRenderParsed();
+  } catch (e) { err.textContent = e.message; }
+}
+
+function scrRenderCustomElecs() {
+  const box = $("scr-ce-list");
+  if (!box) return;
+  box.innerHTML = SCR_CUSTOM_ELECS.map((c, i) =>
+    `<span class="badge queued" style="margin:2px 4px 2px 0">${esc(c.label)}
+      ${c.low.toFixed(2)}~${c.high.toFixed(2)} V
+      <a href="#" data-ce-del="${i}" style="text-decoration:none">×</a></span>`).join("");
+  box.querySelectorAll("[data-ce-del]").forEach(a => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    SCR_CUSTOM_ELECS.splice(+a.dataset.ceDel, 1);
+    scrRenderCustomElecs();
+  }));
 }
 
 window.rbRenderScreen = function () {

@@ -6,3 +6,4 @@ pyberny            # DFT 구조 최적화 (geomeTRIC 미설치 환경 폴백)
 fastapi
 uvicorn[standard]
 pydantic>=2
+openpyxl>=3.1

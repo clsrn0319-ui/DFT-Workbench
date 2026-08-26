@@ -167,6 +167,24 @@ def parse_candidates(text: str, structure: str = "모노머",
             "structure": structure, "max_atoms": max_atoms}
 
 
+def xlsx_to_text(data: bytes) -> str:
+    """엑셀(.xlsx) 첫 시트를 CSV 텍스트로 바꿔 parse_candidates 에 그대로 넘긴다."""
+    import io as _io
+
+    from openpyxl import load_workbook
+    wb = load_workbook(_io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        ws = wb.worksheets[0]
+        lines = []
+        for row in ws.iter_rows(max_row=MAX_CANDIDATES + 50, values_only=True):
+            cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
+            if cells:
+                lines.append(",".join(cells))
+    finally:
+        wb.close()
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 판정 엔진
 def _potentials(desc: dict):
     """ΔG 기반 전위가 있으면 우선 사용 — esw.diagnose 와 같은 규칙."""
@@ -175,7 +193,8 @@ def _potentials(desc: dict):
     return red, ox
 
 
-def judge(desc: dict, electrodes: list[str], margin_v: float) -> dict:
+def judge(desc: dict, electrodes: list[str], margin_v: float,
+          windows: dict | None = None) -> dict:
     """전극 구동 범위 전체가 ESW 안에 얼마나 여유 있게 들어오는지로 등급을 매긴다.
 
     여유(margin) = min(구동 하단 − 환원 전위, 산화 전위 − 구동 상단)
@@ -193,7 +212,7 @@ def judge(desc: dict, electrodes: list[str], margin_v: float) -> dict:
                 "note": "산화·환원 전위가 없어 판정할 수 없습니다"}
     per = []
     for key in electrodes:
-        win = esw.ELECTRODE_BY_KEY[key]
+        win = (windows or esw.ELECTRODE_BY_KEY)[key]
         m = round(min(win["low"] - red, ox - win["high"]), 3)
         grade = "적합" if m >= margin_v else ("조건부" if m >= 0 else "부적합")
         per.append({"electrode": key, "label": win["label"], "side": win["side"],
@@ -225,18 +244,24 @@ def _stage_settings(camp: dict, stage_idx: int) -> dict:
 
 
 def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
-                    margin_v: float, stages: list[dict], settings: dict) -> dict:
+                    margin_v: float, stages: list[dict], settings: dict,
+                    custom_electrodes: list | None = None) -> dict:
     """검증된 후보 목록으로 캠페인을 만들고 즉시 시작한다."""
     with _lock:
         _load()
         cid = "CAM-" + time.strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6].upper()
+        # 동시 실행은 1개 — 이미 도는 캠페인이 있으면 대기열(QUEUED)로 등록되고,
+        # 앞 캠페인이 끝나는 대로 오케스트레이터가 자동 시작한다
+        busy = any(c["status"] == "RUNNING" for c in _campaigns.values())
         camp = {
             "id": cid,
             "name": name or cid,
-            "status": "RUNNING",   # RUNNING · PAUSED · DONE · CANCELLED
+            "status": "QUEUED" if busy else "RUNNING",
+            # 상태: QUEUED · RUNNING · PAUSED · DONE · CANCELLED
             "createdAt": time.time(),
             "finishedAt": None,
             "electrodes": electrodes,
+            "customElectrodes": custom_electrodes or [],
             "margin_v": margin_v,
             "stages": [{"accuracy": st["accuracy"], "keep": st.get("keep")}
                        for st in stages],
@@ -258,6 +283,8 @@ def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
         _log(camp, f"캠페인 생성 — 후보 {len(candidates)}개 · "
                    f"단계 {' → '.join(st['accuracy'] for st in camp['stages'])} · "
                    f"전극 {', '.join(electrodes)} · 마진 {margin_v} V")
+        if camp["status"] == "QUEUED":
+            _log(camp, "다른 캠페인이 진행 중 — 대기열에 등록되어 끝나는 대로 자동 시작합니다")
         _campaigns[cid] = camp
         _persist()
     ensure_started()
@@ -283,6 +310,8 @@ def set_status(cid: str, status: str) -> bool:
         camp = _campaigns.get(cid)
         if camp is None or camp["status"] in ("DONE", "CANCELLED"):
             return False
+        if status == "PAUSED" and camp["status"] != "RUNNING":
+            return False   # 대기 중 캠페인은 취소만 가능
         if status == "CANCELLED":
             # 진행 중인 배치 작업도 함께 취소한다
             for c in camp["candidates"]:
@@ -348,6 +377,14 @@ def _find_cached(canonical: str, settings: dict):
 def _batch_active_count() -> int:
     return sum(1 for j in store.list_jobs()
                if j.get("campaign") and j["status"] in ("QUEUED", "RUNNING"))
+
+
+def _windows(camp: dict) -> dict:
+    """판정에 쓰는 전극 구동 범위 — 내장 활물질 + 캠페인의 사용자 정의 활물질."""
+    wins = dict(esw.ELECTRODE_BY_KEY)
+    for ce in camp.get("customElectrodes") or []:
+        wins[ce["key"]] = ce
+    return wins
 
 
 def _xyz_atoms(xyz: str):
@@ -424,8 +461,8 @@ def _cut_score(c: dict, camp: dict, stage_idx: int):
     if (desc.get("reduction_potential_gibbs_v") is None
             and desc.get("ea_adiabatic_ev") is None):
         red = red + VERTICAL_RED_BUFFER
-    return min(min(esw.ELECTRODE_BY_KEY[e]["low"] - red,
-                   ox - esw.ELECTRODE_BY_KEY[e]["high"])
+    wins = _windows(camp)
+    return min(min(wins[e]["low"] - red, ox - wins[e]["high"])
                for e in camp["electrodes"])
 
 
@@ -550,7 +587,8 @@ def _finalize(camp: dict):
         job = store.get_job(c["jobs"].get(stage_key))
         if job and job["status"] == "PUBLISHED" and job.get("result"):
             desc = job["result"].get("descriptors") or {}
-            c["verdict"] = judge(desc, camp["electrodes"], camp["margin_v"])
+            c["verdict"] = judge(desc, camp["electrodes"], camp["margin_v"],
+                                 windows=_windows(camp))
     camp["status"] = "DONE"
     camp["finishedAt"] = time.time()
     graded = [c for c in camp["candidates"] if c.get("verdict")]
@@ -559,6 +597,20 @@ def _finalize(camp: dict):
     _log(camp, f"캠페인 완료 — 적합 {n_fit} · 조건부 {n_cond} · "
                f"부적합 {len(graded) - n_fit - n_cond} · "
                f"판정 불가 {sum(1 for c in camp['candidates'] if c['failed'])}")
+
+
+def _promote_queued() -> bool:
+    """실행 중 캠페인이 없으면 대기열의 가장 오래된 캠페인을 시작한다 (호출자가 _lock 보유)."""
+    if any(c["status"] == "RUNNING" for c in _campaigns.values()):
+        return False
+    queued = sorted((c for c in _campaigns.values() if c["status"] == "QUEUED"),
+                    key=lambda c: c["createdAt"])
+    if not queued:
+        return False
+    camp = queued[0]
+    camp["status"] = "RUNNING"
+    _log(camp, "앞 캠페인이 끝나 대기열에서 자동 시작")
+    return True
 
 
 _TICK_S = 3.0
@@ -579,6 +631,8 @@ def _orchestrator_loop():
                     if json.dumps(camp, sort_keys=True, ensure_ascii=False,
                                   default=str) != before:
                         _persist()
+                if _promote_queued():
+                    _persist()
         except Exception:  # noqa: BLE001 — 오케스트레이터는 죽지 않아야 함
             pass
         time.sleep(_TICK_S)
@@ -620,7 +674,8 @@ def _candidate_view(c: dict, camp: dict) -> dict:
             j = store.get_job(c["jobs"].get(str(si)))
             if j and j["status"] == "PUBLISHED" and j.get("result"):
                 verdict = judge(j["result"].get("descriptors") or {},
-                                camp["electrodes"], camp["margin_v"])
+                                camp["electrodes"], camp["margin_v"],
+                                windows=_windows(camp))
                 provisional = True
                 break
     return {"idx": c["idx"], "name": c["name"], "smiles": c["smiles"],
@@ -629,6 +684,39 @@ def _candidate_view(c: dict, camp: dict) -> dict:
             "alive": c["alive"], "failed": c["failed"], "cutStage": c["cutStage"],
             "jobs": c["jobs"], "verdict": verdict, "provisional": provisional,
             "progress": (job or {}).get("progress") if job else None}
+
+
+def _overall_pct(camp: dict) -> int:
+    """캠페인 전체 진행률(%) — 단계별 예상 비용(초/분자)으로 가중한다.
+
+    지나온 단계는 완료로, 현재 단계는 완료/생존 비율로, 앞으로의 단계는
+    통과 수 기준 예정량으로 집계한다.
+    """
+    if camp["status"] == "DONE":
+        return 100
+    if camp["status"] == "CANCELLED":
+        return 0
+    stage_idx = camp["stageIndex"]
+    n_alive = sum(1 for c in camp["candidates"] if c["alive"])
+    total = done = 0.0
+    planned = n_alive
+    for si, st in enumerate(camp["stages"]):
+        w = ESTIMATE_S.get(st["accuracy"], 1200)
+        if si < stage_idx:
+            n = sum(1 for c in camp["candidates"] if str(si) in c["jobs"])
+            total += n * w
+            done += n * w
+        elif si == stage_idx:
+            n_done = sum(1 for c in camp["candidates"]
+                         if (store.get_job(c["jobs"].get(str(si))) or {})
+                         .get("status") == "PUBLISHED")
+            total += n_alive * w
+            done += n_done * w
+            planned = min(n_alive, st.get("keep") or n_alive)
+        else:
+            total += planned * w
+            planned = min(planned, st.get("keep") or planned)
+    return int(round(100 * done / total)) if total else 0
 
 
 def campaign_view(camp: dict) -> dict:
@@ -650,7 +738,8 @@ def campaign_view(camp: dict) -> dict:
                                  or (si == stage_idx and camp["status"] == "DONE")
                                  else "대기" if si > stage_idx
                                  else {"RUNNING": "진행 중", "PAUSED": "일시정지",
-                                       "CANCELLED": "중단"}.get(camp["status"], "진행 중"))})
+                                       "QUEUED": "대기", "CANCELLED": "중단"}
+                                 .get(camp["status"], "진행 중"))})
 
     cands = [_candidate_view(c, camp) for c in camp["candidates"]]
     # 순위 — 판정 가능한 후보를 안정성 여유 내림차순으로
@@ -697,6 +786,7 @@ def campaign_view(camp: dict) -> dict:
     return {**{k: v for k, v in camp.items() if k != "candidates"},
             "stages": stages, "candidates": cands, "counts": counts,
             "eta_s": eta_s, "batch_parallel": BATCH_PARALLEL,
+            "overall_pct": _overall_pct(camp),
             "thermo_note": THERMO_NOTE}
 
 
@@ -715,7 +805,8 @@ def campaign_summary(camp: dict) -> dict:
             "n_candidates": len(camp["candidates"]),
             "n_alive": sum(1 for c in camp["candidates"] if c["alive"]),
             "n_failed": sum(1 for c in camp["candidates"] if c["failed"]),
-            "n_done_stage": n_done_stage}
+            "n_done_stage": n_done_stage,
+            "overall_pct": _overall_pct(camp)}
 
 
 def estimate(n_candidates: int, stages: list[dict]) -> dict:
