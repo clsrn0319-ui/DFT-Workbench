@@ -744,6 +744,9 @@ window.rbRenderResults = function () {
     && (!q || j.material.name.toLowerCase().includes(q)
         || (j.material.smiles || "").toLowerCase().includes(q)
         || j.id.toLowerCase().includes(q)));
+  if (($("res-sort")?.value || "recent") === "name") {
+    shown.sort((a, b) => a.material.name.localeCompare(b.material.name, "ko"));
+  }
   $("res-count").textContent = `${shown.length} / ${jobs.length}건`;
   RES_SHOWN_IDS = shown.map(j => j.id);
 
@@ -783,6 +786,11 @@ window.rbRenderResults = function () {
   if (se && !se.dataset.wired) {
     se.dataset.wired = "1";
     se.addEventListener("input", () => window.rbRenderResults());
+  }
+  const so = $("res-sort");
+  if (so && !so.dataset.wired) {
+    so.dataset.wired = "1";
+    so.addEventListener("change", () => window.rbRenderResults());
   }
   for (const id of ["res-prev", "res-next"]) {
     const b = $(id);
@@ -2956,6 +2964,9 @@ let SCR_DETAIL_ID = null;   // 열려 있는 캠페인 id
 let SCR_TIMER = null;
 let SCR_WIRED = false;
 let SCR_CUSTOM_ELECS = [];   // 사용자 정의 활물질 {label, low, high}
+let SCR_CAND_Q = "";         // 판정 히트맵 후보 검색어
+let SCR_GRADE_FILTER = "all"; // all·적합·조건부·부적합·lumo
+let SCR_SORT = "rank";        // rank·total·(활물질 키)
 let SCR_PX = "adhesion";     // Pareto 뷰 축 선택
 let SCR_PY = "electrochem";
 const SCR_AXIS_LABEL = {adhesion: "접착", electrochem: "전기화학 안정성",
@@ -3203,6 +3214,42 @@ async function scrSubmit() {
 }
 
 /* ----- 캠페인 상세 (대시보드 + 판정표) ----- */
+// 히트맵 셀 — 등급·여유(V)를 색으로 (진초록=여유 큼 · 노랑=조건부 · 주황=부적합)
+function scrHeatCell(p) {
+  if (!p) return '<td class="muted small" style="text-align:center">—</td>';
+  let bg, fg = "#12312b";
+  if (p.grade === "부적합") { bg = "#e2a08c"; fg = "#5a1f10"; }
+  else if (p.grade === "조건부") { bg = "#f4d77c"; fg = "#4a3a05"; }
+  else if (p.margin_v >= 3) { bg = "#0e7a6c"; fg = "#fff"; }
+  else if (p.margin_v >= 1.5) { bg = "#3a9c8b"; fg = "#fff"; }
+  else if (p.margin_v >= 0.7) { bg = "#7cc0b1"; }
+  else { bg = "#bfe0d7"; }
+  return `<td style="background:${bg};color:${fg};text-align:center;` +
+    `font-variant-numeric:tabular-nums" title="${esc(p.label)} · ${esc(p.grade)}` +
+    ` · 여유 ${p.margin_v.toFixed(2)} V">${p.margin_v.toFixed(2)}</td>`;
+}
+
+// 활물질별 한 줄 요약 바 — 등급 분포 스택바 + 집계
+function scrElecSummary(v) {
+  return v.electrodes.map(e => {
+    let label = e, ok = 0, mid = 0, no = 0;
+    v.candidates.forEach(cd => {
+      const p = (cd.verdict?.per_electrode || []).find(x => x.electrode === e);
+      if (!p) return;
+      label = p.label || e;
+      if (p.grade === "적합") ok++; else if (p.grade === "조건부") mid++; else no++;
+    });
+    const tot = ok + mid + no;
+    if (!tot) return "";
+    const seg = (n, c) => n ? `<i style="display:block;height:100%;width:${100 * n / tot}%;background:${c}"></i>` : "";
+    return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0">
+      <b class="small" style="width:158px;flex-shrink:0">${esc(label)}</b>
+      <span style="flex:1;max-width:280px;height:12px;border-radius:6px;overflow:hidden;display:flex;background:var(--grid)">
+        ${seg(ok, "#0e7a6c")}${seg(mid, "#f4d77c")}${seg(no, "#e2a08c")}</span>
+      <span class="muted small">적합 ${ok} · 조건부 ${mid} · 부적합 ${no}</span></div>`;
+  }).join("");
+}
+
 async function scrRenderDetail() {
   if (!SCR_DETAIL_ID) return;
   const card = $("scr-detail");
@@ -3249,18 +3296,54 @@ async function scrRenderDetail() {
       })()}${v.protocol ? ` · 프로토콜 ${esc(v.protocol)}` : ""}
       ${v.eta_s != null ? ` · 남은 시간 ≈${scrEta(v.eta_s)}` : ""}</span></div>`;
 
+  let paretoHtml = "";
+  if (v.scoring?.enabled) {
+    const pts = v.candidates.filter(x => x.score && x.score.total != null);
+    if (pts.length >= 2) paretoHtml = scrParetoBlock(pts);
+  }
+
+  // ---- 판정 히트맵 (검색 · 등급 필터 · 열 정렬) ----
   const elecs = v.electrodes;
-  const rows = [...v.candidates].sort((a, b) =>
+  const q = SCR_CAND_Q.trim().toLowerCase();
+  let rows = [...v.candidates].sort((a, b) =>
     (a.rank == null) - (b.rank == null) || (a.rank || 0) - (b.rank || 0));
-  const tbl = `<div class="scroll-x"><table class="table" style="min-width:760px">
-    <tr><th>순위</th><th>후보</th><th>상태</th><th>판정</th>
-      ${v.scoring?.enabled ? "<th>총점</th><th>신뢰도</th>" : ""}
-      ${elecs.map(e => `<th class="small">${esc(e)}<br>여유(V)</th>`).join("")}
-      <th>산화(V)</th><th>환원(V)</th><th></th></tr>
+  if (q) rows = rows.filter(cd => cd.name.toLowerCase().includes(q)
+    || (cd.smiles || "").toLowerCase().includes(q));
+  if (SCR_GRADE_FILTER === "lumo") rows = rows.filter(cd => cd.verdict?.lumo_check);
+  else if (SCR_GRADE_FILTER !== "all") {
+    rows = rows.filter(cd => (cd.verdict?.grade
+      || (cd.failed ? "판정 불가" : "")) === SCR_GRADE_FILTER);
+  }
+  const perOf = (cd, e) => (cd.verdict?.per_electrode || []).find(x => x.electrode === e);
+  if (SCR_SORT === "total") {
+    rows.sort((a, b) => (b.score?.total ?? -1e9) - (a.score?.total ?? -1e9));
+  } else if (SCR_SORT !== "rank") {
+    rows.sort((a, b) => (perOf(b, SCR_SORT)?.margin_v ?? -1e9)
+      - (perOf(a, SCR_SORT)?.margin_v ?? -1e9));
+  }
+
+  const fbtn = (key, label) => `<button class="btn${SCR_GRADE_FILTER === key ? " primary" : ""}"
+    data-scr-gf="${key}" type="button">${label}</button>`;
+  const elecLabel = e => {
+    for (const cd of v.candidates) { const p = perOf(cd, e); if (p) return p.label; }
+    return e;
+  };
+  const sortMark = k => SCR_SORT === k ? " ▾" : " ↕";
+  const heatToolbar = `<div class="toolbar" style="margin-bottom:8px">
+      <input class="input" id="scr-cand-q" placeholder="후보 검색" value="${esc(SCR_CAND_Q)}"
+        style="width:150px">
+      ${fbtn("all", `전체 ${v.candidates.length}`)}${fbtn("적합", "적합")}${fbtn("조건부", "조건부")}${fbtn("부적합", "부적합")}${fbtn("lumo", "⚠ LUMO")}
+      <span class="muted small">${rows.length}개 표시 · 열 제목 클릭 = 정렬</span></div>`;
+
+  const tbl = `<div class="scroll-x"><table class="table" style="min-width:680px">
+    <tr><th class="clickable" data-scr-sort="rank">#${sortMark("rank")}</th>
+      <th>후보</th><th>상태</th><th>판정</th>
+      ${v.scoring?.enabled ? `<th class="clickable" data-scr-sort="total">총점${sortMark("total")}</th><th>신뢰도</th>` : ""}
+      ${elecs.map(e => `<th class="small clickable" data-scr-sort="${esc(e)}"
+        style="text-align:center">${esc(elecLabel(e))}${sortMark(e)}</th>`).join("")}
+      <th class="num">산화(V)</th><th class="num">환원(V)</th><th></th></tr>
     ${rows.map(cd => {
       const vd = cd.verdict || {};
-      const per = {};
-      (vd.per_electrode || []).forEach(p => per[p.electrode] = p);
       const grade = vd.grade || (cd.failed ? "판정 불가" : "—");
       const lastJob = Object.values(cd.jobs || {}).pop();
       return `<tr>
@@ -3288,60 +3371,42 @@ async function scrRenderDetail() {
               ? `<span class="verdict-no small"> −${sc.penalty}</span>` : ""}</td>
             <td class="small" title="${esc(sc.confidence_note || "")}">${esc(sc.confidence || "")}</td>`;
         })() : ""}
-        ${elecs.map(e => {
-          const p = per[e];
-          return `<td class="small ${p ? (p.grade === "적합" ? "verdict-ok"
-            : p.grade === "조건부" ? "verdict-mid" : "verdict-no") : "muted"}">
-            ${p ? p.margin_v.toFixed(2) : "—"}</td>`;
-        }).join("")}
-        <td class="small">${vd.oxidation_v != null ? (+vd.oxidation_v).toFixed(2) : "—"}</td>
-        <td class="small">${vd.reduction_v != null ? (+vd.reduction_v).toFixed(2) : "—"}</td>
+        ${elecs.map(e => scrHeatCell(perOf(cd, e))).join("")}
+        <td class="small num">${vd.oxidation_v != null ? (+vd.oxidation_v).toFixed(2) : "—"}</td>
+        <td class="small num">${vd.reduction_v != null ? (+vd.reduction_v).toFixed(2) : "—"}</td>
         <td>${lastJob ? `<button class="btn small" data-scr-job="${esc(lastJob)}"
           type="button">상세</button>` : ""}</td></tr>`;
     }).join("")}
   </table></div>`;
 
-  // 활물질별 분류 — «이 활물질에는 어떤 후보를 쓸 수 있나»를 한눈에
-  const classifyHtml = elecs.map(e => {
-    const groups = {"적합": [], "조건부": [], "부적합": []};
-    let label = e;
-    v.candidates.forEach(cd => {
-      const p = (cd.verdict?.per_electrode || []).find(x => x.electrode === e);
-      if (!p) return;
-      label = p.label || e;
-      if (groups[p.grade]) groups[p.grade].push({name: cd.name, m: p.margin_v, prov: cd.provisional});
-    });
-    Object.values(groups).forEach(g => g.sort((a, b) => b.m - a.m));
-    const chip = (x, cls) => `<span class="badge ${cls}" style="margin:2px 4px 2px 0"
-      title="여유 ${x.m.toFixed(2)} V${x.prov ? " · 잠정" : ""}">${esc(x.name)} ${x.m.toFixed(2)}${x.prov ? "*" : ""}</span>`;
-    return `<div style="margin:6px 0 10px"><b class="small">${esc(label)}</b><br>
-      ${groups["적합"].map(x => chip(x, "verdict-ok")).join("") || '<span class="muted small">적합 없음 </span>'}
-      ${groups["조건부"].map(x => chip(x, "verdict-mid")).join("")}
-      ${groups["부적합"].map(x => chip(x, "verdict-no")).join("")}</div>`;
-  }).join("");
-
-  let paretoHtml = "";
-  if (v.scoring?.enabled) {
-    const pts = v.candidates.filter(c => c.score && c.score.total != null);
-    if (pts.length >= 2) paretoHtml = scrParetoBlock(pts);
-  }
+  const hadFocus = document.activeElement && document.activeElement.id === "scr-cand-q";
 
   $("scr-detail-body").innerHTML = `
     ${summary}
     <h3 style="font-size:13px;color:var(--accent)">단계 진행</h3>${stageBars}
+    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">활물질별 요약
+      <span class="muted small">— 등급 분포 (적합·조건부·부적합)</span></h3>
+    ${scrElecSummary(v) || '<p class="muted small">아직 판정된 후보가 없습니다.</p>'}
     ${paretoHtml}
-    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">활물질별 분류
-      <span class="muted small">— 후보 뒤 숫자는 안정성 여유(V) · * 는 잠정 판정</span></h3>
-    ${classifyHtml || '<p class="muted small">아직 판정된 후보가 없습니다.</p>'}
-    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">판정표
-      <span class="muted small">— 여유(V) = 구동 범위와 ESW 사이의 최소 간격.
-      마진 ${v.margin_v} V 이상이면 적합</span></h3>
+    <h3 style="font-size:13px;color:var(--accent);margin-top:12px">판정 히트맵
+      <span class="muted small">— 셀 = 안정성 여유(V) · 진초록=여유 큼 · 노랑=조건부 · 주황=부적합
+      · 마진 ${v.margin_v} V 이상 적합</span></h3>
+    ${heatToolbar}
     ${tbl}
     <p class="rb-note small" style="margin-top:10px">${esc(v.thermo_note)}</p>
     <details class="small" style="margin-top:8px"><summary class="muted">캠페인 로그</summary>
       <ul class="log-list">${(v.logs || []).slice(-40).map(l => `<li>${esc(l)}</li>`).join("")}</ul>
     </details>`;
 
+  const ci = $("scr-cand-q");
+  if (ci) {
+    ci.addEventListener("input", () => { SCR_CAND_Q = ci.value; scrRenderDetail(); });
+    if (hadFocus) { ci.focus(); const L = ci.value.length; ci.setSelectionRange(L, L); }
+  }
+  $("scr-detail-body").querySelectorAll("[data-scr-gf]").forEach(b =>
+    b.addEventListener("click", () => { SCR_GRADE_FILTER = b.dataset.scrGf; scrRenderDetail(); }));
+  $("scr-detail-body").querySelectorAll("[data-scr-sort]").forEach(h =>
+    h.addEventListener("click", () => { SCR_SORT = h.dataset.scrSort; scrRenderDetail(); }));
   $("scr-px")?.addEventListener("change", (e) => { SCR_PX = e.target.value; scrRenderDetail(); });
   $("scr-py")?.addEventListener("change", (e) => { SCR_PY = e.target.value; scrRenderDetail(); });
   $("scr-detail-body").querySelectorAll("[data-scr-job]").forEach(b =>

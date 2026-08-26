@@ -57,7 +57,7 @@ body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Malgun Gothic",san
 .table .num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
 .sidebar-foot{margin-top:auto;padding:10px 8px 4px;display:flex;flex-direction:column;gap:8px}
 .version{font-size:11px;color:var(--muted)}
-.content{flex:1;padding:28px 32px 64px;max-width:1100px;min-width:0}
+.content{flex:1;padding:22px 18px 64px;max-width:none;min-width:0}
 .page-head h1{margin:0 0 4px;font-size:22px}
 .page-desc{margin:0 0 18px;color:var(--muted);max-width:860px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:16px}
