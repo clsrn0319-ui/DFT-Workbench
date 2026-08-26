@@ -705,6 +705,7 @@ function toggleCmpMetric(key) {
 
 /* ---------- 결과 화면: 결과 불러오기 · 상세 · ESW · 작업 큐 ---------- */
 let SELECTED_RESULT = null;   // 상세를 보고 있는 작업 id
+let RES_SHOWN_IDS = [];       // 현재 필터를 통과한 결과 id (이전/다음 이동용)
 const EXPORT_SEL = new Set(); // 내보내기 선택 작업 id
 const OPEN_GROUPS = new Set(); // 사용자가 펼쳐 둔 소재 그룹
 let CMP_OPACITY = 0.7;         // 비교 차트 막대·영역 투명도
@@ -737,27 +738,65 @@ window.rbRenderResults = function () {
   fillFilter("res-filter-cond", conds, "모든 조건");
 
   const fm = $("res-filter-mat").value, fc = $("res-filter-cond").value;
-  const shown = jobs.filter(j => (!fm || j.material.name === fm) && (!fc || condLabel(j) === fc));
+  const q = ($("res-search")?.value || "").trim().toLowerCase();
+  const shown = jobs.filter(j => (!fm || j.material.name === fm)
+    && (!fc || condLabel(j) === fc)
+    && (!q || j.material.name.toLowerCase().includes(q)
+        || (j.material.smiles || "").toLowerCase().includes(q)
+        || j.id.toLowerCase().includes(q)));
   $("res-count").textContent = `${shown.length} / ${jobs.length}건`;
+  RES_SHOWN_IDS = shown.map(j => j.id);
 
   const picker = $("result-picker");
+  const keepScroll = picker.scrollTop;   // 2초 폴링 재렌더에도 목록 스크롤 유지
   if (!shown.length) {
-    picker.className = "empty small";
+    picker.classList.add("empty", "small");
+    picker.style.padding = "14px";
     picker.textContent = jobs.length
-      ? "조건에 맞는 결과가 없습니다. 필터를 바꿔보세요."
+      ? "조건에 맞는 결과가 없습니다. 필터·검색을 바꿔보세요."
       : "완료된 계산이 없습니다. 'DFT 계산'에서 제출하세요.";
   } else {
-    picker.className = "mol-grid";
+    picker.classList.remove("empty", "small");
+    picker.style.padding = "";
     picker.innerHTML = shown.map(j => `
-      <button class="mol-card ${SELECTED_RESULT === j.id ? "selected" : ""}" data-open="${esc(j.id)}">
-        <b>${esc(j.material.name)}</b>
-        <span class="small muted">${esc(condLabel(j))}</span>
-        <span class="mono small muted">${esc(j.id)} · ${esc(fmtTime(j.finishedAt))}</span>
-      </button>`).join("");
+      <div data-open="${esc(j.id)}" title="${esc(condLabel(j))}"
+        style="padding:7px 10px;border-bottom:1px solid var(--grid);cursor:pointer${
+          SELECTED_RESULT === j.id
+            ? ";background:color-mix(in srgb,var(--accent) 12%,transparent);border-left:3px solid var(--accent)"
+            : ""}">
+        <b style="font-size:12px">${esc(j.material.name)}</b>
+        <div class="mono small muted">${esc(j.id)} · ${esc(fmtTime(j.finishedAt))}</div>
+      </div>`).join("");
     picker.querySelectorAll("[data-open]").forEach(b => b.addEventListener("click", () => {
       const job = JOBS_CACHE.find(x => x.id === b.dataset.open);
       if (job) { SELECTED_RESULT = job.id; showResult(job); window.rbRenderResults(); }
     }));
+    picker.scrollTop = keepScroll;
+    // 처음 열었을 때는 첫 결과를 자동 표시 — 상세가 늘 눈앞에 있도록
+    if (!SELECTED_RESULT) {
+      const first = JOBS_CACHE.find(x => x.id === shown[0].id);
+      if (first) { SELECTED_RESULT = first.id; showResult(first); }
+    }
+  }
+
+  const se = $("res-search");
+  if (se && !se.dataset.wired) {
+    se.dataset.wired = "1";
+    se.addEventListener("input", () => window.rbRenderResults());
+  }
+  for (const id of ["res-prev", "res-next"]) {
+    const b = $(id);
+    if (b && !b.dataset.wired) {
+      b.dataset.wired = "1";
+      b.addEventListener("click", () => {
+        if (!RES_SHOWN_IDS.length) return;
+        let i = RES_SHOWN_IDS.indexOf(SELECTED_RESULT);
+        i = i < 0 ? 0
+          : (i + (id === "res-next" ? 1 : -1) + RES_SHOWN_IDS.length) % RES_SHOWN_IDS.length;
+        const job = JOBS_CACHE.find(x => x.id === RES_SHOWN_IDS[i]);
+        if (job) { SELECTED_RESULT = job.id; showResult(job); window.rbRenderResults(); }
+      });
+    }
   }
 
   renderJobList();
@@ -1280,7 +1319,6 @@ function showResult(job) {
   $("v3d-cloud").addEventListener("click", () => { VIEW_MODE = "cloud"; render3D(CURRENT_RESULT); });
   $("result-card").style.display = "";
   render3D(r);
-  $("result-card").scrollIntoView({behavior: "smooth"});
 }
 
 /* ---------- 3D 뷰어 (자체 캔버스, 원소/부분전하 색상) ---------- */

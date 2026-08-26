@@ -955,17 +955,23 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   <div class="card">
     <div class="card-head"><h2>결과 불러오기</h2>
       <div class="toolbar">
+        <input class="input grow" id="res-search" placeholder="검색 — 이름 · SMILES · JOB ID">
         <select class="input" id="res-filter-mat" title="소재로 거르기"></select>
         <select class="input" id="res-filter-cond" title="계산 조건으로 거르기"></select>
+        <button class="btn" id="res-prev" type="button" title="목록의 이전 결과">◀</button>
+        <button class="btn" id="res-next" type="button" title="목록의 다음 결과">▶</button>
         <span class="muted small" id="res-count"></span>
       </div></div>
-    <div id="result-picker" class="mol-grid"></div>
-  </div>
-
-  <div class="card" id="result-card" style="display:none">
-    <div class="card-head"><h2 id="result-title">결과 상세</h2>
-      <button class="btn ghost" id="result-close">닫기</button></div>
-    <div id="result-body"></div>
+    <!-- 2단 분할 — 좌: 자체 스크롤 콤팩트 목록 · 우: 결과 상세 (좁은 화면은 자동 상하 배치) -->
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div id="result-picker" style="flex:0 0 232px;max-height:600px;overflow-y:auto;
+        border:1px solid var(--grid);border-radius:10px"></div>
+      <div id="result-card" style="flex:1;min-width:300px;display:none">
+        <div class="card-head"><h2 id="result-title">결과 상세</h2>
+          <button class="btn ghost" id="result-close">닫기</button></div>
+        <div id="result-body"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
