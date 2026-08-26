@@ -601,12 +601,24 @@ def _mah_desc():
 
 def test_lumo_mismatch_fires_on_vertical():
     v = screening.judge(_mah_desc(), ["graphite", "si"], 0.3)
-    assert v["grade"] == "적합"                      # 수직 EA 기준으로는 적합
+    # 불일치 → 경고에 그치지 않고 적합에서 «조건부(재검증 필요)»로 강등
+    assert v["grade"] == "조건부"
+    assert all(p["grade"] == "조건부" and p.get("lumo_demoted")
+               for p in v["per_electrode"])
     lc = v["lumo_check"]
-    assert lc is not None
+    assert lc is not None and lc["demoted"] is True
     assert lc["naive_red_v"] == pytest.approx(2.86 - 1.44, abs=0.01)
     assert len(lc["mismatch"]) == 2                  # 흑연·Si 모두 침범
-    assert "표준" in lc["note"]
+    assert "강등" in lc["note"] and "표준" in lc["note"]
+
+
+def test_lumo_demotion_partial_electrodes():
+    """침범된 활물질만 강등 — NCM811 은 적합 유지, 흑연만 조건부 → 전체 조건부."""
+    v = screening.judge(_mah_desc(), ["ncm811", "graphite"], 0.3)
+    grades = {p["electrode"]: p["grade"] for p in v["per_electrode"]}
+    assert grades["ncm811"] == "적합"          # naive 1.42 V < 구동 하한 3.0 V — 침범 아님
+    assert grades["graphite"] == "조건부"
+    assert v["grade"] == "조건부"
 
 
 def test_lumo_mismatch_silent_when_adiabatic():
@@ -637,6 +649,9 @@ def test_lumo_mismatch_in_score_reasons():
     v = screening.judge(desc, ["graphite"], 0.3)
     out = scoring.evaluate(desc, v, ["graphite"])
     assert any("LUMO 불일치" in r for r in out["reasons"])
+    # 강등된 조건부에는 «마진 이내» 오해 문구를 붙이지 않는다
+    assert not any("안정성 마진 이내" in r for r in out["reasons"])
+    assert out["hard_fail"] is False
 
 
 def test_campaign_verdict_carries_lumo_check(no_worker, monkeypatch):

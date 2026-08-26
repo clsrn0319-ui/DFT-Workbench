@@ -274,6 +274,25 @@ def judge(desc: dict, electrodes: list[str], margin_v: float,
                          "구동 범위를 침범합니다 — 수직 계산이 환원 위험을 낮잡았을 "
                          "수 있으니 표준(단열·ΔG) 재계산으로 확정하세요."),
             }
+            # 경고에 그치지 않는다 — 상반된 두 지표 중 어느 쪽도 확정이 아니므로,
+            # 침범된 활물질의 «적합»을 «조건부(재검증 필요)»로 강등해 적합군에
+            # 오르지 못하게 한다. 확정은 표준(단열·ΔG) 재계산이 한다.
+            demoted = False
+            for p in per:
+                if p["label"] in mismatch and p["grade"] == "적합":
+                    p["grade"] = "조건부"
+                    p["lumo_demoted"] = True
+                    demoted = True
+            if demoted:
+                if any(p["grade"] == "부적합" for p in per):
+                    grade = "부적합"
+                elif all(p["grade"] == "적합" for p in per):
+                    grade = "적합"
+                else:
+                    grade = "조건부"
+                lumo_check["demoted"] = True
+                lumo_check["note"] = ("적합 등급을 «조건부(재검증 필요)»로 강등 — "
+                                      + lumo_check["note"])
     return {"grade": grade, "per_electrode": per, "worst_margin_v": worst,
             "reduction_v": red, "oxidation_v": ox, "basis": basis, "note": note,
             "lumo_check": lumo_check}

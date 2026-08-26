@@ -203,7 +203,8 @@ def evaluate(desc: dict, verdict: dict | None, electrodes: list[str],
         reasons.append("Hard Filter 탈락 — 작동 전위 창 위반"
                        + (f" ({', '.join(bad)})" if bad else ""))
     elif grade == "조건부":
-        reasons.append("전위 여유가 안정성 마진 이내 — 상위 단계 재확인 권장")
+        if not ((verdict or {}).get("lumo_check") or {}).get("demoted"):
+            reasons.append("전위 여유가 안정성 마진 이내 — 상위 단계 재확인 권장")
 
     # Penalty — 분해 취약 결합 (총점 감점 + 사유)
     penalty = 0.0
