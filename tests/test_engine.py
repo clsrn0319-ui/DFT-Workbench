@@ -699,3 +699,57 @@ def test_esw_ea_stages_show_where_verdict_flips():
     assert st[0]["reduction_v"] == pytest.approx(-1.945, abs=1e-3)   # 안전해 보임
     assert st[-1]["reduction_v"] == pytest.approx(0.444, abs=1e-3)   # 실제는 위험
     assert st[1]["delta_ev"] == pytest.approx(2.239, abs=1e-3)       # 구조 완화+용매화
+
+
+def test_first_present_falls_back_over_null_values():
+    """키가 None 값으로 «존재»해도 다음 후보로 넘어가야 한다.
+
+    dict.get(a, desc.get(b)) 는 a 가 None 으로 존재하면 폴백하지 않는다.
+    엔진은 값이 있을 때만 키를 쓰지만, API로 외부에서 넘어온 descriptors 나
+    예전에 저장된 결과에는 None 이 섞일 수 있다.
+    """
+    from server.esw import first_present
+    assert first_present({"a": None, "b": 2.0}, "a", "b") == 2.0
+    assert first_present({"a": 1.0, "b": 2.0}, "a", "b") == 1.0
+    assert first_present({"b": 2.0}, "a", "b") == 2.0
+    assert first_present({"a": None, "b": None}, "a", "b") is None
+    assert first_present({}, "a", "b") is None
+    assert first_present({"a": 0.0, "b": 2.0}, "a", "b") == 0.0   # 0 은 값이다
+
+
+def test_null_gibbs_potentials_fall_back_to_adiabatic():
+    """ΔG 전위가 None 으로 존재하면 단열 전위로 판정해야 한다.
+
+    이 경로에서 단열 전위 0.294 V 를 두고 「전위 없음」으로 처리하던 버그가 있었다.
+    """
+    from server import screening
+    from server.esw import diagnose
+    desc = {"lumo_ev": -1.126, "ea_adiabatic_ev": 1.734,
+            "reduction_potential_v": 0.294, "oxidation_potential_v": 4.573,
+            "reduction_potential_gibbs_v": None, "oxidation_potential_gibbs_v": None}
+    d = diagnose({"name": "스타이렌", "smiles": "C=Cc1ccccc1"}, desc)
+    assert d["available"] is True
+    assert d["reduction_potential_v"] == pytest.approx(0.294)
+    assert d["containment"]["verdict"] == "분해 우려"
+    assert screening._potentials(desc) == (0.294, 4.573)
+    # ΔG 가 실제로 있으면 그쪽이 우선이어야 한다 (회귀 방지)
+    with_g = {**desc, "reduction_potential_gibbs_v": 0.444,
+              "oxidation_potential_gibbs_v": 4.549}
+    assert screening._potentials(with_g) == (0.444, 4.549)
+
+
+def test_null_thermal_bde_falls_back_to_electronic():
+    """bde_min_298_kj 가 None 이면 bde_min_kj 로 채점해야 한다.
+
+    열보정을 안 한 결과가 섞이면 화학적 안정성 축이 통째로 결측으로 잡혔다.
+    """
+    from server import scoring
+    axes = scoring.axis_scores({"bde_min_298_kj": None, "bde_min_kj": 310.0},
+                               0.5, ["graphite"])
+    assert axes["chemstab"]["value"] == 310.0
+    assert axes["chemstab"]["score"] is not None
+    assert axes["chemstab"]["note"] is None
+    # 298 K 값이 있으면 그쪽 우선
+    axes2 = scoring.axis_scores({"bde_min_298_kj": 300.0, "bde_min_kj": 310.0},
+                                0.5, ["graphite"])
+    assert axes2["chemstab"]["value"] == 300.0

@@ -212,9 +212,14 @@ def xlsx_to_text(data: bytes) -> str:
 
 # ---------------------------------------------------------------- 판정 엔진
 def _potentials(desc: dict):
-    """ΔG 기반 전위가 있으면 우선 사용 — esw.diagnose 와 같은 규칙."""
-    red = desc.get("reduction_potential_gibbs_v", desc.get("reduction_potential_v"))
-    ox = desc.get("oxidation_potential_gibbs_v", desc.get("oxidation_potential_v"))
+    """ΔG 기반 전위가 있으면 우선 사용 — esw.diagnose 와 같은 규칙.
+
+    키가 None 값으로 «존재»하는 경우까지 폴백해야 한다 (esw.first_present 참조).
+    """
+    red = esw.first_present(desc, "reduction_potential_gibbs_v",
+                            "reduction_potential_v")
+    ox = esw.first_present(desc, "oxidation_potential_gibbs_v",
+                           "oxidation_potential_v")
     return red, ox
 
 

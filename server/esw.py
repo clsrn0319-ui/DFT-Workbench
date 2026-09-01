@@ -248,20 +248,35 @@ def ea_stages(desc: dict, e_abs: float = 1.44) -> dict:
                      "위험을 크게 낮잡습니다.") if len(steps) > 1 else ""}
 
 
+def first_present(desc: dict, *keys):
+    """앞에서부터 «값이 있는» 첫 키를 고른다.
+
+    dict.get(a, desc.get(b)) 는 a 가 None 값으로 «존재»하면 폴백하지 않는다.
+    엔진은 값이 있을 때만 키를 쓰지만, API로 외부에서 넘어온 descriptors 나
+    예전에 저장된 결과에는 None 이 들어 있을 수 있다. 실제로 ΔG 키가 None 인
+    입력에서 단열 전위(0.294 V)를 두고 「전위 없음」으로 판정하던 경로가 있었다.
+    """
+    for key in keys:
+        value = desc.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def diagnose(material: dict, desc: dict, electrode: str = "graphite",
              e_abs: float = 1.44) -> dict:
     """ESW 판정 하나를 근거까지 펼친다."""
     win = ELECTRODE_BY_KEY.get(electrode)
     if win is None:
         raise ValueError(f"알 수 없는 전극: {electrode}")
-    red = desc.get("reduction_potential_gibbs_v", desc.get("reduction_potential_v"))
-    ox = desc.get("oxidation_potential_gibbs_v", desc.get("oxidation_potential_v"))
+    red = first_present(desc, "reduction_potential_gibbs_v", "reduction_potential_v")
+    ox = first_present(desc, "oxidation_potential_gibbs_v", "oxidation_potential_v")
     smiles = material.get("smiles", "")
     out = {"name": material.get("name"), "smiles": smiles,
            "electrode": win, "electrodes": ELECTRODE_WINDOWS,
            "reduction_potential_v": red, "oxidation_potential_v": ox,
            "lumo_ev": desc.get("lumo_ev"),
-           "ea_ev": desc.get("ea_adiabatic_ev", desc.get("ea_vertical_ev")),
+           "ea_ev": first_present(desc, "ea_adiabatic_ev", "ea_vertical_ev"),
            "lumo_reference": LUMO_REFERENCE, "lumo_caveat": LUMO_CAVEAT,
            "e_abs": e_abs}
     if red is None or ox is None:

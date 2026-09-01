@@ -54,7 +54,9 @@ def create_job(material: dict, settings: dict) -> dict:
             "status": "QUEUED",
             "progress": 0,
             "stage": "큐 대기",
-            "logs": [f"작업 생성 — {material.get('name', material.get('smiles'))} · {settings['envType']}"],
+            # name 이 None 값으로 존재해도 SMILES 로 떨어지도록 or 를 쓴다
+            "logs": [f"작업 생성 — {material.get('name') or material.get('smiles')}"
+                     f" · {settings['envType']}"],
             "createdAt": time.time(),
             "finishedAt": None,
             "error": None,

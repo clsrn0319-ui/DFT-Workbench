@@ -17,6 +17,8 @@
 import json
 import os
 
+from . import esw
+
 # 프로토콜 버전 — 계산 조건 표준의 이름표. 조건 표준(프리셋·범함수·기저·용매
 # 파라미터)이 바뀌어 후보 간 비교 가능성이 깨질 때만 올린다.
 PROTOCOL_VERSION = "DFT-BINDER-v1.0"
@@ -132,7 +134,9 @@ def axis_scores(desc: dict, worst_margin_v, electrodes: list[str]) -> dict:
     }
 
     # ⑤ 화학적 안정성 — 최약 결합 BDE (298 K 우선)
-    bde = desc.get("bde_min_298_kj", desc.get("bde_min_kj"))
+    # 키가 None 값으로 존재해도 폴백해야 한다 (esw.first_present 참조) —
+    # 열보정을 안 한 결과가 섞이면 BDE 축이 통째로 결측으로 잡히던 경로다.
+    bde = esw.first_present(desc, "bde_min_298_kj", "bde_min_kj")
     a = ANCHORS["chemstab"]
     out["chemstab"] = {
         "value": bde, "unit": "kJ/mol",
