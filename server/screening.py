@@ -341,7 +341,8 @@ def create_campaign(name: str, candidates: list[dict], electrodes: list[str],
             "scoring": scoring_cfg,          # 5대 Score 설정 (기획서 7장)
             "protocol": scoring.PROTOCOL_VERSION,
             "margin_v": margin_v,
-            "stages": [{"accuracy": st["accuracy"], "keep": st.get("keep")}
+            "stages": [{"accuracy": st["accuracy"], "keep": st.get("keep"),
+                        "threshold": st.get("threshold")}
                        for st in stages],
             "stageIndex": 0,
             "settings": settings,
@@ -640,11 +641,26 @@ def _advance(camp: dict):
         _finalize(camp)
         return
 
-    # 깔때기 — 안정성 여유 순으로 상위 keep 만 다음 단계로
-    keep = camp["stages"][stage_idx].get("keep")
+    # 깔때기 — v2.0 14.7: 고정 Top-N 대신 «임계값 + 최대 Top-N» 조합.
+    # 고정 개수만 쓰면 후보가 다 좋아도 N개만 남고, 다 나빠도 N개는 통과한다.
+    # 임계값이 먼저 거르고, Top-N 은 계산량 상한으로만 작동한다.
+    stage_cfg = camp["stages"][stage_idx]
+    keep = stage_cfg.get("keep")
+    threshold = stage_cfg.get("threshold")
     scored = sorted(done, key=lambda c: (_cut_score(c, camp, stage_idx) is None,
                                          -(_cut_score(c, camp, stage_idx) or -1e9)))
-    survivors = scored if not keep else scored[:keep]
+    passed = scored
+    if threshold is not None:
+        passed = [c for c in scored
+                  if (_cut_score(c, camp, stage_idx) or -1e9) >= threshold]
+        _log(camp, f"{stage_idx + 1}단계 임계값 {threshold:+.2f} V 적용 — "
+                   f"{len(done)}개 중 {len(passed)}개 통과")
+    survivors = passed if not keep else passed[:keep]
+    if keep and len(passed) > keep:
+        _log(camp, f"계산량 상한(Top-{keep})에 걸려 임계값 통과 {len(passed)}개 중 "
+                   f"{keep}개만 다음 단계로 보냅니다 — 나머지는 탈락이 아니라 «보류»입니다")
+        for c in passed[keep:]:
+            c["deferred"] = True
     survivor_ids = {c["idx"] for c in survivors}
     for c in done:
         if c["idx"] not in survivor_ids:
@@ -954,7 +970,9 @@ def estimate(n_candidates: int, stages: list[dict]) -> dict:
         per = ESTIMATE_S.get(st["accuracy"], 1200)
         sec = int(n * per / BATCH_PARALLEL)
         out.append({"accuracy": st["accuracy"], "n": n, "per_mol_s": per,
-                    "stage_s": sec})
+                    "stage_s": sec, "keep": st.get("keep"),
+                    "threshold": st.get("threshold")})
         total_s += sec
+        # 임계값 통과 수는 계산 전에는 알 수 없다 — 예상치는 Top-N 상한으로 잡는다
         n = min(n, st.get("keep") or n)
     return {"stages": out, "total_s": total_s, "batch_parallel": BATCH_PARALLEL}

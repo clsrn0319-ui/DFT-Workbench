@@ -1,5 +1,39 @@
 <title>RhoBench · DFT 워크벤치</title>
 <style>:root{--page: #ffffff;--surface: #ffffff;--border: #e5e5e0;--grid: #ececea;--text-1: #171716;--text-2: #52514e;--muted: #898781;--accent: #0f766e;--pin: #d97706;--series-1: #2a78d6;--series-2: #eb6834;--series-3: #1baf7a;--series-4: #eda100;--series-5: #e87ba4;--series-6: #008300;--series-7: #4a3aa7;--series-8: #e34948;--mep-neg: #2a78d6;--mep-pos: #e34948;--ok: #0ca30c;--danger: #d03b3b}:root[data-mode=dark]{color-scheme:dark}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Malgun Gothic,sans-serif;background:var(--page);color:var(--text-1);font-size:14px;line-height:1.5}.layout{display:flex;min-height:100vh}.sidebar{width:232px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px 12px;position:sticky;top:0;height:100vh;overflow-y:auto}.brand{display:flex;gap:10px;align-items:center;padding:4px 8px 16px;border-bottom:1px solid var(--grid);margin-bottom:10px}.brand-mark{font-size:24px;color:var(--accent)}.brand-title{font-weight:800;font-size:13px;letter-spacing:.4px}.brand-sub{font-size:11px;color:var(--muted)}.nav-group{margin-bottom:6px}.nav-group-label{font-size:11px;color:var(--muted);padding:8px 12px 3px;letter-spacing:.4px}.nav-item{display:block;width:100%;padding:8px 12px;margin-bottom:1px;border:none;border-radius:8px;background:transparent;color:var(--text-2);font-size:14px;cursor:pointer;text-align:left}.nav-item:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}.nav-item.active{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:700}.sidebar-foot{margin-top:auto;padding:10px 8px 4px;display:flex;flex-direction:column;gap:8px}.version{font-size:11px;color:var(--muted)}.content{flex:1;padding:22px 18px 64px;max-width:none;min-width:0}.page-head h1{margin:0 0 4px;font-size:22px}.page-desc{margin:0 0 18px;color:var(--muted);max-width:860px}.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:16px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}.card-head h2{margin:0;font-size:15px}.card-head h3{margin:0;font-size:13px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}@media (max-width: 1080px){.grid-2{grid-template-columns:1fr}}.empty{color:var(--muted);text-align:center;padding:28px 12px;display:flex;flex-direction:column;gap:12px;align-items:center}.empty.small{padding:14px;font-size:13px}.muted{color:var(--muted)}.small{font-size:12px}.mono{font-family:ui-monospace,Cascadia Code,Consolas,monospace}.ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}.clickable{cursor:pointer}.scroll-x{overflow-x:auto}.tabs{display:flex;gap:2px;border-bottom:2px solid var(--grid);margin-bottom:16px;flex-wrap:wrap}.tab{border:none;background:transparent;padding:9px 16px;font-size:14px;color:var(--text-2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px}.tab.active{color:var(--accent);font-weight:700;border-bottom-color:var(--accent)}.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}.seg button{border:none;background:transparent;padding:7px 12px;font-size:13px;color:var(--text-2);cursor:pointer}.seg button.on{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:700}.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}.stat-tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px 16px}.stat-tile.pinned{border-color:color-mix(in srgb,var(--pin) 55%,transparent)}.pin-star{color:var(--pin)}.stat-label{font-size:12px;color:var(--text-2)}.stat-value{font-size:26px;font-weight:700;margin:2px 0}.stat-unit{font-size:13px;font-weight:400;color:var(--text-2)}.stat-sub{font-size:11px;color:var(--muted)}.mini-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.mini-cards.wide{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}.mini-card{border:1px solid var(--grid);border-radius:10px;padding:9px 12px}.btn{border:1px solid var(--border);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px;background:var(--surface);color:var(--text-1)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}.btn.primary:disabled{opacity:.45;cursor:not-allowed}.btn.ghost{background:transparent;border-color:transparent;color:var(--accent);padding:5px 8px}.btn.ghost.danger{color:var(--danger)}.btn.big{width:100%;padding:11px;font-size:14px;margin-top:14px}.input{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-1);font-size:13px;font-family:inherit}.input.color{padding:2px;height:36px}.input.grow{flex:1}textarea.input{width:100%;resize:vertical}.toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center}.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:600;white-space:nowrap}.badge.queued{background:var(--grid);color:var(--text-2)}.badge.running{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}.badge.validating{background:color-mix(in srgb,var(--series-7) 14%,transparent);color:var(--series-7)}.badge.published{background:color-mix(in srgb,var(--ok) 13%,transparent);color:color-mix(in srgb,var(--ok) 75%,#003300)}.badge.review{background:color-mix(in srgb,var(--pin) 15%,transparent);color:var(--pin)}.badge.failed{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger)}.badge.overlay-badge{background:transparent;border:1px dashed var(--muted);color:var(--muted);margin-left:6px}.table{width:100%;border-collapse:collapse}.table th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--grid);vertical-align:bottom}.table td{padding:8px 10px;border-bottom:1px solid var(--grid);vertical-align:top}.table tr:last-child td{border-bottom:none}.table .num,.table th.num{text-align:right;font-variant-numeric:tabular-nums}.table tr.row-active td{background:color-mix(in srgb,var(--accent) 6%,transparent)}.table tr.row-pinned td{background:color-mix(in srgb,var(--pin) 7%,transparent)}.kv-table{width:100%;border-collapse:collapse}.kv-table th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:5px 10px 5px 0;width:110px;vertical-align:top}.kv-table td{padding:5px 16px 5px 0;font-size:13px}.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}.chip.soft{background:var(--grid);color:var(--text-2)}.row-actions{white-space:nowrap;display:flex;gap:4px;align-items:center;flex-wrap:wrap}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.field{display:flex;flex-direction:column;gap:4px}.field-label{font-size:12px;color:var(--text-2)}.form-error{color:var(--danger);font-size:12px;margin-top:8px}.form-actions{margin-top:12px;display:flex;gap:8px}.form-card{border-color:color-mix(in srgb,var(--accent) 35%,transparent)}.ratio-row{display:flex;gap:6px;align-items:center}.banner{border-radius:10px;padding:10px 16px;margin:10px 0;font-size:13px}.banner.success{background:color-mix(in srgb,var(--ok) 10%,transparent);color:color-mix(in srgb,var(--ok) 70%,#003300);border:1px solid color-mix(in srgb,var(--ok) 28%,transparent)}.banner.warn{background:color-mix(in srgb,var(--pin) 9%,transparent);color:color-mix(in srgb,var(--pin) 80%,#402000);border:1px solid color-mix(in srgb,var(--pin) 32%,transparent)}.mat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}.mat-card{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:13px 15px;display:flex;flex-direction:column;gap:5px}.mat-card-top{display:flex;justify-content:space-between;align-items:center}.initial-badge{width:34px;height:34px;border-radius:9px;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--accent);font-weight:800;font-size:13px;display:inline-flex;align-items:center;justify-content:center}.compare-check{font-size:12px;color:var(--text-2);display:inline-flex;gap:5px;align-items:center;cursor:pointer}.mat-name{border:none;background:none;padding:0;text-align:left;font-size:14px;font-weight:700;color:var(--text-1);cursor:pointer}.mat-name:hover{color:var(--accent)}.mat-meter{height:5px;border-radius:3px;background:var(--grid);overflow:hidden}.mat-meter-fill{height:100%;background:var(--accent)}.mat-card-badges{display:flex;gap:6px;flex-wrap:wrap}.mol-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}.mol-card{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:3px;color:var(--text-1);min-width:0}.mol-card:hover{border-color:var(--accent)}.mol-card.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);box-shadow:inset 0 0 0 1px var(--accent)}.option-group{margin-bottom:14px}.option-title{font-size:12px;font-weight:700;color:var(--text-2);margin-bottom:6px}.radio-row{display:flex;align-items:baseline;gap:8px;padding:5px 4px;border-radius:6px;cursor:pointer}.radio-row:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}.radio-row input{accent-color:var(--accent)}.summary-box{border:1px dashed var(--border);border-radius:10px;padding:12px;margin-top:12px;display:flex;flex-direction:column;gap:6px}details.expert{border:1px solid var(--grid);border-radius:10px;padding:10px 14px;margin-top:8px}details.expert summary{cursor:pointer;font-size:13px;color:var(--text-2);font-weight:600}.job-row{display:flex;justify-content:space-between;gap:20px}.job-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}.job-side{text-align:right;display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0}.progress-track{height:6px;border-radius:3px;background:var(--grid);overflow:hidden}.progress-fill{height:100%;border-radius:3px;background:var(--accent);transition:width .9s linear}.log-details summary{cursor:pointer}.log-list{margin:6px 0 0;padding-left:16px;color:var(--muted)}.quick-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.workflow{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}.workflow li{border:1px solid var(--grid);border-radius:10px;padding:10px 14px;cursor:pointer;display:flex;flex-direction:column;gap:2px}.workflow li:hover{border-color:var(--accent)}.workflow span{font-size:12px;color:var(--muted)}.server-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}.server-chip{display:inline-flex;gap:7px;align-items:center;border:1px solid var(--grid);border-radius:99px;padding:5px 12px;font-size:12px;color:var(--text-2)}.dot{width:8px;height:8px;border-radius:50%}.dot.ok{background:var(--ok)}.ident-card{display:flex;gap:20px;justify-content:space-between}.ident-main{flex:1;min-width:0}.ident-main h2{margin:0 0 8px;font-size:18px}.ident-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}.structure-thumb{flex-shrink:0;width:320px;border:1px solid var(--grid);border-radius:10px;padding:8px}.structure-toolbar{display:flex;gap:6px;justify-content:flex-end;margin-bottom:4px}.mat-thumb{border:1px solid var(--grid);border-radius:8px;cursor:pointer;overflow:hidden}.mep-legend{display:flex;gap:8px;align-items:center;margin-top:6px}.mep-bar{flex:1;max-width:220px;height:10px;border-radius:5px;border:1px solid var(--border)}.fact-list{list-style:none;margin:0;padding:0;display:flex;gap:6px;flex-wrap:wrap}.fact-list.plain{flex-direction:column;gap:5px;font-size:13px}.fact-list.plain li:before{content:"· ";color:var(--accent)}.fact-list.plain.caution li:before{color:var(--pin)}.desc-group{margin-bottom:14px}.desc-group h3{font-size:13px;color:var(--accent);margin:0 0 4px}.pin-btn{border:none;background:none;color:var(--grid);font-size:16px;cursor:pointer;padding:0 2px;line-height:1}.pin-btn.on,.pin-btn:hover{color:var(--pin)}.ref-block{border:1px dashed var(--border);border-radius:10px;padding:10px 14px;margin-bottom:10px}.ref-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px}.series-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}.series-item{display:flex;gap:8px;align-items:center}.series-item input[type=color]{width:40px;height:30px;border:1px solid var(--border);border-radius:6px;padding:1px;background:var(--surface);cursor:pointer}.chart-box{position:relative}.chart-box svg{width:100%;max-width:680px;height:auto;display:block}.gridline{stroke:var(--grid);stroke-width:1}.baseline{stroke:var(--border);stroke-width:1.2}.axis-label{font-size:11px;fill:var(--muted)}.value-label{font-size:10.5px;fill:var(--text-2);font-variant-numeric:tabular-nums}.ring-mark{stroke:var(--surface);stroke-width:2}.chart-tip{position:absolute;pointer-events:none;background:var(--text-1);color:var(--page);font-size:12px;padding:4px 9px;border-radius:6px;white-space:nowrap;z-index:10}.chart-note{font-size:11px;color:var(--muted);margin-top:6px}.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}.legend-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2)}.legend-swatch{width:11px;height:11px;border-radius:3px;display:inline-block}.ref-picker{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.ref-chip{border:1px solid var(--border);border-radius:99px;background:transparent;color:var(--muted);font-size:11px;padding:3px 10px;cursor:pointer}.ref-chip.anode.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}.ref-chip.cathode.on{border-color:var(--pin);color:var(--pin);background:color-mix(in srgb,var(--pin) 10%,transparent)}.widget.editing{border:1px dashed var(--accent);border-radius:14px;padding:8px;margin-bottom:14px}.widget-controls{display:flex;justify-content:space-between;align-items:center;padding:2px 6px 8px}.conf-controls{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.conf-controls label{display:flex;gap:10px;align-items:center}.conf-controls input[type=range]{width:220px;accent-color:var(--accent)}.conf-grid{display:grid;grid-template-columns:1fr 1.2fr;gap:16px;align-items:start}@media (max-width: 1000px){.conf-grid{grid-template-columns:1fr}}.visual-hero{display:grid;grid-template-columns:250px 1fr 250px;gap:18px;align-items:start}@media (max-width: 1150px){.visual-hero{grid-template-columns:1fr}}.side-panel{border:1px solid var(--grid);border-radius:10px;padding:10px 14px}.fact-kv{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--grid)}.fact-kv:last-of-type{border-bottom:none}.fact-kv b{font-variant-numeric:tabular-nums;text-align:right}
+
+.wiz-steps{display:flex;list-style:none;gap:6px;margin:0 0 14px;padding:0;flex-wrap:wrap}
+.wiz-steps li{flex:1;min-width:112px;padding:8px 10px;border-radius:8px;font-size:12.5px;
+  background:var(--grid);color:var(--muted);display:flex;gap:8px;align-items:center;cursor:pointer}
+.wiz-steps li b{display:inline-flex;width:20px;height:20px;border-radius:50%;
+  background:var(--muted);color:#fff;align-items:center;justify-content:center;font-size:11px;flex-shrink:0}
+.wiz-steps li.active{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:700}
+.wiz-steps li.active b{background:var(--accent)}
+.wiz-steps li.done b{background:var(--ok)}
+.wiz-body{display:flex;gap:18px;align-items:flex-start}
+.wiz-main{flex:1;min-width:0}
+.wiz-side{width:290px;flex-shrink:0;position:sticky;top:12px;background:var(--grid);
+  border-radius:10px;padding:12px 14px 96px;font-size:12.5px;max-height:calc(100vh - 120px);overflow:auto}
+.wiz-side h4{margin:0 0 6px;font-size:12px;color:var(--accent)}
+.wiz-side dl{margin:0 0 10px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px}
+.wiz-side dt{color:var(--muted)}
+.wiz-side dd{margin:0;text-align:right;word-break:break-all}
+.wiz-panel h3{font-size:14px;color:var(--accent);margin:0 0 4px}
+.wiz-card{border:1px solid var(--border);border-radius:9px;padding:10px 12px;margin:10px 0}
+.wiz-card h4{margin:0 0 4px;font-size:12.5px}
+.wiz-gap{margin-top:14px}
+.wiz-presets{display:flex;gap:10px;flex-wrap:wrap}
+.wiz-preset{flex:1;min-width:150px;text-align:left;border:1.5px solid var(--border);border-radius:9px;
+  padding:10px 12px;background:var(--surface);cursor:pointer;font:inherit;color:inherit}
+.wiz-preset b{display:block;font-size:13.5px}
+.wiz-preset span{display:block;font-size:11.5px;color:var(--muted);margin:1px 0 4px}
+.wiz-preset em{display:block;font-size:11px;color:var(--muted);font-style:normal;line-height:1.45}
+.wiz-preset.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.wiz-acc{border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin:8px 0}
+.wiz-acc summary{cursor:pointer;font-size:12.5px;font-weight:700}
+.wiz-stage{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:5px 0}
+.wiz-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  margin-top:16px;padding-top:12px;border-top:1px solid var(--grid)}
+@media (max-width:1100px){.wiz-body{flex-direction:column}.wiz-side{width:100%;position:static;max-height:none}}
 </style>
 <div id="root"></div>
 <script type="module">(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const s of document.querySelectorAll('link[rel="modulepreload"]'))r(s);new MutationObserver(s=>{for(const i of s)if(i.type==="childList")for(const a of i.addedNodes)a.tagName==="LINK"&&a.rel==="modulepreload"&&r(a)}).observe(document,{childList:!0,subtree:!0});function n(s){const i={};return s.integrity&&(i.integrity=s.integrity),s.referrerPolicy&&(i.referrerPolicy=s.referrerPolicy),s.crossOrigin==="use-credentials"?i.credentials="include":s.crossOrigin==="anonymous"?i.credentials="omit":i.credentials="same-origin",i}function r(s){if(s.ep)return;s.ep=!0;const i=n(s);fetch(s.href,i)}})();function O1(t){return t&&t.__esModule&&Object.prototype.hasOwnProperty.call(t,"default")?t.default:t}var If={exports:{}},ha={},Of={exports:{}},Pe={};/**
@@ -1199,89 +1233,249 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div class="card-head"><h2>새 캠페인</h2>
       <button class="btn ghost" id="scr-wizard-close" type="button">닫기</button></div>
 
-    <h3 style="font-size:13px;color:var(--accent)">1. 후보 목록</h3>
-    <p class="muted small" style="margin:4px 0 8px">한 줄에 하나 — <span class="mono">이름,SMILES</span> (CSV)
-      또는 <span class="mono">SMILES</span> 만. 헤더 행·중복 구조는 자동 처리됩니다.
-      파일은 목록(.csv/.xlsx/.txt/.smi)과 <b>3D 구조(.sdf/.mol/.xyz)</b>를 모두 지원하며,
-      아래 입력창에 <b>파일을 끌어다 놓아도</b> 됩니다. 3D 파일의 좌표는 초기 구조로
-      쓰여 conformer 탐색을 건너뜁니다.</p>
-    <textarea class="input" id="scr-cands" rows="8" style="width:100%;font-family:var(--mono,monospace)"
-      placeholder="VDF,C=C(F)F&#10;AA,C=CC(=O)O&#10;C=C(C)C(=O)OC"></textarea>
-    <div class="toolbar" style="margin-top:8px">
-      <input type="file" id="scr-file" accept=".csv,.xlsx,.txt,.smi,.sdf,.mol,.xyz" class="small">
-      <label class="small">구조
-        <select class="input" id="scr-structure">
-          <option>모노머</option><option>2량체</option><option>3량체</option>
-        </select></label>
-      <label class="small" id="scr-3d-charge-wrap" style="display:none">XYZ 전하
-        <input class="input" id="scr-3d-charge" type="number" value="0" min="-4" max="4"
-          style="width:60px;padding:3px 6px"></label>
-      <label class="compare-check small" id="scr-rescan-wrap" style="display:none">
-        <input type="checkbox" id="scr-rescan"> 구조 재탐색</label>
-      <button class="btn primary" id="scr-parse-btn" type="button">목록 검증</button>
-      <span class="muted small" id="scr-parse-count"></span>
-    </div>
-    <div id="scr-parse-out"></div>
+    <!-- 단계 표시줄 -->
+    <ol class="wiz-steps" id="wiz-steps">
+      <li data-step="1"><b>1</b> 후보 입력</li>
+      <li data-step="2"><b>2</b> 적용 환경</li>
+      <li data-step="3"><b>3</b> 계산 모델</li>
+      <li data-step="4"><b>4</b> Screening</li>
+      <li data-step="5"><b>5</b> 검토 · 실행</li>
+    </ol>
 
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">2. 판정 기준 · 환경</h3>
-    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
-      <span class="small">대상 활물질</span><span id="scr-electrodes"></span>
-      <label class="small">안정성 마진
-        <input class="input" id="scr-margin" type="number" value="0.3" min="0" max="2" step="0.05"
-          style="width:70px;padding:4px 8px"> V</label>
-    </div>
-    <div class="toolbar" style="margin:6px 0">
-      <span class="small muted">사용자 정의 활물질</span>
-      <input class="input" id="scr-ce-name" placeholder="이름 (예: LNMO)"
-        style="width:110px;padding:4px 8px">
-      <label class="small">구동 하한 <input class="input" id="scr-ce-low" type="number" step="0.05"
-        placeholder="3.5" style="width:70px;padding:4px 8px"> V</label>
-      <label class="small">상한 <input class="input" id="scr-ce-high" type="number" step="0.05"
-        placeholder="4.75" style="width:70px;padding:4px 8px"> V</label>
-      <button class="btn" id="scr-ce-add" type="button">＋ 추가</button>
-      <span id="scr-ce-list"></span>
-    </div>
-    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
-      <label class="small">용매 <select class="input" id="scr-solvent"></select></label>
-      <label class="small">온도 <input class="input" id="scr-temp" type="number" value="298.15" step="1"
-        style="width:80px;padding:4px 8px"> K</label>
-      <label class="small">기준 전극 <select class="input" id="scr-ref"></select></label>
-      <label class="small">범함수 <select class="input" id="scr-func"></select></label>
-      <label class="small">기저함수 <select class="input" id="scr-basis"></select></label>
+    <div class="wiz-body">
+      <div class="wiz-main">
+
+      <!-- ── STEP 1 ─────────────────────────────────────────── -->
+      <section class="wiz-panel" data-step="1">
+        <h3>후보 입력</h3>
+        <p class="muted small" style="margin:4px 0 8px">한 줄에 하나 — <span class="mono">이름,SMILES</span> (CSV)
+          또는 <span class="mono">SMILES</span> 만. 헤더 행·중복 구조는 자동 처리됩니다.
+          파일은 목록(.csv/.xlsx/.txt/.smi)과 <b>3D 구조(.sdf/.mol/.xyz)</b>를 모두 지원하며,
+          아래 입력창에 <b>파일을 끌어다 놓아도</b> 됩니다.</p>
+        <textarea class="input" id="scr-cands" rows="8" style="width:100%;font-family:var(--mono,monospace)"
+          placeholder="VDF,C=C(F)F&#10;AA,C=CC(=O)O&#10;C=C(C)C(=O)OC"></textarea>
+        <div class="toolbar" style="margin-top:8px">
+          <input type="file" id="scr-file" accept=".csv,.xlsx,.txt,.smi,.sdf,.mol,.xyz" class="small">
+          <label class="small">구조
+            <select class="input" id="scr-structure">
+              <option>모노머</option><option>2량체</option><option>3량체</option>
+            </select></label>
+          <label class="small" id="scr-3d-charge-wrap" style="display:none">XYZ 전하
+            <input class="input" id="scr-3d-charge" type="number" value="0" min="-4" max="4"
+              style="width:60px;padding:3px 6px"></label>
+          <label class="compare-check small" id="scr-rescan-wrap" style="display:none">
+            <input type="checkbox" id="scr-rescan"> 구조 재탐색</label>
+          <button class="btn primary" id="scr-parse-btn" type="button">목록 검증</button>
+          <span class="muted small" id="scr-parse-count"></span>
+        </div>
+        <div id="scr-parse-out"></div>
+        <p class="muted small" style="margin-top:8px">구조 선택은 «반복 단위를 몇 개 이어 계산할지»입니다.
+          비닐 단량체는 중합하며 C=C가 소모되므로 모노머와 2량체 이상은 다른 화학종입니다 —
+          고분자 물성을 보려면 2량체 이상을 권합니다.</p>
+      </section>
+
+      <!-- ── STEP 2 ─────────────────────────────────────────── -->
+      <section class="wiz-panel" data-step="2" hidden>
+        <h3>적용 환경</h3>
+        <p class="muted small" style="margin:4px 0 10px">실험 조건과 «계산에 실제 반영되는 모델»은 다릅니다.
+          아래에서 그 대응 관계를 함께 확인하세요.</p>
+
+        <div class="wiz-card">
+          <h4>전극 및 판정 기준</h4>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
+            <span class="small">대상 활물질</span><span id="scr-electrodes"></span>
+            <label class="small">안정성 마진
+              <input class="input" id="scr-margin" type="number" value="0.3" min="0" max="2" step="0.05"
+                style="width:70px;padding:4px 8px"> V</label>
+          </div>
+          <div class="toolbar" style="margin:6px 0">
+            <span class="small muted">사용자 정의 활물질</span>
+            <input class="input" id="scr-ce-name" placeholder="이름 (예: LNMO)"
+              style="width:110px;padding:4px 8px">
+            <label class="small">구동 하한 <input class="input" id="scr-ce-low" type="number" step="0.05"
+              placeholder="3.5" style="width:70px;padding:4px 8px"> V</label>
+            <label class="small">상한 <input class="input" id="scr-ce-high" type="number" step="0.05"
+              placeholder="4.75" style="width:70px;padding:4px 8px"> V</label>
+            <button class="btn" id="scr-ce-add" type="button">＋ 추가</button>
+            <span id="scr-ce-list"></span>
+          </div>
+        </div>
+
+        <div class="wiz-card">
+          <h4>전해액 · 온도 · 기준 전극</h4>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0">
+            <label class="small">용매 <select class="input" id="scr-solvent"></select></label>
+            <label class="small">온도 <input class="input" id="scr-temp" type="number" value="298.15" step="1"
+              style="width:80px;padding:4px 8px"> K</label>
+            <label class="small">기준 전극 <select class="input" id="scr-ref"></select></label>
+          </div>
+          <div id="wiz-env-level" class="small"></div>
+          <p class="muted small" style="margin:8px 0 0">온도는 열역학 보정에 그대로 쓰입니다 —
+            계산 모델 단계의 온도와 항상 같습니다.</p>
+        </div>
+
+        <div class="wiz-card wiz-gap">
+          <h4>계산에 반영되지 않는 실험 조건</h4>
+          <p class="small" style="margin:4px 0">염 종류·농도·첨가제는 <b>현재 계산에 반영되지 않습니다.</b>
+            SMD 연속체 모델은 용매의 유전 응답만 다루며, LiPF₆ 농도·이온쌍·SEI 형성 동역학은
+            포함되지 않습니다. 기록용으로 남겨 두면 나중에 실험과 대조할 때 도움이 됩니다.</p>
+          <div class="toolbar">
+            <label class="small">염 <input class="input" id="scr-salt" placeholder="LiPF6"
+              style="width:100px;padding:4px 8px"></label>
+            <label class="small">농도 <input class="input" id="scr-salt-conc" type="number" step="0.1"
+              placeholder="1.0" style="width:70px;padding:4px 8px"> M</label>
+            <span class="badge muted" style="border:1px solid currentColor">기록용</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── STEP 3 ─────────────────────────────────────────── -->
+      <section class="wiz-panel" data-step="3" hidden>
+        <h3>계산 모델</h3>
+        <div class="wiz-presets" id="wiz-presets">
+          <button type="button" class="wiz-preset" data-preset="빠름">
+            <b>Fast</b><span>1차 triage</span>
+            <em>저비용 기저 · 수직 전위 — 최종 탈락 확정에 쓰지 않음</em></button>
+          <button type="button" class="wiz-preset selected" data-preset="표준">
+            <b>Standard</b><span>본 screening</span>
+            <em>구조 최적화 · 단열/ΔG 전위 · 열보정</em></button>
+          <button type="button" class="wiz-preset" data-preset="정밀">
+            <b>Accurate</b><span>상위 후보 검증</span>
+            <em>diffuse 기저 · 앙상블 · 최종 후보용</em></button>
+        </div>
+        <p class="muted small" id="wiz-preset-note" style="margin:6px 0 12px"></p>
+
+        <details class="wiz-acc" open><summary>C. DFT 방법</summary>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:8px 0">
+            <label class="small">범함수 <select class="input" id="scr-func"></select></label>
+            <label class="small">단일점 기저 <select class="input" id="scr-basis"></select></label>
+            <label class="small">음이온 기저 <select class="input" id="scr-basis-anion"></select></label>
+          </div>
+          <p class="muted small" style="margin:0">음이온·전자친화도·환원 전위는 diffuse 함수에 민감합니다.
+            음이온 기저를 따로 두면 중성 기준 에너지도 <b>같은 기저에서 다시 계산</b>해 비교 가능성을 지킵니다.</p>
+        </details>
+
+        <details class="wiz-acc"><summary>D. 전하 · 스핀</summary>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:8px 0">
+            <label class="small">전하 <input class="input" id="scr-charge" type="number" value="0"
+              min="-4" max="4" style="width:64px;padding:4px 8px"></label>
+            <label class="small">다중도 <input class="input" id="scr-mult" type="number" value="1"
+              min="1" max="4" style="width:64px;padding:4px 8px"></label>
+          </div>
+          <p class="muted small" style="margin:0">이온 상태는 자동으로 전하 ±1 · 다중도 2(open shell, UKS)로
+            계산됩니다. 중성이 열린 껍질이면 자동 전위 계산은 생략됩니다.</p>
+        </details>
+
+        <details class="wiz-acc"><summary>E. 구조 최적화 · 진동수</summary>
+          <div class="toolbar" style="margin:8px 0">
+            <label class="compare-check small"><input type="checkbox" id="scr-opt"> 구조 최적화</label>
+            <label class="compare-check small"><input type="checkbox" id="scr-opt-solv"> 용매 중 최적화</label>
+            <label class="compare-check small"><input type="checkbox" id="scr-thermo"> 진동수 · 열보정</label>
+          </div>
+          <p class="muted small" style="margin:0">허수 진동수가 나오면 극소점이 아니므로 신뢰도 Numerical 축이
+            자동으로 내려갑니다.</p>
+        </details>
+
+        <details class="wiz-acc"><summary>F. 열역학</summary>
+          <div class="toolbar" style="margin:8px 0">
+            <label class="compare-check small"><input type="checkbox" id="scr-qrrho" checked> qRRHO 준조화 보정</label>
+            <span class="badge verdict-ok" style="border:1px solid currentColor">1 atm→1 M 보정 상시 적용</span>
+          </div>
+          <p class="muted small" style="margin:0">유연한 올리고머는 저진동수 비틀림 모드가 많아 순수 조화 근사가
+            엔트로피를 과대평가합니다. 강체 분자에서는 보정이 거의 0이라 손해가 없습니다.</p>
+        </details>
+
+        <details class="wiz-acc"><summary>G. 전위 기준</summary>
+          <div class="toolbar" style="margin:8px 0">
+            <label class="small">기준 변환 규약 <select class="input" id="scr-convention"></select></label>
+          </div>
+          <div id="wiz-convention-note" class="muted small"></div>
+        </details>
+
+        <details class="wiz-acc"><summary>A · B · H. 미구현 항목</summary>
+          <p class="small" style="margin:8px 0">아래는 개정 기획서가 요구하지만 <b>아직 구현되지 않은</b>
+            항목입니다. 조작 가능한 것처럼 보이면 오해를 부르므로 입력란을 두지 않았습니다.</p>
+          <ul class="log-list">
+            <li><b>A. Polymer Model</b> — 공중합체 서열·택티시티·치환도(DS). 현재는 단일 반복 단위와
+              올리고머 길이만 다룹니다.</li>
+            <li><b>B. Conformer 상세</b> — 에너지 창·RMSD cutoff·전하 상태별 앙상블. 현재는 정확도
+              프리셋의 conformer 수만 조정됩니다.</li>
+            <li><b>H. Li⁺ 상호작용</b> — 용매 경쟁 반응(ΔG_exchange)·배위수 앙상블. 현재는 고립 Li⁺
+              결합 에너지만 산출되며, 이는 탈용매화 비용을 무시해 trapping 을 과대평가합니다.</li>
+          </ul>
+        </details>
+      </section>
+
+      <!-- ── STEP 4 ─────────────────────────────────────────── -->
+      <section class="wiz-panel" data-step="4" hidden>
+        <h3>Screening 전략</h3>
+        <p class="muted small" style="margin:4px 0 10px">싼 계산으로 다수를 거르고, 비싼 계산은 통과한 소수에만 씁니다.
+          <b>임계값</b>이 먼저 거르고 <b>Top-N</b>은 계산량 상한으로만 작동합니다 —
+          고정 개수만 쓰면 후보가 다 좋아도 N개만 남고, 다 나빠도 N개는 통과합니다.</p>
+        <div id="scr-stages" class="wiz-card">
+          <div class="wiz-stage">
+            <label class="compare-check small"><input type="checkbox" id="scr-st1" checked>
+              <b>1차 — 빠름</b> (사전 선별)</label>
+            <label class="small">임계값 <input class="input" id="scr-th1" type="number" step="0.05"
+              placeholder="없음" style="width:74px;padding:3px 6px"> V</label>
+            <label class="small">최대 <input class="input" id="scr-keep1" type="number" value="20" min="1"
+              style="width:64px;padding:3px 6px">개</label>
+          </div>
+          <div class="wiz-stage">
+            <label class="compare-check small"><input type="checkbox" id="scr-st2" checked>
+              <b>2차 — 표준</b> (연구용)</label>
+            <label class="small">임계값 <input class="input" id="scr-th2" type="number" step="0.05"
+              placeholder="없음" style="width:74px;padding:3px 6px"> V</label>
+            <label class="small">최대 <input class="input" id="scr-keep2" type="number" value="5" min="1"
+              style="width:64px;padding:3px 6px">개</label>
+          </div>
+          <div class="wiz-stage">
+            <label class="compare-check small"><input type="checkbox" id="scr-st3">
+              <b>3차 — 정밀</b> (최종 확인)</label>
+            <span class="muted small">마지막 단계 — 통과 조건 없음</span>
+          </div>
+        </div>
+        <p class="muted small" style="margin:8px 0 0"><b>1차(빠름)는 수직 전위 기반이라 환원 위험을 낮잡습니다.</b>
+          서버가 컷 순위에 환원 보수 보정을 자동 적용하지만, 등급 확정은 상위 단계에서 하세요.
+          Top-N 상한에 걸려 넘어가지 못한 후보는 <b>탈락이 아니라 보류</b>로 기록됩니다.</p>
+
+        <div class="wiz-card wiz-gap">
+          <h4>Hard Gate 와 Soft Ranking</h4>
+          <p class="small" style="margin:4px 0 8px">전위 창 위반 같은 치명적 실패는 점수와 <b>분리</b>됩니다 —
+            접착·친화도 점수가 높다고 다시 상위로 올라오지 않습니다.</p>
+          <div class="toolbar">
+            <label class="compare-check small"><input type="checkbox" id="scr-score-on"> 5대 Score 산출</label>
+            <label class="small">가중치 프리셋 <select class="input" id="scr-score-preset"></select></label>
+          </div>
+          <div id="scr-score-weights" style="margin:6px 0"></div>
+          <p class="muted small" style="margin:4px 0 0">켜면 마지막 단계에서 물성 지문(표면 흡착·Li⁺ 결합·용매화·BDE)까지
+            계산합니다. 점수는 <b>동일 프로토콜 안에서의 상대 비교</b>이지 물리적 절대값이 아닙니다.</p>
+        </div>
+      </section>
+
+      <!-- ── STEP 5 ─────────────────────────────────────────── -->
+      <section class="wiz-panel" data-step="5" hidden>
+        <h3>검토 · 실행</h3>
+        <div id="wiz-review"></div>
+        <div class="toolbar" style="margin-top:14px">
+          <input class="input grow" id="scr-name" placeholder="캠페인 이름 (예: NCM811 바인더 1차)">
+          <button class="btn primary" id="scr-submit" type="button">캠페인 시작</button>
+        </div>
+        <p class="muted small" id="scr-estimate" style="margin:6px 0 0"></p>
+        <div class="form-error" id="scr-error"></div>
+      </section>
+
+      </div>
+
+      <!-- ── 고정 요약 패널 ──────────────────────────────────── -->
+      <aside class="wiz-side" id="scr-summary"></aside>
     </div>
 
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">3. 깔때기 단계</h3>
-    <p class="muted small" style="margin:4px 0 8px">싼 계산으로 다수를 거르고, 비싼 계산은 통과한 소수에만 씁니다.
-      각 단계의 «통과 수»는 안정성 여유 상위 N개가 다음 단계로 진출한다는 뜻입니다.
-      <b>1차(빠름)는 수직 전위 기반이라 환원 위험을 낮잡을 수 있습니다</b> — 통과 수를 넉넉히 두세요.
-      서버는 1차 컷 순위에 환원 보수 보정을 자동 적용하지만, 등급 확정은 상위 단계가 안전합니다.</p>
-    <div id="scr-stages">
-      <label class="compare-check small"><input type="checkbox" id="scr-st1" checked> 1차 — 빠름 (사전 선별)
-        · 통과 <input class="input" id="scr-keep1" type="number" value="20" min="1"
-          style="width:64px;padding:3px 6px">개</label><br>
-      <label class="compare-check small"><input type="checkbox" id="scr-st2" checked> 2차 — 표준 (연구용)
-        · 통과 <input class="input" id="scr-keep2" type="number" value="5" min="1"
-          style="width:64px;padding:3px 6px">개</label><br>
-      <label class="compare-check small"><input type="checkbox" id="scr-st3"> 3차 — 정밀 (최종 확인)</label>
+    <div class="wiz-nav">
+      <button class="btn" id="wiz-prev" type="button">← 이전</button>
+      <span class="muted small" id="wiz-pos"></span>
+      <button class="btn primary" id="wiz-next" type="button">다음 →</button>
     </div>
-
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">4. 5대 DFT Score (선택)</h3>
-    <p class="muted small" style="margin:4px 0 8px">켜면 마지막 단계에서 물성 지문(표면 흡착·Li⁺ 결합·용매화·BDE)까지
-      계산해 <b>접착 · 전기화학 안정성 · 전해액 친화도 · 이온 상호작용 · 화학적 안정성</b>의 0~100점과
-      가중 총점 순위를 산출합니다 (마지막 단계 시간 증가). 친화도·이온 축은 목표 범위(target window)식 채점이며,
-      Hard Filter(전위 창 위반)와 감점 사유는 점수와 분리해 표시됩니다.</p>
-    <div class="toolbar">
-      <label class="compare-check small"><input type="checkbox" id="scr-score-on"> 5대 Score 산출</label>
-      <label class="small">가중치 프리셋 <select class="input" id="scr-score-preset"></select></label>
-    </div>
-    <div id="scr-score-weights" style="margin:6px 0"></div>
-
-    <div class="toolbar" style="margin-top:14px">
-      <input class="input grow" id="scr-name" placeholder="캠페인 이름 (예: NCM811 바인더 1차)">
-      <button class="btn primary" id="scr-submit" type="button">캠페인 시작</button>
-    </div>
-    <p class="muted small" id="scr-estimate" style="margin:6px 0 0"></p>
-    <div class="form-error" id="scr-error"></div>
   </div>
 
   <div class="card" id="scr-detail" style="display:none">

@@ -763,3 +763,43 @@ def test_reverify_lumo_no_targets(no_worker, monkeypatch):
     screening._advance(camp)
     with pytest.raises(ValueError):
         screening.reverify_lumo(camp)
+
+
+def test_funnel_threshold_filters_before_top_n():
+    """임계값이 먼저 거르고 Top-N 은 계산량 상한으로만 작동한다 (v2.0 14.7).
+
+    고정 개수만 쓰면 후보가 다 좋아도 N개만 남고, 다 나빠도 N개는 통과한다.
+    """
+    from server import screening
+
+    def cut(rows, threshold, keep):
+        """_advance 의 통과 선정 규칙만 떼어 검증 — 정렬은 여유 내림차순."""
+        scored = sorted(rows, key=lambda c: -c["margin"])
+        passed = ([c for c in scored if c["margin"] >= threshold]
+                  if threshold is not None else scored)
+        return passed if not keep else passed[:keep]
+
+    rows = [{"idx": i, "margin": m}
+            for i, m in enumerate([1.5, 1.2, 0.8, -0.1, -0.9])]
+    # 임계값만 — 통과 수는 후보 품질이 정한다
+    assert [c["idx"] for c in cut(rows, 0.0, None)] == [0, 1, 2]
+    # 임계값 + 상한 — 상한이 계산량만 제한한다
+    assert [c["idx"] for c in cut(rows, 0.0, 2)] == [0, 1]
+    # 임계값 없이 상한만 — 나쁜 후보도 통과한다 (v1.0 동작)
+    assert [c["idx"] for c in cut(rows, None, 4)] == [0, 1, 2, 3]
+    # 전부 좋으면 임계값은 아무도 거르지 않는다
+    good = [{"idx": i, "margin": 2.0} for i in range(5)]
+    assert len(cut(good, 0.0, None)) == 5
+
+
+def test_stage_threshold_reaches_campaign_and_estimate():
+    """단계 임계값이 캠페인 설정과 예상 계산량에 그대로 실려야 한다."""
+    from server import screening
+    stages = [{"accuracy": "빠름", "keep": 20, "threshold": -0.5},
+              {"accuracy": "표준", "keep": 5, "threshold": 0.0},
+              {"accuracy": "정밀"}]
+    est = screening.estimate(100, stages)
+    assert [s["n"] for s in est["stages"]] == [100, 20, 5]
+    assert est["stages"][0]["threshold"] == -0.5
+    assert est["stages"][1]["keep"] == 5
+    assert est["total_s"] > 0

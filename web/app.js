@@ -3056,7 +3056,10 @@ async function scrOpenWizard() {
           ${["graphite", "ncm811"].includes(e.key) ? "checked" : ""}>
         ${esc(e.label)} <span class="muted">(${e.low.toFixed(2)}~${e.high.toFixed(2)} V)</span></label>`
     ).join("");
-    eBox.querySelectorAll("input").forEach(i => i.addEventListener("change", scrEstimate));
+    eBox.querySelectorAll("input").forEach(i => i.addEventListener("change", () => {
+      scrEstimate();
+      if (typeof wizRenderSummary === "function") wizRenderSummary();
+    }));
   }
   const sSel = $("scr-solvent");
   if (!sSel.options.length) {
@@ -3103,16 +3106,27 @@ async function scrOpenWizard() {
     scrRenderScoreWeights(pSel.value);
   }
   scrEstimate();
+  // 활물질·용매 선택지가 채워진 «뒤»에 요약을 다시 그린다 —
+  // 먼저 그리면 «미선택»으로 보인다
+  if (typeof wizRenderSummary === "function") wizRenderSummary();
+  if (typeof wizRenderEnvLevel === "function") wizRenderEnvLevel();
 }
 
 function scrStages() {
+  // v2.0 14.7 — 임계값이 먼저 거르고, Top-N 은 계산량 상한으로만 작동한다
+  const th = id => { const v = parseFloat($(id)?.value); return isFinite(v) ? v : null; };
   const stages = [];
   if ($("scr-st1").checked)
-    stages.push({accuracy: "빠름", keep: Math.max(1, +$("scr-keep1").value || 20)});
+    stages.push({accuracy: "빠름", keep: Math.max(1, +$("scr-keep1").value || 20),
+                 threshold: th("scr-th1")});
   if ($("scr-st2").checked)
-    stages.push({accuracy: "표준", keep: Math.max(1, +$("scr-keep2").value || 5)});
+    stages.push({accuracy: "표준", keep: Math.max(1, +$("scr-keep2").value || 5),
+                 threshold: th("scr-th2")});
   if ($("scr-st3").checked) stages.push({accuracy: "정밀"});
-  if (stages.length) delete stages[stages.length - 1].keep;  // 마지막 단계는 전원 판정
+  if (stages.length) {                       // 마지막 단계는 전원 판정
+    delete stages[stages.length - 1].keep;
+    delete stages[stages.length - 1].threshold;
+  }
   return stages;
 }
 
@@ -3194,7 +3208,13 @@ async function scrSubmit() {
       structure: $("scr-structure").value,
       referenceElectrode: $("scr-ref").value,
       expert: {...PRESETS.defaults.expert, functional: $("scr-func").value,
-               basis: $("scr-basis")?.value || null, charge: SCR_3D_CHARGE},
+               basis: $("scr-basis")?.value || null, charge: SCR_3D_CHARGE,
+               basisAnion: $("scr-basis-anion")?.value || null,
+               qrrho: $("scr-qrrho") ? $("scr-qrrho").checked : true,
+               multiplicity: Math.max(1, +($("scr-mult")?.value || 1)),
+               optimizeGeometry: wizTri("scr-opt"),
+               optimizeInSolvent: $("scr-opt-solv") ? $("scr-opt-solv").checked : false,
+               thermochemistry: wizTri("scr-thermo")},
     },
   };
   const btn = $("scr-submit");
@@ -3446,8 +3466,10 @@ function scrWire() {
     const f = $("scr-file").files[0];
     if (f) { const r = new FileReader(); r.onload = () => scrParse3D(r.result, f.name); r.readAsText(f); }
   });
-  ["scr-st1", "scr-st2", "scr-st3", "scr-keep1", "scr-keep2"].forEach(id =>
-    $(id).addEventListener("change", scrEstimate));
+  ["scr-st1", "scr-st2", "scr-st3", "scr-keep1", "scr-keep2",
+   "scr-th1", "scr-th2"].forEach(id =>
+    $(id) && $(id).addEventListener("change", scrEstimate));
+  wireWizard();
   $("scr-detail-close").addEventListener("click", () => {
     SCR_DETAIL_ID = null;
     $("scr-detail").style.display = "none";
@@ -3674,6 +3696,7 @@ function scrRenderParsed() {
           ${has3d ? `<td class="muted small">${esc(r.note || "")}</td>` : ""}</tr>`).join("")}
       </table></div></details>` : ""}`;
   scrEstimate();
+  if (typeof wizRenderSummary === "function") wizRenderSummary();
 }
 
 // 3D 파일 경로 — /api/structures/parse 결과를 후보 목록으로 변환
@@ -3797,3 +3820,301 @@ async function calcLoad3D(content, filename) {
     }
   });
 })();
+
+/* ============ 5-Step Campaign Wizard (v2.0 기획서 14장) ============ */
+
+let WIZ_STEP = 1;
+let WIZ_PROTOCOL = null;     // /api/protocol/card 캐시
+let WIZ_CUSTOM = false;      // 프리셋 값을 사용자가 손댔는가
+
+const WIZ_PRESET_NOTE = {
+  "빠름": "1차(빠름)만 실행 — 수직 전위 중심이라 환원 위험을 낮잡습니다. " +
+          "우선순위 분류용이며 최종 탈락 확정에 쓰지 마세요.",
+  "표준": "1차 → 2차(표준) — 구조 최적화·단열/ΔG 전위·열보정까지. 본 판정 수준입니다.",
+  "정밀": "1차 → 2차 → 3차(정밀) — diffuse 기저와 앙상블까지. 계산 시간이 크게 늘어납니다.",
+};
+
+async function wizProtocol() {
+  if (!WIZ_PROTOCOL) WIZ_PROTOCOL = await scrFetch("/api/protocol/card");
+  return WIZ_PROTOCOL;
+}
+
+/** 정확도 프리셋 — 이 프로그램에서 «정확도»는 깔때기 단계가 정한다.
+ *  따라서 프리셋 카드는 단계 구성을 바꾸고, 세부 옵션은 그 기본값을 따른다.
+ *  기저는 «(프리셋 기본)»으로 두어 서버의 정확도별 기본값을 그대로 쓴다 —
+ *  여기서 하드코딩하면 단계마다 다른 기저를 써야 하는 구조와 어긋난다. */
+const WIZ_PRESET_STAGES = {
+  "빠름":  {st1: true, st2: false, st3: false},
+  "표준":  {st1: true, st2: true,  st3: false},
+  "정밀":  {st1: true, st2: true,  st3: true},
+};
+
+function wizApplyPreset(name, {silent = false} = {}) {
+  const cfg = WIZ_PRESET_STAGES[name];
+  if (!cfg) return;
+  const set = (id, v) => { const el = $(id); if (el) el.checked = v; };
+  set("scr-st1", cfg.st1); set("scr-st2", cfg.st2); set("scr-st3", cfg.st3);
+  // 세부 옵션은 서버 기본값을 따르도록 되돌린다
+  if ($("scr-basis")) $("scr-basis").value = "";
+  if ($("scr-basis-anion")) $("scr-basis-anion").value = name === "빠름" ? "" : "ma-def2-tzvp";
+  set("scr-qrrho", true);
+  const el = $("scr-opt"), th = $("scr-thermo");
+  if (el) el.indeterminate = true;      // «프리셋 기본» 상태
+  if (th) th.indeterminate = true;
+  document.querySelectorAll(".wiz-preset").forEach(b =>
+    b.classList.toggle("selected", b.dataset.preset === name));
+  const note = $("wiz-preset-note");
+  if (note) note.textContent = WIZ_PRESET_NOTE[name] || "";
+  if (!silent) WIZ_CUSTOM = false;
+  wizRenderSummary();
+  scrEstimate();
+}
+
+/** 3상태 체크박스 — indeterminate 는 «프리셋 기본»(null) 을 뜻한다 */
+function wizTri(id) {
+  const el = $(id);
+  if (!el) return null;
+  return el.indeterminate ? null : el.checked;
+}
+
+function wizSelectedPreset() {
+  const el = document.querySelector(".wiz-preset.selected");
+  return el ? el.dataset.preset : "표준";
+}
+
+/** 선택된 활물질의 표시 이름 — 체크박스 value 는 "on" 이라 라벨에서 읽는다 */
+function wizElectrodeLabels() {
+  return [...document.querySelectorAll("#scr-electrodes input:checked")].map(i => {
+    const lab = i.closest("label");
+    if (!lab) return i.dataset.scrElec || "";
+    // "이름 (0.01~0.25 V)" 에서 괄호 앞부분만
+    return lab.textContent.trim().split("(")[0].trim();
+  }).filter(Boolean);
+}
+
+/** 오른쪽 고정 요약 — 지금 무엇이 설정돼 있는지 항상 보인다 */
+async function wizRenderSummary() {
+  const box = $("scr-summary");
+  if (!box) return;
+  const proto = await wizProtocol().catch(() => null);
+  const n = SCR_PARSED ? SCR_PARSED.rows.filter(r => r.ok).length : 0;
+  const nErr = SCR_PARSED ? SCR_PARSED.rows.filter(r => !r.ok).length : 0;
+  const stages = scrStages();
+  const els = wizElectrodeLabels();
+  const preset = wizSelectedPreset();
+  const solvSel = $("scr-solvent");
+  const solvName = solvSel && solvSel.selectedIndex >= 0
+    ? solvSel.options[solvSel.selectedIndex].textContent : "—";
+
+  const row = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(String(v ?? "—"))}</dd>`;
+  let h = `<h4>후보</h4><dl>
+    ${row("검증 통과", n + "개")}${row("오류 · 중복", nErr + "개")}
+    ${row("구조", $("scr-structure")?.value)}</dl>`;
+
+  h += `<h4>적용 환경</h4><dl>
+    ${row("활물질", els.length ? els.join(" · ") : "미선택")}
+    ${row("안정성 마진", ($("scr-margin")?.value || "0") + " V")}
+    ${row("용매", solvName)}${row("온도", ($("scr-temp")?.value || "") + " K")}
+    ${row("기준 전극", $("scr-ref")?.value)}</dl>`;
+
+  h += `<h4>계산 모델 ${WIZ_CUSTOM
+    ? '<span class="badge verdict-mid" style="border:1px solid currentColor">Custom</span>' : ""}</h4><dl>
+    ${row("프리셋", preset)}${row("범함수", $("scr-func")?.value)}
+    ${row("단일점 기저", $("scr-basis")?.value || "정확도별 기본")}
+    ${row("음이온 기저", $("scr-basis-anion")?.value || "중성과 동일")}
+    ${row("구조 최적화", wizTri("scr-opt") === null ? "정확도별 기본"
+      : (wizTri("scr-opt") ? "예" : "아니오"))}
+    ${row("열보정", wizTri("scr-thermo") === null ? "정확도별 기본"
+      : (wizTri("scr-thermo")
+        ? ($("scr-qrrho")?.checked ? "qRRHO" : "RRHO") : "없음"))}</dl>`;
+
+  h += `<h4>Screening</h4><dl>` + (stages.length
+    ? stages.map((st, i) => row(`${i + 1}차 ${st.accuracy}`,
+        [st.threshold != null ? `≥${st.threshold} V` : null,
+         st.keep ? `최대 ${st.keep}` : "전원"].filter(Boolean).join(" · "))).join("")
+    : row("단계", "미선택")) + `</dl>`;
+
+  // QA 경고 — 실행 전에 반드시 보여야 할 것
+  const warn = [];
+  if (!n) warn.push("후보 목록이 검증되지 않았습니다.");
+  if (nErr) warn.push(`오류·중복 ${nErr}건이 남아 있습니다.`);
+  if (!els.length) warn.push("대상 활물질이 선택되지 않았습니다.");
+  if (!stages.length) warn.push("깔때기 단계를 하나 이상 선택하세요.");
+  if (preset === "빠름" && stages.length === 1)
+    warn.push("빠름 단독 실행 — 수직 전위 기반이라 최종 판정에 쓰면 안 됩니다.");
+  if (!$("scr-basis-anion")?.value)
+    warn.push("음이온에 diffuse 기저가 없습니다 — EA·환원 전위의 기저 의존성이 평가되지 않습니다.");
+  const envLv = wizEnvLevel();
+  if (envLv.level === "L1")
+    warn.push("혼합 용매는 검증되지 않은 근사입니다 — Environment 신뢰도 상한 Medium.");
+  if (proto) warn.push("참조 데이터셋 검증(benchmark)이 없어 Calibration 신뢰도는 Low 입니다.");
+
+  if (warn.length) {
+    h += `<h4>QA 경고</h4><ul class="log-list" style="margin:0">` +
+      warn.map(w => `<li class="verdict-mid">${esc(w)}</li>`).join("") + `</ul>`;
+  }
+  box.innerHTML = h;
+}
+
+/** 현재 용매 설정의 환경 모델 수준 (L0/L1) */
+function wizEnvLevel() {
+  const v = $("scr-solvent")?.value || "";
+  const mixed = v.includes("ecdmc") || v.includes("mix");
+  return mixed
+    ? {level: "L1", label: "effective SMD mixture (근사)", cap: "Medium"}
+    : {level: "L0", label: "순수 용매 continuum", cap: "High"};
+}
+
+function wizRenderEnvLevel() {
+  const box = $("wiz-env-level");
+  if (!box) return;
+  const e = wizEnvLevel();
+  const bad = e.level === "L1";
+  box.innerHTML = `<span class="badge ${bad ? "verdict-mid" : "verdict-ok"}"
+      style="border:1px solid currentColor">${esc(e.level)}</span>
+    <b> ${esc(e.label)}</b> · 신뢰도 상한 ${esc(e.cap)}
+    ${bad ? `<div class="muted small" style="margin-top:4px">성분 SMD 파라미터의 부피 가중 평균입니다.
+      SMD 는 본래 용매별 파라미터에 기반하므로 가중 평균이 실제 혼합용매의 미시적 용매화를
+      재현한다는 보장이 없습니다 — 특히 이온에서 오차가 큽니다.</div>` : ""}`;
+}
+
+/** STEP 5 — 실행 전 최종 검토 */
+async function wizRenderReview() {
+  const box = $("wiz-review");
+  if (!box) return;
+  const proto = await wizProtocol().catch(() => null);
+  const stages = scrStages();
+  const n = SCR_PARSED ? SCR_PARSED.rows.filter(r => r.ok).length : 0;
+  const env = wizEnvLevel();
+
+  const card = (title, rows) => `<div class="wiz-card"><h4>${esc(title)}</h4>
+    <table class="kv-table" style="width:100%">${rows.map(([k, v]) =>
+      `<tr><th style="width:44%">${esc(k)}</th><td>${v}</td></tr>`).join("")}</table></div>`;
+
+  let h = card("후보", [
+    ["검증 통과", `${n}개`],
+    ["오류 · 중복", `${SCR_PARSED ? SCR_PARSED.rows.filter(r => !r.ok).length : 0}개`],
+    ["구조 표현", esc($("scr-structure")?.value || "")],
+  ]);
+
+  h += card("적용 환경", [
+    ["대상 활물질", esc(wizElectrodeLabels().join(" · ") || "미선택")],
+    ["안정성 마진", `${esc($("scr-margin")?.value || "")} V`],
+    ["환경 모델 수준", `${esc(env.level)} · ${esc(env.label)} <span class="muted small">(신뢰도 상한 ${esc(env.cap)})</span>`],
+    ["온도", `${esc($("scr-temp")?.value || "")} K`],
+    ["기준 전극", esc($("scr-ref")?.value || "")],
+  ]);
+
+  const conv = $("scr-convention")?.value;
+  const convDef = proto?.reference_conventions?.[conv];
+  h += card("계산 프로토콜", [
+    ["정확도 프리셋", esc(wizSelectedPreset()) + (WIZ_CUSTOM
+      ? ' <span class="badge verdict-mid" style="border:1px solid currentColor">Custom</span>' : "")],
+    ["범함수", esc($("scr-func")?.value || "")],
+    ["단일점 기저", esc($("scr-basis")?.value || "")],
+    ["음이온 기저", esc($("scr-basis-anion")?.value || "중성과 동일 — diffuse 미적용")],
+    ["구조 최적화", wizTri("scr-opt") === null ? "정확도 프리셋 기본값"
+      : (wizTri("scr-opt") ? "수행" : "생략")],
+    ["열역학", wizTri("scr-thermo") === null ? "정확도 프리셋 기본값 (표준↑ 수행)"
+      : (wizTri("scr-thermo")
+        ? ($("scr-qrrho")?.checked ? "진동수 + qRRHO + 1 M 보정" : "진동수 + RRHO + 1 M 보정")
+        : "생략")],
+    ["전위 기준 규약", convDef
+      ? `${esc(conv)} — 절대전위 ${convDef.absolute_v} V<div class="muted small">${esc(convDef.source)}</div>`
+      : esc(conv || "기본값")],
+  ]);
+
+  h += card("Screening 규칙", stages.length
+    ? stages.map((st, i) => [`${i + 1}차 — ${st.accuracy}`,
+        esc([st.threshold != null ? `임계값 ≥ ${st.threshold} V` : "임계값 없음",
+             st.keep ? `최대 ${st.keep}개` : "전원 진출"].join(" · "))])
+    : [["단계", "미선택"]]);
+
+  // 신뢰도 상한 — 실행 전에 「이 캠페인이 도달 가능한 최대」를 밝힌다
+  if (proto) {
+    h += `<div class="wiz-card"><h4>도달 가능한 신뢰도 상한</h4>
+      <p class="small" style="margin:4px 0">참조 데이터셋 검증이 없으므로
+      <b>Calibration 축은 Low</b> 이고, 전체 신뢰도는 5축의 최소값을 쓰므로
+      이 캠페인의 결과는 <b>Overall Low</b> 로 나옵니다. 계산이 부실해서가 아니라
+      예측 오차가 정량화되지 않았다는 뜻입니다.</p>
+      <ul class="log-list" style="margin:0">
+        ${proto.validation.stages.map(v => `<li><b>${esc(v.stage)}</b> —
+          <span class="${v.status === "통과" ? "verdict-ok" : v.status === "부분" ? "verdict-mid" : "muted"}">
+          ${esc(v.status)}</span> · ${esc(v.detail)}</li>`).join("")}
+      </ul></div>`;
+  }
+  box.innerHTML = h;
+  scrEstimate();
+}
+
+function wizGo(step) {
+  WIZ_STEP = Math.max(1, Math.min(5, step));
+  document.querySelectorAll(".wiz-panel").forEach(p =>
+    p.hidden = +p.dataset.step !== WIZ_STEP);
+  document.querySelectorAll("#wiz-steps li").forEach(li => {
+    const s = +li.dataset.step;
+    li.classList.toggle("active", s === WIZ_STEP);
+    li.classList.toggle("done", s < WIZ_STEP);
+  });
+  const pos = $("wiz-pos");
+  if (pos) pos.textContent = `${WIZ_STEP} / 5`;
+  const next = $("wiz-next");
+  if (next) next.style.visibility = WIZ_STEP === 5 ? "hidden" : "";
+  const prev = $("wiz-prev");
+  if (prev) prev.style.visibility = WIZ_STEP === 1 ? "hidden" : "";
+  if (WIZ_STEP === 2) wizRenderEnvLevel();
+  if (WIZ_STEP === 5) wizRenderReview();
+  wizRenderSummary();
+}
+
+function wireWizard() {
+  if (!$("wiz-steps")) return;
+  document.querySelectorAll("#wiz-steps li").forEach(li =>
+    li.addEventListener("click", () => wizGo(+li.dataset.step)));
+  $("wiz-next")?.addEventListener("click", () => wizGo(WIZ_STEP + 1));
+  $("wiz-prev")?.addEventListener("click", () => wizGo(WIZ_STEP - 1));
+  document.querySelectorAll(".wiz-preset").forEach(b =>
+    b.addEventListener("click", () => wizApplyPreset(b.dataset.preset)));
+
+  // 고급값을 손대면 Custom 배지를 붙인다 (14.6.1)
+  ["scr-func", "scr-basis", "scr-basis-anion", "scr-opt", "scr-opt-solv",
+   "scr-thermo", "scr-qrrho", "scr-charge", "scr-mult"].forEach(id =>
+    $(id)?.addEventListener("change", () => { WIZ_CUSTOM = true; wizRenderSummary(); }));
+
+  ["scr-structure", "scr-margin", "scr-temp", "scr-ref", "scr-st1", "scr-st2",
+   "scr-st3", "scr-keep1", "scr-keep2", "scr-th1", "scr-th2",
+   "scr-score-on"].forEach(id => $(id)?.addEventListener("change", wizRenderSummary));
+  $("scr-solvent")?.addEventListener("change", () => {
+    wizRenderEnvLevel(); wizRenderSummary();
+  });
+
+  // 음이온 기저 · 전위 규약 선택지 채우기
+  (async () => {
+    const proto = await wizProtocol().catch(() => null);
+    const aSel = $("scr-basis-anion");
+    if (aSel && !aSel.options.length) {
+      aSel.add(new Option("중성과 동일 (diffuse 없음)", ""));
+      for (const b of (PRESETS?.basisSets || [])) {
+        if (/tzvpd|svpd|^ma-/.test(b)) aSel.add(new Option(b, b));
+      }
+      aSel.value = "ma-def2-tzvp";
+    }
+    const cSel = $("scr-convention");
+    if (proto && cSel && !cSel.options.length) {
+      for (const k of Object.keys(proto.reference_conventions)) cSel.add(new Option(k, k));
+      cSel.value = proto.default_convention;
+      const note = $("wiz-convention-note");
+      const paint = () => {
+        const d = proto.reference_conventions[cSel.value];
+        if (note) note.innerHTML = `절대전위 <b>${d.absolute_v} V</b> · ${esc(d.electron_convention)}
+          <div style="margin-top:4px">${esc(d.source)}</div>
+          <div style="margin-top:4px">Li/Li⁺ 규약 간 차이 ${proto.convention_spread_v} V —
+          규약이 다르면 전위가 통째로 이동합니다. 다른 그룹의 값과 비교할 때 반드시 확인하세요.</div>`;
+      };
+      cSel.addEventListener("change", () => { paint(); wizRenderSummary(); });
+      paint();
+    }
+    wizApplyPreset("표준", {silent: true});
+    wizGo(1);
+  })();
+}

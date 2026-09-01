@@ -489,7 +489,10 @@ class ScreeningCandidate(BaseModel):
 
 class ScreeningStage(BaseModel):
     accuracy: str
+    # 계산량 상한 — 임계값을 통과해도 이 개수까지만 다음 단계로 보낸다
     keep: Optional[int] = Field(None, ge=1, le=10_000)
+    # 통과 임계값 (안정성 여유, V). None 이면 개수 기준만 적용 (v2.0 14.7)
+    threshold: Optional[float] = Field(None, ge=-5.0, le=5.0)
 
 
 class CustomElectrode(BaseModel):
