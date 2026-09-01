@@ -2197,7 +2197,7 @@ function binderRankHtml(data) {
   let h = `<h3 style="font-size:13px;color:var(--accent);margin:0 0 6px">
       1차 판정 — PFAS 게이트와 절대 기준</h3>
     <div class="scroll-x"><table class="kv-table" style="min-width:640px">
-    <tr><th>후보</th><th>PFAS</th><th>환원 안정성</th><th>열 안정성</th><th>종합</th></tr>`;
+    <tr><th>후보</th><th>PFAS</th><th>환원 안정성</th><th>결합 강건성</th><th>종합</th></tr>`;
   for (const r of reps) {
     const rep = r.report;
     const cell = axis => {
@@ -2211,7 +2211,7 @@ function binderRankHtml(data) {
       return `<td class="muted small" title="${esc(u?.reason || "")}">판정 보류</td>`;
     };
     h += `<tr><th style="white-space:nowrap">${esc(r.material)}</th>
-      <td>${pfasBadge(rep.pfas)}</td>${cell("환원 안정성")}${cell("열 안정성")}
+      <td>${pfasBadge(rep.pfas)}</td>${cell("환원 안정성")}${cell("결합 강건성")}
       <td class="${VERDICT_CLASS[rep.overall] || "muted"}"><b>${esc(rep.overall || "—")}</b>
         <div class="muted small">${esc(rep.summary)}</div></td></tr>`;
   }

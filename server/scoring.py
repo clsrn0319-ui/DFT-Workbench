@@ -17,18 +17,18 @@
 import json
 import os
 
-from . import esw
+from . import esw, protocol
 
 # 프로토콜 버전 — 계산 조건 표준의 이름표. 조건 표준(프리셋·범함수·기저·용매
 # 파라미터)이 바뀌어 후보 간 비교 가능성이 깨질 때만 올린다.
-PROTOCOL_VERSION = "DFT-BINDER-v1.0"
+PROTOCOL_VERSION = protocol.PROTOCOL_VERSION
 
 AXES = [
     ("adhesion", "접착"),
     ("electrochem", "전기화학 안정성"),
-    ("affinity", "전해액 친화도"),
+    ("affinity", "전해액 분자 친화도"),
     ("ion", "이온 상호작용"),
-    ("chemstab", "화학적 안정성"),
+    ("chemstab", "결합 강건성"),
 ]
 AXIS_LABEL = dict(AXES)
 
@@ -160,19 +160,32 @@ def normalize_weights(weights: dict | None, preset: str = "균등") -> dict:
     return {k: v / total for k, v in base.items()}
 
 
-def confidence_of(verdict: dict | None, desc: dict) -> tuple[str, str]:
-    """결과 신뢰 수준 (기획서 8장) — 전위 계산 수준과 진동수 검증으로 판정."""
-    basis = (verdict or {}).get("basis")
-    if basis == "ΔG 기반":
-        level, why = "High", "ΔG 기반 전위 + 열보정 포함"
-    elif basis == "단열":
-        level, why = "Medium", "단열 전위 (열보정 없음)"
-    else:
-        level, why = "Low", "수직 전위 기반 — 구조 완화 미반영"
-    n_imag = desc.get("n_imaginary_freqs")
-    if isinstance(n_imag, int) and n_imag > 0:
-        level, why = "Low", f"허수 진동수 {n_imag}개 — 안장점 가능성"
-    return level, why
+def confidence_of(verdict: dict | None, desc: dict,
+                  settings: dict | None = None) -> tuple[str, str]:
+    """결과 신뢰 수준 — v2.0 에서 5축으로 재설계 (P0-8).
+
+    v1.0 은 «ΔG 기반이면 High» 였다. 이는 계산 «단계»만 본 것이고, 범함수·기저
+    민감도, 혼합용매 근사, 참조 데이터 검증 여부를 반영하지 않는다. 정밀한
+    계산과 정확한 예측은 다르다.
+
+    호환을 위해 (등급, 사유) 형태는 유지하되, 전체 등급은 5축의 최소값이다.
+    자세한 축별 내역은 protocol.confidence() 로 얻는다.
+    """
+    full = protocol.confidence(
+        desc, settings or {},
+        redox_basis=desc.get("basis_anion"),
+        chain_converged=desc.get("chain_converged"))
+    weakest = min(full["axes"], key=lambda a: protocol.LEVELS.index(a["level"]))
+    return full["overall"], f"{weakest['label']}: {weakest['reason']}"
+
+
+def confidence_detail(verdict: dict | None, desc: dict,
+                      settings: dict | None = None) -> dict:
+    """5축 신뢰도 전체 — 화면·보고서용."""
+    return protocol.confidence(
+        desc, settings or {},
+        redox_basis=desc.get("basis_anion"),
+        chain_converged=desc.get("chain_converged"))
 
 
 def evaluate(desc: dict, verdict: dict | None, electrodes: list[str],

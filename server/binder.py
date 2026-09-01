@@ -5,7 +5,7 @@
   전해액 소재       — 양극/음극 양쪽 전위를 견디는지 (산화 + 환원)
   건식 음극 바인더  — 음극(0.05~0.4 V)에서 **환원**을 견디는지가 핵심이고,
                      여기에 PFAS 규제 · 건식 공정 열안정성 · 활물질 접착 ·
-                     피브릴화(응집) · 전해액 팽윤 저항이 더해진다
+                     피브릴화(응집) · 전해액 분자 친화도가 더해진다
 
 이 모듈은 그 판정 축과 후보 라이브러리, 그리고 축별 채점을 담당한다.
 DFT 계산 자체는 engine.py가 그대로 수행하고, 여기서는 산출된 기술자를
@@ -190,10 +190,15 @@ def _thermal_verdict(desc: dict) -> dict | None:
         verdict, why = VERDICT_NO, "공정 중 사슬 절단 우려"
     bond = desc.get("bde_weakest_bond")
     return {
-        "axis": "열 안정성", "kind": "absolute", "verdict": verdict,
+        "axis": "결합 강건성", "kind": "absolute", "verdict": verdict,
         "value": bde, "unit": "kJ/mol",
         "detail": f"최약 결합 {bond or '?'} BDE {bde:.0f} kJ/mol ({basis}) — {why} "
                   f"[공정 기준 {DRY_PROCESS['temperature_c']} °C]",
+        # BDE 는 결합 강도 heuristic 이지 «그 온도에서 얼마나 버티는가»가 아니다.
+        # 열분해는 활성화 장벽·연쇄 반응·산소·형태학·승온 속도에 좌우된다 (v2.0 5.4).
+        "caveat": ("BDE 는 결합 강도 지표입니다 — 특정 온도에서의 사용 가능 시간을 "
+                   "예측하지 않습니다. 열 안정성 판단은 TGA/DSC 실측을 근거로 하세요."),
+        "hard_filter": False,
     }
 
 
@@ -203,8 +208,10 @@ RELATIVE_AXES = [
      "음극 활물질(흑연·Si) 표면 흡착 에너지 평균 — 더 음수일수록 강한 접착"),
     ("dimer_binding_kj", "사슬 간 응집", True,
      "이량체 결합 에너지 — 피브릴화·필름 형성에 필요하나 과하면 분산 불량"),
-    ("solvation_energy_kcal", "전해액 팽윤 저항", False,
-     "전해액 용매화 에너지 — 덜 음수일수록 전해액에 덜 녹아 팽윤이 적음"),
+    ("solvation_energy_kcal", "전해액 분자 친화도", False,
+     "올리고머 한 개의 용매화 에너지 — 덜 음수일수록 전해액과 덜 상호작용한다. "
+     "«팽윤»이 아니다: 실제 팽윤은 자유부피·결정화도·가교·분자량·용매 흡수량이 "
+     "함께 결정하며, 분자 하나의 용매화로는 예측되지 않는다 (v2.0 5.3)."),
     ("dipole_debye", "표면 극성", False,
      "쌍극자 모멘트 — 클수록 극성 표면·집전체와의 상호작용에 유리"),
 ]
@@ -241,7 +248,7 @@ def report(material: dict, descriptors: dict) -> dict:
             ("환원 안정성",
              "환원 전위가 없습니다 — 목적을 «전자구조 + 산화/환원 전위» 이상으로 두고 "
              "기준 전극을 Li/Li+로 지정해 다시 계산하세요."),
-            ("열 안정성",
+            ("결합 강건성",
              "끊을 수 있는 주사슬 단일결합이 없어 BDE가 산출되지 않았습니다 — "
              "비닐 모노머는 구조를 «2량체» 이상으로 두면 주사슬 C–C가 생겨 계산됩니다."),
         ) if axis not in judged

@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
-from . import convergence, esw, mechanical, polymer
+from . import convergence, esw, mechanical, polymer, protocol
 from . import lookup as lookup_mod
 from . import presets, scoring, screening, store, structfile, worker
 
@@ -349,6 +349,41 @@ def esw_electrodes(_: bool = Depends(require_login)):
     """전극 구동 «범위» — 단일 전위값이 아니라 범위로 판정한다."""
     return {"electrodes": esw.ELECTRODE_WINDOWS,
             "lumo_reference": esw.LUMO_REFERENCE}
+
+@app.get("/api/protocol/card")
+def protocol_meta(_: bool = Depends(require_login)):
+    """프로토콜 규약 · 검증 상태 — 결과를 인용할 때 함께 밝혀야 할 정보."""
+    return {
+        "protocol_version": protocol.PROTOCOL_VERSION,
+        "reference_conventions": protocol.REFERENCE_CONVENTIONS,
+        "default_convention": protocol.DEFAULT_CONVENTION,
+        "convention_spread_v": protocol.CONVENTION_SPREAD_V,
+        "environment_levels": protocol.ENVIRONMENT_LEVELS,
+        "confidence_axes": [{"key": k, "label": l, "detail": d}
+                            for k, l, d in protocol.CONFIDENCE_AXES],
+        "validation": protocol.validation_status(),
+        "uncertainty_v": esw.DEFAULT_UNCERTAINTY_V,
+        "uncertainty_source": esw.UNCERTAINTY_SOURCE,
+    }
+
+
+@app.post("/api/esw/gate")
+def esw_gate(req: EswDiagnoseRequest, _: bool = Depends(require_login)):
+    """불확실성을 반영한 Hard Gate — Robust Pass / Borderline / Robust Fail."""
+    desc = req.descriptors or {}
+    if req.job_id:
+        job = store.get_job(req.job_id)
+        if job is None or not job.get("result"):
+            raise HTTPException(404, "완료된 작업을 찾을 수 없습니다.")
+        desc = job["result"].get("descriptors") or {}
+    red = esw.first_present(desc, "reduction_potential_gibbs_v", "reduction_potential_v")
+    ox = esw.first_present(desc, "oxidation_potential_gibbs_v", "oxidation_potential_v")
+    if red is None or ox is None:
+        raise HTTPException(400, "전위 데이터가 없어 게이트를 적용할 수 없습니다.")
+    win = esw.ELECTRODE_BY_KEY.get(req.electrode)
+    if win is None:
+        raise HTTPException(400, f"알 수 없는 전극: {req.electrode}")
+    return esw.gate_with_uncertainty(red, ox, win)
 
 
 class MechanicalRequest(BaseModel):

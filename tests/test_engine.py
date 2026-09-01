@@ -315,14 +315,15 @@ def test_binder_does_not_claim_unevaluated_axes_passed():
     """값이 없는 축을 «통과»로 보고하면 안 된다.
 
     에틸렌(C=C)처럼 주사슬 단일결합이 없는 비닐 모노머는 BDE가 산출되지 않는데,
-    이를 열 안정성 통과로 요약하면 근거 없는 합격 판정이 된다.
+    이를 결합 강건성 통과로 요약하면 근거 없는 합격 판정이 된다.
     """
     from server import binder
     rep = binder.report({"smiles": "C=C"}, {"reduction_potential_v": -4.275})
     assert rep["overall"] == binder.VERDICT_MID          # 양호가 아니라 주의
-    assert "열 안정성" not in rep["summary"].split("통과")[0]
+    assert "결합 강건성" not in rep["summary"].split("통과")[0]
     axes = [u["axis"] for u in rep["unevaluated"]]
-    assert axes == ["열 안정성"]
+    # v2.0 5.4 — BDE 는 「그 온도에서 버티는가」가 아니라 결합 강도 지표다
+    assert axes == ["결합 강건성"]
     assert "2량체" in rep["unevaluated"][0]["reason"]     # 해결 방법 안내
 
     # 두 축이 모두 평가되면 미평가 목록은 비고 양호로 판정된다
@@ -753,3 +754,116 @@ def test_null_thermal_bde_falls_back_to_electronic():
     axes2 = scoring.axis_scores({"bde_min_298_kj": 300.0, "bde_min_kj": 310.0},
                                 0.5, ["graphite"])
     assert axes2["chemstab"]["value"] == 300.0
+
+
+def test_redox_reference_is_a_convention_not_an_identity():
+    """1.44 V 는 자연상수가 아니라 «채택한 기준 변환 규약»이다 (v2.0 P0-2).
+
+    규약을 바꾸면 전위가 통째로 이동한다. 그 사실이 값에 남아 있어야 다른
+    그룹의 계산과 비교할 수 있다.
+    """
+    from server import protocol
+    a = protocol.redox_from_ea(1.884, "Li/Li+ (1.44 V)")
+    b = protocol.redox_from_ea(1.884, "Li/Li+ (1.40 V)")
+    assert a["value_v"] == pytest.approx(0.444, abs=1e-6)
+    assert b["value_v"] == pytest.approx(0.484, abs=1e-6)
+    assert b["value_v"] - a["value_v"] == pytest.approx(0.04, abs=1e-6)
+    for key in ("convention", "absolute_v", "electrode", "formula"):
+        assert a[key]
+    assert protocol.convention(a["convention"])["source"]
+
+
+def test_qrrho_only_matters_for_floppy_molecules():
+    """준조화 보정은 저진동수 모드가 있을 때만 유의미해야 한다 (v2.0 P0-3).
+
+    강체 분자에서 큰 보정이 나오면 구현이 잘못된 것이다.
+    """
+    from server import thermo
+    floppy = thermo.quasi_rrho_entropy([25, 42, 68, 95, 140, 900, 2950], 298.15)
+    rigid = thermo.quasi_rrho_entropy([620, 880, 1200, 1600, 3000, 3100], 298.15)
+    # 조화 근사는 저진동수 엔트로피를 과대평가한다 → 보정하면 엔트로피가 줄고 G 는 오른다
+    assert floppy["delta_s_j_mol_k"] < 0 and floppy["delta_g_kcal"] > 0.5
+    assert abs(rigid["delta_g_kcal"]) < 0.05
+    assert floppy["n_low_freq"] == 4 and rigid["n_low_freq"] == 0
+
+
+def test_standard_state_correction_matches_literature():
+    """1 atm → 1 M 보정은 298.15 K 에서 +1.89 kcal/mol."""
+    from server import thermo
+    ss = thermo.standard_state_correction(298.15)
+    assert ss["delta_g_kcal"] == pytest.approx(1.89, abs=0.01)
+    assert thermo.standard_state_correction(350.0)["delta_g_kcal"] > ss["delta_g_kcal"]
+
+
+def test_anion_basis_is_separate_and_recorded():
+    """음이온에는 diffuse 기저를 따로 쓸 수 있어야 한다 (v2.0 P0-1)."""
+    from server import presets
+    from server.engine import _resolve_params
+    p = _resolve_params(_settings(accuracy="표준"))
+    assert p["basis_anion"] == "ma-def2-tzvp" and p["basis_anion"] != p["basis_sp"]
+    assert _resolve_params(_settings(accuracy="빠름"))["basis_anion"] is None
+    # 전문가 설정이 프리셋보다 우선
+    p2 = _resolve_params(_settings(accuracy="표준", expert={"basisAnion": "def2-tzvpd"}))
+    assert p2["basis_anion"] == "def2-tzvpd"
+    for b in presets.DIFFUSE_BASIS_SETS:
+        assert b in presets.BASIS_SETS
+
+
+def test_confidence_is_five_axes_and_capped_by_calibration():
+    """정밀한 계산과 정확한 예측을 분리한다 (v2.0 P0-8).
+
+    참조 데이터셋 검증이 없으면 다른 축이 아무리 좋아도 전체는 Low 다.
+    """
+    from server import protocol
+    perfect = {"zpe_kcal": 80.0, "n_imaginary_freqs": 0,
+               "reduction_potential_gibbs_v": -2.0}
+    c = protocol.confidence(perfect, {"envType": "진공·기체"},
+                            redox_basis="def2-tzvpd", chain_converged=True)
+    by = {a["key"]: a["level"] for a in c["axes"]}
+    assert by["numerical"] == "High" and by["model"] == "High"
+    assert by["calibration"] == "Low"
+    assert c["overall"] == "Low", "한 축의 약점이 평균에 가려지면 안 된다"
+    assert len(c["axes"]) == 5
+
+
+def test_mixture_solvation_is_labelled_as_approximation():
+    """부피 가중 SMD 혼합은 «검증된 혼합용매»가 아니다 (v2.0 P0-4)."""
+    from server import protocol
+    mix = protocol.environment_level(
+        {"envType": "배터리 전해액",
+         "customMixedSolvent": {"components": [{"abbr": "EC", "ratio": 3}]}})
+    assert mix["level"] == "L1" and mix["confidence_cap"] == "Medium"
+    assert "근사" in mix["label"]
+    pure = protocol.environment_level({"envType": "배터리 전해액", "solventId": "sol-ec"})
+    assert pure["level"] == "L0" and pure["confidence_cap"] == "High"
+
+
+def test_validation_separates_software_from_science():
+    """«테스트 119건 통과»는 소프트웨어 증거이지 예측 정확도 증거가 아니다 (v2.0 1.2)."""
+    from server import protocol
+    st = {s["stage"][0]: s["status"] for s in protocol.validation_status()["stages"]}
+    assert st["A"] == "통과"
+    assert st["C"] == "미실시" and st["D"] == "미실시"
+
+
+def test_hard_gate_uses_uncertainty_band():
+    """임계값 근처 후보를 점추정만으로 탈락시키지 않는다 (v2.0 6.3)."""
+    from server.esw import ELECTRODE_BY_KEY, gate_with_uncertainty
+    gr = ELECTRODE_BY_KEY["graphite"]
+    assert gate_with_uncertainty(-1.97, 6.03, gr)["grade"] == "Robust Pass"
+    assert gate_with_uncertainty(0.444, 4.55, gr)["grade"] == "Robust Fail"
+    # 점추정으로는 «안정»이지만 구간이 임계값과 겹치는 후보는 보류해야 한다
+    border = gate_with_uncertainty(-0.10, 5.0, gr)
+    assert border["grade"] == "Borderline" and border["point_verdict"] == "안정"
+    assert "잠정" in border["uncertainty_source"] or "검증" in border["uncertainty_source"]
+
+
+def test_convergence_thresholds_follow_property_type():
+    """물성마다 수렴 기준이 달라야 한다 (v2.0 4.4)."""
+    from server import convergence as c
+    assert c.THRESHOLDS["reduction_potential_v"] == 0.10   # 판정에 직접 쓰이는 값
+    assert c.THRESHOLDS["gap_ev"] == 0.15                  # 정성 지표는 느슨하게
+    assert c.THRESHOLDS["li_binding_kj"] == 10.0
+    # 쌍극자는 사슬 길이에 딸려 커지므로 절대 임계값으로 판정하지 않는다
+    r = c.analyze_property("dipole_debye", [(2, 0.5), (3, 0.9), (5, 1.4)])
+    assert r["status"] == "size_dependent" and "환산" in r["note"]

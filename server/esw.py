@@ -321,3 +321,45 @@ def _remedies(cont: dict, groups: list[dict]) -> list[str]:
     if not cont["fails"]:
         out.append("이 전극 구동 범위에서는 열역학적으로 안정합니다.")
     return out
+
+# ── 불확실성을 반영한 Hard Gate (v2.0 6.3) ──────────────────────────
+# 예측 전위가 임계값 근처면 점추정만으로 탈락시키지 않는다. 예측구간이
+# 임계값과 겹치면 «더 정확한 계산 또는 실험 우선»으로 보낸다.
+#
+# 아래 기본 폭은 **검증된 예측구간이 아니다.** 참조 데이터셋 벤치마크가 없어
+# 실제 오차를 모르므로, 문서가 제시한 초기 운영 목표(blind MAE ≤ 0.25 V)를
+# 잠정 폭으로 쓴다. 벤치마크가 생기면 이 값을 실제 예측구간으로 대체해야 한다.
+DEFAULT_UNCERTAINTY_V = 0.25
+UNCERTAINTY_SOURCE = ("참조 데이터셋 검증 전 잠정값 — v2.0 기획서 7.3 의 초기 목표 "
+                      "(blind redox MAE ≤ 0.25 V)를 폭으로 사용. 실제 예측구간이 아님")
+
+
+def gate_with_uncertainty(red_v: float, ox_v: float, window: dict,
+                          uncertainty_v: float = DEFAULT_UNCERTAINTY_V) -> dict:
+    """전위 불확실성을 반영한 4단계 판정 (Robust Pass / Borderline / Robust Fail).
+
+    점추정 하나로 «안정/분해»를 가르면, 임계값에서 0.05 V 떨어진 후보와
+    0.5 V 떨어진 후보가 같은 취급을 받는다. 예측구간을 함께 보면 어느 쪽이
+    추가 계산·실험이 필요한지 구분된다.
+    """
+    lo = window["low"]
+    best = containment(red_v - uncertainty_v, ox_v + uncertainty_v, window)
+    worst = containment(red_v + uncertainty_v, ox_v - uncertainty_v, window)
+    if not worst["fails"]:
+        grade, action = "Robust Pass", "다음 단계로 진행"
+    elif not best["fails"]:
+        grade, action = "Borderline", "더 높은 정확도로 재계산하거나 실험을 우선하세요"
+    else:
+        grade, action = "Robust Fail", "탈락 — 또는 메커니즘 연구 대상"
+    return {
+        "grade": grade,
+        "action": action,
+        "uncertainty_v": uncertainty_v,
+        "uncertainty_source": UNCERTAINTY_SOURCE,
+        "interval_v": [round(red_v - uncertainty_v, 3), round(red_v + uncertainty_v, 3)],
+        "point_verdict": containment(red_v, ox_v, window)["verdict"],
+        "margin_v": round(lo - red_v, 3),
+        "note": (f"환원 전위 {red_v:+.2f} V ± {uncertainty_v:.2f} V 를 구동 범위 "
+                 f"{window['low']:.2f}~{window['high']:.2f} V 와 대조한 결과입니다. "
+                 "이 폭은 검증된 예측구간이 아니라 잠정값입니다."),
+    }

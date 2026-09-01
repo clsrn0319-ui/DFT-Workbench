@@ -29,6 +29,8 @@ from pyscf.solvent import smd
 from . import binder as binder_mod
 from . import descriptors as desc_mod
 from . import presets
+from . import protocol as protocol_mod
+from . import thermo as thermo_mod
 from .geometry import (smiles_to_conformers, build_cluster,
                        build_cluster_from_atoms, atoms_to_xyz_block)
 
@@ -121,6 +123,12 @@ def _resolve_params(settings):
                        else bool(exp["bdeThermalCorrection"]),
         "basis_opt": acc["basis_opt"],
         "basis_sp": exp.get("basis") or acc["basis_sp"],
+        # 음이온 전용 diffuse 기저 (v2.0 P0-1). 전문가 설정이 우선하고,
+        # 없으면 정확도 프리셋의 기본값을 쓴다.
+        "basis_anion": exp.get("basisAnion") or acc.get("basis_anion"),
+        # 준조화 자유에너지 보정 — 열보정을 하는 프리셋에서 기본 활성
+        "qrrho": True if exp.get("qrrho") is None else bool(exp["qrrho"]),
+        "thermo_model": "qRRHO" if (exp.get("qrrho") is not False) else "RRHO",
         "functional": functional,
         "xc": xc,
         "disp": disp,
@@ -152,6 +160,32 @@ def _make_mf(mol, xc, disp, solvent_key, scf_tol):
         mf = mf.SMD()
         mf.with_solvent.solvent = solvent_key
     return mf
+
+
+def _atomic_charges(mf, mol):
+    """원자 전하 — meta-Löwdin 을 주값으로, Mulliken 은 진단용으로 함께 낸다.
+
+    Mulliken population 은 기저 집합에 민감해서 diffuse 기저를 쓰면 값이 크게
+    흔들린다 (v2.0 P0-7). meta-Löwdin 은 직교화된 원자 궤도에 사영하므로
+    기저 의존성이 훨씬 낮다. Hirshfeld/CM5 는 PySCF 에 내장되어 있지 않아
+    이번 개정에서는 meta-Löwdin 을 대안으로 쓴다.
+    """
+    out = {}
+    try:
+        _, mulliken = mf.mulliken_pop(verbose=0)
+        out["mulliken"] = [round(float(c), 3) for c in mulliken]
+    except Exception:  # noqa: BLE001 — 전하 분석 실패가 계산 전체를 막지 않는다
+        out["mulliken"] = None
+    try:
+        _, meta = mf.mulliken_meta(verbose=0)
+        out["meta_lowdin"] = [round(float(c), 3) for c in meta]
+    except Exception:  # noqa: BLE001
+        out["meta_lowdin"] = None
+    out["primary"] = "meta_lowdin" if out["meta_lowdin"] else "mulliken"
+    if out["mulliken"] and out["meta_lowdin"]:
+        out["max_abs_diff"] = round(
+            max(abs(a - b) for a, b in zip(out["mulliken"], out["meta_lowdin"])), 3)
+    return out
 
 
 def _run_scf(mf, label, log, dm0=None):
@@ -316,8 +350,16 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
         "n_imaginary": n_imag,
         "lowest_freq_cm": float(np.min(freqs_real)),
     }
+    # 준조화 보정 — 유연한 사슬의 저진동수 비틀림 모드에서 조화 근사가 엔트로피를
+    # 크게 과대평가한다 (v2.0 P0-3). 조화 값도 나란히 남긴다.
+    result = thermo_mod.apply(result, temperature,
+                              enabled=params.get("qrrho", True))
+    q = result.get("qrrho")
     log(f"진동수 계산{label} 완료 — 허수 진동수 {n_imag}개, "
         f"ZPE {result['zpe_hartree'] * HARTREE2KCAL:.2f} kcal/mol ({time.time() - t0:.1f}s)")
+    if q:
+        log(f"  qRRHO 보정{label} — 저진동수 {q['n_low_freq']}개(<{q['cutoff_cm']:.0f} cm⁻¹), "
+            f"ΔG {q['delta_g_kcal']:+.2f} kcal/mol")
     return result
 
 
@@ -512,7 +554,8 @@ def run_job(job, update, is_cancelled=lambda: False):
         # 4) 기술자 추출
         stage("기술자 추출", 40)
         gap = (lumo - homo) if lumo is not None else None
-        _, charges = mf.mulliken_pop(verbose=0)
+        charge_models = _atomic_charges(mf, mol)
+        charges = charge_models[charge_models["primary"]]
         try:
             density_cloud = desc_mod.density_cloud(mf, mol)
         except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
@@ -584,7 +627,8 @@ def run_job(job, update, is_cancelled=lambda: False):
                 homo, lumo = _frontier_orbitals(mf)
                 gap = (lumo - homo) if lumo is not None else None
                 dipole = float(np.linalg.norm(mf.dip_moment(unit="Debye", verbose=0)))
-                _, charges = mf.mulliken_pop(verbose=0)
+                charge_models = _atomic_charges(mf, mol)
+                charges = charge_models[charge_models["primary"]]
                 descriptors.update({
                     "total_energy_hartree": e_total,
                     "homo_ev": round(homo, 3),
@@ -681,29 +725,77 @@ def run_job(job, update, is_cancelled=lambda: False):
             use_noneq = params["noneq"] and solvent_key is not None
             dm_neutral = mf.make_rdm1() if use_noneq else None
 
+            # 음이온·EA·환원 전위는 diffuse 기저에 민감하다 (v2.0 P0-1).
+            # 여분의 확산 함수가 없으면 여분 전자를 담을 자리가 부족해 EA 가
+            # 낮게 나온다. 음이온에만 diffuse 기저를 쓰고, 어떤 기저를 썼는지
+            # 결과에 남긴다.
+            def _basis_for(dq):
+                if dq < 0 and params.get("basis_anion"):
+                    return params["basis_anion"]
+                return params["basis_sp"]
+
+            noneq_skipped = []
+
             def ion_energy_vertical(dq, label, prog):
                 stage(f"{label} (수직 ΔSCF)", prog)
-                mol_i = _build_mol(atoms, params["basis_sp"], params["charge"] + dq, 2)
+                basis_i = _basis_for(dq)
+                mol_i = _build_mol(atoms, basis_i, params["charge"] + dq, 2)
                 mf_i = _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
                                 params["scf_tol"])
-                if use_noneq:
+                # 동결 용매장과 초기 밀도는 «같은 기저»에서만 쓸 수 있다.
+                # 음이온에 diffuse 기저를 쓰면 행렬 크기가 달라 재사용이 불가능하다.
+                same_basis = basis_i == params["basis_sp"]
+                if use_noneq and same_basis:
                     _freeze_solvent_from(mf_i, dm_neutral)
                     return _run_scf(mf_i, f"{label}(비평형)", log,
                                     dm0=(dm_neutral / 2, dm_neutral / 2))
+                if use_noneq and not same_basis:
+                    noneq_skipped.append(label)
                 return _run_scf(mf_i, label, log)
 
+            # 서로 다른 기저의 절대 에너지를 빼면 안 된다. 음이온에 diffuse 기저를
+            # 쓰면 «중성 기준 에너지»도 그 기저에서 다시 계산해야 EA 가 의미를 갖는다.
+            # (이 보정 없이 sto-3g 중성 − def2-SVPD 음이온을 빼면 EA 가 28 eV 로
+            #  나온다 — 기저 불완전성 차이가 그대로 EA 에 실린다.)
+            def _neutral_ref(dq):
+                basis_i = _basis_for(dq)
+                if basis_i == params["basis_sp"]:
+                    return e_total
+                key = ("neutral_ref", basis_i)
+                if key not in _ref_cache:
+                    log(f"중성 기준 에너지를 {basis_i} 에서 재계산 (EA 기저 정합)")
+                    mol_n = _build_mol(atoms, basis_i, params["charge"],
+                                       params["multiplicity"])
+                    _ref_cache[key] = _run_scf(
+                        _make_mf(mol_n, params["xc"], params["disp"], solvent_key,
+                                 params["scf_tol"]), f"중성({basis_i})", log)
+                return _ref_cache[key]
+
+            _ref_cache = {}
             e_cat_v = ion_energy_vertical(+1, "양이온", 66)
             e_an_v = ion_energy_vertical(-1, "음이온", 70)
-            if use_noneq:
+            if noneq_skipped:
+                notes.append(
+                    f"{' · '.join(noneq_skipped)}은 중성과 다른 기저(diffuse)를 써서 "
+                    "비평형 용매화(동결 용매장)를 적용하지 않았습니다 — 평형 용매화로 "
+                    "계산되어 수직 EA 가 다소 크게 나올 수 있습니다")
+            if use_noneq and not noneq_skipped:
                 notes.append(
                     "수직 IP/EA는 비평형 용매화(중성 밀도로 동결한 용매장) 근사 — "
                     "용매 핵 재배향이 없는 순간 이온화를 기술. 광학 유전 응답 완화는 미포함(상한 추정)")
-            ip_v = (e_cat_v - e_total) * HARTREE2EV
-            ea_v = (e_total - e_an_v) * HARTREE2EV
+            ip_v = (e_cat_v - _neutral_ref(+1)) * HARTREE2EV
+            ea_v = (_neutral_ref(-1) - e_an_v) * HARTREE2EV
             descriptors.update({
                 "ip_vertical_ev": round(ip_v, 3),
                 "ea_vertical_ev": round(ea_v, 3),
+                # 어떤 기저로 음이온을 풀었는지 남긴다 — EA 의 기저 의존성 추적용
+                "basis_anion": _basis_for(-1),
+                "basis_diffuse_anion": bool(params.get("basis_anion")),
             })
+            if not params.get("basis_anion"):
+                notes.append(
+                    "음이온에 diffuse 기저를 쓰지 않았습니다 — EA·환원 전위가 "
+                    "기저에 민감할 수 있어 신뢰도 Method 축이 낮아집니다")
 
             if params["redox_adiabatic"]:
                 def ion_adiabatic(dq, label, prog):
@@ -711,7 +803,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                     stage(f"{label} 구조 재최적화 (단열)", prog)
                     ion_atoms = _optimize_state(atoms, params, params["charge"] + dq, 2,
                                                 log, label=f" ({label})")
-                    mol_i = _build_mol(ion_atoms, params["basis_sp"], params["charge"] + dq, 2)
+                    mol_i = _build_mol(ion_atoms, _basis_for(dq), params["charge"] + dq, 2)
                     e_i = _run_scf(
                         _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
                                  params["scf_tol"]),
@@ -726,8 +818,8 @@ def run_job(job, update, is_cancelled=lambda: False):
 
                 e_cat_a, g_cat = ion_adiabatic(+1, "양이온", 74)
                 e_an_a, g_an = ion_adiabatic(-1, "음이온", 86)
-                ip_a = (e_cat_a - e_total) * HARTREE2EV
-                ea_a = (e_total - e_an_a) * HARTREE2EV
+                ip_a = (e_cat_a - _neutral_ref(+1)) * HARTREE2EV
+                ea_a = (_neutral_ref(-1) - e_an_a) * HARTREE2EV
                 descriptors.update({
                     "ip_adiabatic_ev": round(ip_a, 3),
                     "ea_adiabatic_ev": round(ea_a, 3),
@@ -984,9 +1076,14 @@ def run_job(job, update, is_cancelled=lambda: False):
                 atoms, f"{job['material'].get('name', '')} {params['functional']}/{params['basis_sp']}"),
             "geometry_info": geom_info,
             "mulliken_charges": [round(float(c), 3) for c in charges],
+            # 전하 모델을 나란히 남긴다 — Mulliken 은 진단용, meta-Löwdin 이 주값
+            "atomic_charges": charge_models,
             "notes": notes,
             "result_origin": "SERVER_CALCULATION(PySCF 실계산)",
             "provenance": _provenance(params, settings, solvent_key),
+            # 이 계산이 어떤 조건으로 수행됐는지 한 벌로 — 해시가 같으면 비교 가능
+            "protocol_card": protocol_mod.card(
+                settings, params, settings.get("referenceElectrode")),
             "wall_time_s": round(elapsed, 1),
         }
         update({"status": "PUBLISHED", "progress": 100, "stage": "완료",

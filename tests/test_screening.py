@@ -536,15 +536,35 @@ def test_score_target_window_both_sides():
 
 
 def test_score_confidence_levels():
+    """신뢰도는 v2.0 에서 5축으로 재설계됐다 (P0-8).
+
+    v1.0 은 «ΔG 기반이면 High» 였다. 그러나 그것은 계산 «단계»만 본 것이고,
+    참조 데이터셋으로 예측 오차를 재지 않았다는 사실은 반영되지 않았다.
+    Calibration 축이 검증되기 전에는 전체 등급이 Low 를 넘지 못한다 —
+    정밀한 계산과 정확한 예측은 다르다.
+    """
     desc = _fp_desc()
     v_vert = screening.judge(desc, ["si"], 0.3)
     assert scoring.evaluate(desc, v_vert, ["si"])["confidence"] == "Low"
+
     desc_g = {**desc, "reduction_potential_gibbs_v": -1.0,
               "oxidation_potential_gibbs_v": 5.0}
     v_g = screening.judge(desc_g, ["si"], 0.3)
-    assert scoring.evaluate(desc_g, v_g, ["si"])["confidence"] == "High"
-    desc_bad = {**desc_g, "n_imaginary_freqs": 1}
-    assert scoring.evaluate(desc_bad, v_g, ["si"])["confidence"] == "Low"
+    out = scoring.evaluate(desc_g, v_g, ["si"])
+    assert out["confidence"] == "Low"
+    # 사유는 «실제로 낮은» 축을 지목해야 한다 — 무엇이 발목을 잡는지 알려야 조치가 된다
+    detail0 = scoring.confidence_detail(v_g, desc_g, {})
+    low = [a["label"] for a in detail0["axes"] if a["level"] == "Low"]
+    assert low, "전체가 Low 인데 Low 인 축이 하나도 없으면 앞뒤가 맞지 않는다"
+    assert any(lbl in out["confidence_note"] for lbl in low)
+
+    # 축별로는 계산 품질이 제대로 반영되어야 한다 — 전부 Low 로 뭉개면 무의미하다
+    detail = scoring.confidence_detail(v_g, desc_g, {})
+    by = {a["key"]: a["level"] for a in detail["axes"]}
+    assert by["calibration"] == "Low"
+    assert by["numerical"] in ("Medium", "High")
+    assert detail["overall"] == "Low"
+
 
 
 def test_normalize_weights():

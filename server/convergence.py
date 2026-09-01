@@ -22,19 +22,32 @@ from .geometry import GeometryError, oligomerize
 DEFAULT_LENGTHS = (1, 2, 3, 5)
 
 # 물성별 수렴 임계값 (절대 단위). 없는 물성은 값 범위의 2 %를 쓴다.
+# 물성별 수렴 임계값 (절대 단위). v2.0 개정 기획서 4.4 의 권장값을 따른다.
+# 모든 물성이 같은 기준으로 수렴한다고 보면 안 된다 — 전위는 판정에 직접 쓰이므로
+# 가장 중요하고, 궤도 에너지는 정성 지표라 조금 느슨해도 된다.
 THRESHOLDS = {
-    "homo_ev": 0.05, "lumo_ev": 0.05, "gap_ev": 0.05,
-    "dipole_debye": 0.2,
-    "ip_vertical_ev": 0.05, "ea_vertical_ev": 0.05,
-    "ip_adiabatic_ev": 0.05, "ea_adiabatic_ev": 0.05,
-    "oxidation_potential_v": 0.05, "reduction_potential_v": 0.05,
-    "oxidation_potential_gibbs_v": 0.05, "reduction_potential_gibbs_v": 0.05,
-    "solvation_energy_kcal": 0.5,
+    # 전위 — 가장 중요. 미수렴이면 고분자 대표값으로 확정하지 않는다
+    "oxidation_potential_v": 0.10, "reduction_potential_v": 0.10,
+    "oxidation_potential_gibbs_v": 0.10, "reduction_potential_gibbs_v": 0.10,
+    # 궤도 에너지 — 정성 지표
+    "homo_ev": 0.10, "lumo_ev": 0.10, "gap_ev": 0.15,
+    "ip_vertical_ev": 0.10, "ea_vertical_ev": 0.10,
+    "ip_adiabatic_ev": 0.10, "ea_adiabatic_ev": 0.10,
+    "ea_gibbs_ev": 0.10, "ip_gibbs_ev": 0.10,
+    # 상호작용 — 대표 site 기준
+    "li_binding_kj": 10.0, "dimer_binding_kj": 5.0,
     "bde_min_kj": 5.0, "bde_min_298_kj": 5.0,
-    "dimer_binding_kj": 3.0, "li_binding_kj": 5.0,
-    "chemical_hardness_ev": 0.05, "chemical_potential_ev": 0.05,
-    "electrophilicity_ev": 0.05,
+    "solvation_energy_kcal": 0.5,
+    "chemical_hardness_ev": 0.10, "chemical_potential_ev": 0.10,
+    "electrophilicity_ev": 0.10,
+    # 쌍극자는 사슬 길이에 따라 커지는 성질이 있어 절대 임계값이 부적절하다.
+    # 아래 SIZE_DEPENDENT 에서 별도로 다룬다.
 }
+
+# 전체 분자 크기에 딸려 커지는 값 — 반복 단위당으로 환산하지 않으면 수렴 판정이
+# 의미가 없다 (v2.0 4.4). extensive 처럼 완전 비례하지는 않아 따로 구분한다.
+SIZE_DEPENDENT = {"dipole_debye"}
+
 RELATIVE_FALLBACK = 0.02
 
 # 사슬이 길어질수록 크기에 비례해 커지는 값 — 수렴을 따지는 것이 무의미하다
@@ -86,6 +99,12 @@ def analyze_property(key: str, points: list[tuple[int, float]]) -> dict:
         "points": [{"n": n, "value": round(v, 4)} for n, v in pts],
         "extensive": key in EXTENSIVE,
     }
+    if key in SIZE_DEPENDENT:
+        result["status"] = "size_dependent"
+        result["note"] = ("사슬 길이에 따라 값이 커지는 성질이라 절대 임계값으로 "
+                          "수렴을 판정하지 않습니다 — 반복 단위당으로 환산하거나 "
+                          "국소 기술자를 쓰세요.")
+        return result
     if key in EXTENSIVE:
         result["status"] = "extensive"
         result["note"] = ("사슬 길이에 비례하는 크기 값이라 수렴 판정 대상이 아닙니다 "

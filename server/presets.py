@@ -140,12 +140,15 @@ WATER_SMD_FOR_MIX = [1.3328, 1.3323, 0.82, 0.35, 103.6, 78.355, 0.0, 0.0]
 ACCURACY = {
     "빠름": {"n_conf": 5, "n_dft_rank": 1, "do_opt": False, "do_thermo": False,
              "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-svp",
+             "basis_anion": None,
              "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) — 사전 스크리닝"},
     "표준": {"n_conf": 15, "n_dft_rank": 3, "do_opt": True, "do_thermo": True,
              "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
+             "basis_anion": "ma-def2-tzvp",
              "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·열보정 + 단일점(def2-TZVP)"},
     "정밀": {"n_conf": 30, "n_dft_rank": 5, "do_opt": True, "do_thermo": True,
              "ensemble": True, "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
+             "basis_anion": "def2-tzvpd",
              "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수·단일점 def2-TZVP"},
 }
 
@@ -167,7 +170,10 @@ FUNCTIONALS = {
     "HF": ("hf", None),
 }
 
-BASIS_SETS = ["def2-svp", "def2-tzvp", "6-31g*", "sto-3g"]
+# 음이온·EA 계산에는 diffuse 함수를 포함한 기저가 필요하다 (v2.0 P0-1)
+BASIS_SETS = ["def2-svp", "def2-tzvp", "ma-def2-tzvp", "def2-tzvpd",
+              "def2-svpd", "6-31g*", "sto-3g"]
+DIFFUSE_BASIS_SETS = ["ma-def2-tzvp", "def2-tzvpd", "def2-svpd"]
 
 PURPOSES = [
     "전자구조(구조 최적화)",
