@@ -309,6 +309,7 @@ async function submit() {
         basis: $("basis").value || null,
         basisAnion: $("basis-anion").value || null,
         qrrho: $("qrrho").value === "" ? null : $("qrrho").value === "true",
+        logLevel: $("log-level").value,
         optimizeGeometry: $("optimize").value === "" ? null : $("optimize").value === "true",
         thermochemistry: $("thermo").value === "" ? null : $("thermo").value === "true",
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
@@ -352,6 +353,38 @@ async function refreshJobs() {
   if (real?.classList.contains("mode-results") && window.rbRenderResults) window.rbRenderResults();
   else renderJobList();
   if (real?.classList.contains("mode-compare") && window.rbRenderCompare) window.rbRenderCompare();
+}
+
+/* ── PySCF 원본 로그 보기 ───────────────────────────────────────────
+   화면 로그는 「무슨 단계를 했는가」만 남는다. SCF 반복마다의 에너지,
+   궤도 에너지, 최적화 스텝은 PySCF 가 직접 찍는 원본 로그에만 있다.
+   수십 MB 가 될 수 있어 기본은 끝 400줄만 가져오고 전체는 내려받는다. */
+const RAW_LOG_OPEN = new Set();
+
+async function showRawLog(jobId, btn, keepOpen) {
+  const pre = $(`raw-${jobId}`);
+  if (!pre) return;
+  if (!keepOpen && !pre.hidden) {          // 다시 누르면 접는다
+    pre.hidden = true; RAW_LOG_OPEN.delete(jobId);
+    if (btn) btn.textContent = "PySCF 원본 로그";
+    return;
+  }
+  RAW_LOG_OPEN.add(jobId);
+  pre.hidden = false;
+  if (!keepOpen) pre.textContent = "불러오는 중…";
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/log?tail=400`);
+    if (!r.ok) throw new Error(`서버 응답 ${r.status}`);
+    const d = await r.json();
+    if (!d.exists) { pre.textContent = d.note || "원본 로그가 없습니다."; return; }
+    const head = `— ${d.lines.toLocaleString()}줄 · ${(d.bytes / 1024).toFixed(0)} KB`
+      + (d.truncated ? " · 끝 400줄만 표시 (전체는 내려받기)" : "") + " —\n\n";
+    pre.textContent = head + d.text;
+    pre.scrollTop = pre.scrollHeight;
+    if (btn) btn.textContent = "원본 로그 접기";
+  } catch (e) {
+    pre.textContent = `로그를 불러오지 못했습니다: ${e.message}`;
+  }
 }
 
 function jobsSignature() {
@@ -403,10 +436,14 @@ function renderJobList(force = false) {
     JOB_LIST_SIG = jobsSignature();
     updateSelCount();
   }));
+  RAW_LOG_OPEN.forEach(id => { const b = list.querySelector(`[data-raw-log="${id}"]`);
+    if (b) showRawLog(id, b, true); });
   list.querySelectorAll("[data-view-job]").forEach(b => b.addEventListener("click", () => {
     const job = JOBS_CACHE.find(x => x.id === b.dataset.viewJob);
     if (job) { SELECTED_RESULT = job.id; showResult(job); }
   }));
+  list.querySelectorAll("[data-raw-log]").forEach(b =>
+    b.addEventListener("click", () => showRawLog(b.dataset.rawLog, b)));
   list.querySelectorAll("[data-retry]").forEach(b => b.addEventListener("click", () =>
     fetch(`/api/jobs/${b.dataset.retry}/retry`, {method: "POST"}).then(refreshJobs)));
   list.querySelectorAll("[data-cancel]").forEach(b => b.addEventListener("click", () =>
@@ -435,7 +472,13 @@ function jobRowHtml(job) {
            <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
       ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
       <details><summary class="small muted">로그 (${job.logs.length})</summary>
-        <ul class="log-list">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul></details>
+        <ul class="log-list mono">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
+        <div class="toolbar" style="margin-top:6px">
+          <button class="btn small" type="button" data-raw-log="${esc(job.id)}">PySCF 원본 로그</button>
+          <a class="btn small ghost" href="/api/jobs/${encodeURIComponent(job.id)}/log?download=true"
+             download>내려받기</a>
+        </div>
+        <pre class="log-raw" id="raw-${esc(job.id)}" hidden></pre></details>
     </div>
     <div class="job-side">
       <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>

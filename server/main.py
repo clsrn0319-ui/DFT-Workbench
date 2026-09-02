@@ -58,6 +58,8 @@ class ExpertSettings(BaseModel):
     bdeThermalCorrection: Optional[bool] = None
     freqScale: Optional[float] = Field(None, gt=0.5, lt=1.5)
     scfTol: float = 1e-8
+    # PySCF 원본 로그 수준 — 간략(끔) / 상세(SCF 반복·궤도) / 디버그
+    logLevel: Optional[str] = None
 
 
 class ExplicitMolecule(BaseModel):
@@ -1096,6 +1098,34 @@ def list_jobs(_: bool = Depends(require_login)):
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, _: bool = Depends(require_login)):
     return _job_or_404(job_id)
+
+
+@app.get("/api/jobs/{job_id}/log")
+def get_job_log(job_id: str, tail: int = 400, download: bool = False,
+                _: bool = Depends(require_login)):
+    """PySCF 원본 로그. 기본은 «끝부분»만 — 전체는 수십 MB 가 될 수 있다.
+
+    tail=0 이면 전체를 준다 (다운로드용).
+    """
+    job = _job_or_404(job_id)
+    path = store.raw_log_path(job_id)
+    if not path.exists():
+        level = (job["settings"].get("expert") or {}).get("logLevel") or engine.DEFAULT_LOG_LEVEL
+        return {"exists": False, "level": level,
+                "note": ("원본 로그가 없습니다 — 전문가 설정의 «원본 로그 수준»이 "
+                         "«간략»이면 기록하지 않습니다. 상세·디버그로 바꾸고 다시 계산하세요."
+                         if engine.LOG_LEVELS.get(level, 0) == 0
+                         else "이 작업이 시작되기 전 버전에서 만들어졌거나 파일이 지워졌습니다.")}
+    size = path.stat().st_size
+    if download:
+        return FileResponse(path, media_type="text/plain; charset=utf-8",
+                            filename=f"rhobench-{job_id}.log")
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    shown = lines if tail <= 0 else lines[-tail:]
+    return {"exists": True, "bytes": size, "lines": len(lines),
+            "truncated": tail > 0 and len(lines) > tail,
+            "text": "".join(shown)}
 
 
 @app.post("/api/jobs/{job_id}/retry")

@@ -98,12 +98,26 @@ def count_active() -> int:
         return sum(1 for j in _jobs.values() if j["status"] in ("QUEUED", "RUNNING"))
 
 
+LOGS_DIR = DATA_DIR / "logs"
+
+
+def raw_log_path(job_id: str):
+    """PySCF 원본 로그 파일 위치. 크기가 커질 수 있어 jobs.json 밖에 둔다."""
+    safe = "".join(c for c in str(job_id) if c.isalnum() or c in "-_")
+    return LOGS_DIR / f"{safe}.log"
+
+
 def delete_job(job_id: str) -> bool:
     with _lock:
         _load()
         if job_id in _jobs:
             del _jobs[job_id]
             _persist()
+            # 작업을 지우면 로그도 함께 지운다 — 남겨 두면 디스크만 먹는다
+            try:
+                raw_log_path(job_id).unlink(missing_ok=True)
+            except OSError:
+                pass
             return True
         return False
 

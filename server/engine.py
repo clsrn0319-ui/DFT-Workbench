@@ -30,6 +30,7 @@ from . import binder as binder_mod
 from . import descriptors as desc_mod
 from . import presets
 from . import protocol as protocol_mod
+from . import store
 from . import thermo as thermo_mod
 from .geometry import (smiles_to_conformers, build_cluster,
                        build_cluster_from_atoms, atoms_to_xyz_block)
@@ -138,10 +139,86 @@ def _resolve_params(settings):
     }
 
 
+# ── PySCF 원본 로그 수집 ────────────────────────────────────────────
+# 화면 로그는 «무슨 단계를 했는가»만 남긴다. SCF 반복마다의 에너지 변화,
+# 궤도 에너지, 최적화 스텝 같은 것은 PySCF 가 직접 찍는데 지금까지는
+# verbose=0 으로 통째로 버렸다. 수렴이 이상할 때 확인할 방법이 없었다.
+#
+# 로그를 job dict 에 담으면 수 MB 가 통째로 메모리·JSON 에 들어가므로,
+# 파일로 흘리고 필요할 때만 읽는다.
+LOG_LEVELS = {"간략": 0, "상세": 4, "디버그": 5}
+DEFAULT_LOG_LEVEL = "간략"
+#: 파일이 무한정 커지지 않도록 — 넘으면 기록을 멈추고 그 사실을 남긴다
+MAX_RAW_LOG_BYTES = 40 * 1024 * 1024
+
+
+class _RawLog:
+    """PySCF 가 쓰는 출력을 파일로 받아 두는 자리. 꺼져 있으면 아무것도 안 한다."""
+
+    def __init__(self):
+        self.fh = None
+        self.verbose = 0
+        self.path = None
+        self.truncated = False
+
+    def open(self, path, verbose):
+        self.close()
+        if not verbose:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(path, "w", encoding="utf-8", errors="replace")
+        self.verbose = verbose
+        self.path = path
+        self.truncated = False
+
+    def note(self, text):
+        """단계 구분선 — 원본 로그만 봐도 어디가 어느 단계인지 알 수 있게."""
+        if not self.fh:
+            return
+        try:
+            self.fh.write(f"\n{'=' * 70}\n== {text}\n{'=' * 70}\n")
+            self.fh.flush()
+        except (OSError, ValueError):
+            pass
+
+    def check_size(self):
+        if not self.fh or self.truncated:
+            return
+        try:
+            if self.fh.tell() > MAX_RAW_LOG_BYTES:
+                self.fh.write(f"\n[로그가 {MAX_RAW_LOG_BYTES // (1024 * 1024)} MB 를 넘어 "
+                              "여기서 기록을 멈춥니다]\n")
+                self.fh.flush()
+                self.fh.close()
+                self.fh = None
+                self.truncated = True
+        except (OSError, ValueError):
+            self.fh = None
+
+    def close(self):
+        if self.fh:
+            try:
+                self.fh.close()
+            except (OSError, ValueError):
+                pass
+        self.fh = None
+        self.verbose = 0
+
+
+#: 작업 하나를 도는 동안만 살아 있는 전역. 계산은 한 번에 하나씩만 돌므로
+#: (store.count_active 로 직렬화) 스레드 경합을 만들지 않는다.
+_RAW = _RawLog()
+
+
 def _build_mol(atoms, basis, charge, multiplicity):
     atom_spec = [(sym, (x, y, z)) for sym, x, y, z in atoms]
-    return gto.M(atom=atom_spec, basis=basis, charge=charge,
-                 spin=multiplicity - 1, unit="Angstrom", verbose=0)
+    mol = gto.M(atom=atom_spec, basis=basis, charge=charge,
+                spin=multiplicity - 1, unit="Angstrom", verbose=0)
+    if _RAW.fh:
+        # mol 을 통해 mf·최적화·진동수까지 같은 파일로 흘러간다
+        mol.verbose = _RAW.verbose
+        mol.stdout = _RAW.fh
+    return mol
 
 
 def _make_mf(mol, xc, disp, solvent_key, scf_tol):
@@ -392,18 +469,32 @@ def _frontier_orbitals(mf):
 def run_job(job, update, is_cancelled=lambda: False):
     """job(dict)을 실제로 계산한다. update(patch)로 진행 상황을 반영한다."""
     log_lines = list(job.get("logs") or [])
+    t_job = time.time()
 
     def log(msg):
-        log_lines.append(msg)
+        # 언제·시작 후 몇 초에 일어난 일인지 — 어느 단계가 오래 걸리는지
+        # 로그만 보고 알 수 있어야 한다.
+        stamp = time.strftime("%H:%M:%S")
+        log_lines.append(f"{stamp} (+{time.time() - t_job:6.1f}s) {msg}")
         update({"logs": list(log_lines)})
+        _RAW.check_size()
 
     def stage(name, progress):
         if is_cancelled():
             raise CancelledError()
         update({"stage": name, "progress": progress})
         log(f"[{name}]")
+        _RAW.note(name)
 
     t_start = time.time()
+    # 원본 로그 수준은 전문가 설정에서 정한다. 켜져 있을 때만 파일이 생긴다.
+    _level = (job["settings"].get("expert") or {}).get("logLevel") or DEFAULT_LOG_LEVEL
+    try:
+        _RAW.open(store.raw_log_path(job["id"]), LOG_LEVELS.get(_level, 0))
+        if _RAW.fh:
+            log(f"PySCF 원본 로그 기록 시작 (수준: {_level}, verbose={_RAW.verbose})")
+    except OSError as exc:
+        log(f"원본 로그 파일을 열지 못했습니다: {exc}")
     try:
         settings = job["settings"]
         params = _resolve_params(settings)
@@ -1095,6 +1186,15 @@ def run_job(job, update, is_cancelled=lambda: False):
                 "finishedAt": time.time()})
     except Exception as exc:  # noqa: BLE001 — 작업 단위 오류는 작업 실패로 기록
         log(f"오류: {exc}")
+        # 실패했을 때야말로 원본 로그가 필요하다 — 파이썬 예외까지 같이 남긴다
+        _RAW.note("오류 — 파이썬 트레이스백")
+        if _RAW.fh:
+            try:
+                _RAW.fh.write(traceback.format_exc())
+            except (OSError, ValueError):
+                pass
         update({"status": "FAILED", "error": str(exc), "stage": "실패",
                 "finishedAt": time.time(),
                 "traceback": traceback.format_exc()[-2000:]})
+    finally:
+        _RAW.close()
