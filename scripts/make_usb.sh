@@ -101,15 +101,110 @@ set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$(pwd)"
 
+BUILD_PYVER=""; BUILD_OS=""; BUILD_ARCH=""
+# shellcheck disable=SC1091
+[ -f "$HERE/build-info" ] && . "$HERE/build-info"
+
 echo "── RhoBench 설치 ──────────────────────────────────────"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "✗ python3 가 없습니다." >&2
-  echo "  Ubuntu 에서:  sudo apt update && sudo apt install -y python3 python3-venv" >&2
+# ── 쓸 수 있는 파이썬 고르기 ──────────────────────────────────────
+# 「python3 가 있다」로는 부족하다는 것이 실제로 드러났다:
+#   · 이름만 python3 이고 우분투가 준 것이 아닐 수 있다 (pyenv·conda·소스빌드).
+#     그런 파이썬은 apt 로 venv 를 보충할 수도 없다 — 저장소에 패키지가 없다.
+#   · wheels/ 는 «제작 시 파이썬 버전 전용»이다. 버전이 다르면 설치가 안 된다.
+# 그래서 이름이 아니라 «실제로 venv 를 만들 수 있는가»로 고르고,
+# 제작 버전과 일치하는 것을 먼저 찾는다.
+
+_pyver() { "$1" -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null; }
+
+_can_venv() {   # 흉내가 아니라 실제로 만들어 본다 — ensurepip 누락까지 걸러진다
+  local tmp rc=1
+  tmp="$(mktemp -d 2>/dev/null)" || return 1
+  "$1" -m venv "$tmp/probe" >/dev/null 2>&1 && rc=0
+  rm -rf "$tmp"
+  return $rc
+}
+
+_candidates() {
+  [ -n "${PYTHON:-}" ] && echo "$PYTHON"
+  if [ -n "$BUILD_PYVER" ]; then
+    echo "/usr/bin/python$BUILD_PYVER"; echo "python$BUILD_PYVER"
+  fi
+  echo python3; echo /usr/bin/python3
+  for v in 3.13 3.12 3.11 3.10 3.9; do echo "/usr/bin/python$v"; done
+}
+
+_find_python() {   # $1: strict = 제작 버전과 같은 것만 / any = 되는 것 아무거나
+  local py seen="" v
+  while read -r py; do
+    [ -n "$py" ] || continue
+    command -v "$py" >/dev/null 2>&1 || continue
+    py="$(command -v "$py")"
+    case " $seen " in *" $py "*) continue ;; esac
+    seen="$seen $py"
+    v="$(_pyver "$py")" || continue
+    [ -n "$v" ] || continue
+    if [ "$1" = strict ] && [ -n "$BUILD_PYVER" ] && [ "$v" != "$BUILD_PYVER" ]; then
+      continue
+    fi
+    if _can_venv "$py"; then echo "$py"; return 0; fi
+  done < <(_candidates)
+  return 1
+}
+
+_report_pythons() {
+  local py v seen=""
+  while read -r py; do
+    command -v "$py" >/dev/null 2>&1 || continue
+    py="$(command -v "$py")"
+    case " $seen " in *" $py "*) continue ;; esac
+    seen="$seen $py"
+    v="$(_pyver "$py")"
+    if _can_venv "$py"; then echo "    $py  (Python ${v:-?})  venv 가능" >&2
+    else                     echo "    $py  (Python ${v:-?})  venv 불가" >&2; fi
+  done < <(_candidates)
+}
+
+echo "  쓸 수 있는 파이썬을 찾는 중… (몇 초 걸립니다)"
+PY="$(_find_python strict || true)"
+
+if [ -z "$PY" ] && ls "$HERE"/debs/*.deb >/dev/null 2>&1; then
+  echo "  가상환경 모듈(python3-venv)이 없습니다 — USB 의 시스템 패키지로 설치합니다."
+  echo "  관리자 권한이 필요합니다. 우분투 비밀번호를 물어볼 수 있습니다."
+  sudo dpkg -i "$HERE"/debs/*.deb >/dev/null 2>&1 || true
+  PY="$(_find_python strict || true)"
+  [ -n "$PY" ] && echo "  ✓ python3-venv 설치 완료"
+fi
+
+if [ -z "$PY" ]; then
+  # 제작 버전과 일치하는 것이 없다. 되는 것이라도 쓰되, 사실대로 알린다.
+  PY="$(_find_python any || true)"
+  if [ -n "$PY" ]; then
+    echo "  ⚠ 제작 시 파이썬(${BUILD_PYVER:-?})과 다른 $(_pyver "$PY") 를 씁니다."
+    echo "    USB 의 라이브러리는 ${BUILD_PYVER:-제작} 버전 전용이라 다음 단계에서"
+    echo "    실패할 수 있습니다. 실패하면 ${BUILD_PYVER:-해당} 버전을 설치하거나"
+    echo "    USB 를 이 컴퓨터의 파이썬 버전으로 다시 만드세요."
+  fi
+fi
+
+if [ -z "$PY" ]; then
+  echo >&2
+  echo "✗ venv 를 만들 수 있는 파이썬을 찾지 못했습니다." >&2
+  echo "  이 컴퓨터: $( . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}")" >&2
+  echo "  USB 제작 시: Python ${BUILD_PYVER:-?} / ${BUILD_OS:-?}" >&2
+  echo "  찾아본 파이썬:" >&2
+  _report_pythons
+  echo >&2
+  echo "  · 위 목록에 «venv 가능» 이 하나도 없고 우분투 기본 파이썬" >&2
+  echo "    (/usr/bin/python3.10, 3.12 등)이 보이면, 인터넷이 되는 곳에서" >&2
+  echo "      sudo apt update && sudo apt install -y python3-venv" >&2
+  echo "  · 쓰고 싶은 파이썬을 직접 지정할 수도 있습니다:" >&2
+  echo "      PYTHON=/usr/bin/python3.12 ./설치.sh" >&2
   exit 1
 fi
-PYVER="$(python3 -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-echo "  Python $PYVER 확인"
+
+PYVER="$(_pyver "$PY")"
+echo "  사용할 파이썬: $PY  (Python $PYVER)"
 
 # USB 는 쓰기가 느리고 파일시스템 제약이 있어, 설치는 «내장 디스크»에 한다
 TARGET="${1:-$HOME/RhoBench}"
@@ -119,37 +214,21 @@ cp -r "$HERE/app/." "$TARGET/"
 cd "$TARGET"
 
 echo "[1/2] 가상환경 만들기"
-if ! python3 -m venv .venv 2>/dev/null; then
-  # python3-venv 가 없다. USB 에 담아 온 .deb 로 인터넷 없이 설치를 시도한다.
-  if ls "$HERE"/debs/*.deb >/dev/null 2>&1; then
-    echo "  가상환경 모듈(python3-venv)이 없습니다 — USB 의 시스템 패키지로 설치합니다."
-    echo "  관리자 권한이 필요합니다. 우분투 비밀번호를 물어볼 수 있습니다."
-    # 이미 깔린 것과 겹쳐도 dpkg 는 그대로 덮어쓰므로 안전하다.
-    sudo dpkg -i "$HERE"/debs/*.deb >/dev/null 2>&1 || true
-    if ! python3 -m venv .venv 2>/dev/null; then
-      echo >&2
-      echo "✗ 가상환경 생성 실패 — USB 의 .deb 로도 해결되지 않았습니다." >&2
-      echo "  USB 를 만든 컴퓨터와 이 컴퓨터의 우분투/파이썬 버전이 다를 수 있습니다." >&2
-      echo "    이 컴퓨터: Python $PYVER / $( . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}")" >&2
-      echo "  인터넷이 되는 곳이라면:  sudo apt update && sudo apt install -y python3-venv" >&2
-      exit 1
-    fi
-    echo "  ✓ python3-venv 설치 완료"
-  else
-    echo "✗ 가상환경 생성 실패 — python3-venv 가 필요합니다." >&2
-    echo "  이 USB 에는 해당 .deb 가 들어 있지 않습니다." >&2
-    echo "  sudo apt update && sudo apt install -y python3-venv" >&2
-    exit 1
-  fi
-fi
+rm -rf .venv
+"$PY" -m venv .venv
 
 echo "[2/2] 오프라인 설치 (인터넷 불필요)"
 if ! .venv/bin/pip install -q --no-index --find-links "$HERE/wheels" -r requirements.txt; then
-  echo
-  echo "⚠ 오프라인 설치 실패 — USB 의 설치 파일이 이 컴퓨터의 Python 버전과" >&2
-  echo "  맞지 않을 수 있습니다 (USB 제작 시 Python 버전과 다름)." >&2
-  echo "  인터넷이 있으면 아래로 대신 설치하세요:" >&2
-  echo "    cd $TARGET && .venv/bin/pip install -r requirements.txt" >&2
+  echo >&2
+  echo "⚠ 오프라인 설치 실패 — USB 의 라이브러리가 이 파이썬과 맞지 않습니다." >&2
+  echo "    이 컴퓨터: Python $PYVER   /   USB 제작 시: Python ${BUILD_PYVER:-?}" >&2
+  if [ -n "$BUILD_PYVER" ] && [ "$PYVER" != "$BUILD_PYVER" ]; then
+    echo "  두 버전이 다릅니다. 이것이 원인입니다." >&2
+    echo "    · 이 컴퓨터에 Python $BUILD_PYVER 이 있다면:" >&2
+    echo "        PYTHON=/usr/bin/python$BUILD_PYVER ./설치.sh" >&2
+    echo "    · 없다면 USB 를 Python $PYVER 컴퓨터에서 다시 만드세요." >&2
+  fi
+  echo "  인터넷이 있으면:  cd $TARGET && .venv/bin/pip install -r requirements.txt" >&2
   exit 1
 fi
 
@@ -158,6 +237,14 @@ echo "✓ 설치 완료 — $TARGET"
 echo "  실행:  cd $TARGET && ./scripts/start.sh"
 INSTALL
 chmod +x "$OUT/설치.sh"
+
+# 설치 스크립트가 「제작 시 파이썬 버전」을 알아야 그 버전을 먼저 찾을 수 있다.
+# wheels/ 가 그 버전 전용이기 때문이다.
+cat > "$OUT/build-info" <<INFO
+BUILD_PYVER=$PYVER
+BUILD_OS="$( . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
+BUILD_ARCH=$ARCH
+INFO
 
 # 5) 안내문
 echo "[5/5] 안내문 생성"
@@ -217,10 +304,21 @@ RhoBench — 다른 컴퓨터에서 실행하기
   - "python3: command not found"
       파이썬 본체는 USB 로 해결되지 않습니다. 인터넷이 있는 곳에서
       sudo apt update && sudo apt install -y python3
-  - "가상환경 생성 실패"
-      설치 스크립트가 USB 의 debs/ 로 자동 설치를 시도합니다.
-      그래도 실패하면 우분투 버전이 USB 제작 시와 다른 것입니다.
-      인터넷이 있으면:  sudo apt update && sudo apt install -y python3-venv
+  - "venv 를 만들 수 있는 파이썬을 찾지 못했습니다"
+      설치 스크립트가 찾아본 파이썬 목록을 함께 출력합니다.
+      «venv 가능» 이 하나도 없으면 USB 의 debs/ 로 자동 보충을 시도하고,
+      그래도 안 되면 우분투 버전이 USB 제작 시와 다른 것입니다.
+      쓰고 싶은 파이썬을 직접 지정할 수 있습니다:
+        PYTHON=/usr/bin/python$PYVER ./설치.sh
+  - "Package 'python3.XX-venv' has no installation candidate"
+      그 파이썬은 우분투가 준 것이 아닙니다 (pyenv·conda·소스빌드 등).
+      apt 로는 해결되지 않습니다. 우분투 기본 파이썬을 쓰세요:
+        ls /usr/bin/python3.*
+        PYTHON=/usr/bin/python$PYVER ./설치.sh
+  - "오프라인 설치 실패"
+      USB 의 라이브러리는 «Python $PYVER 전용» 입니다. 대상 컴퓨터가 다른
+      버전을 쓰면 설치되지 않습니다. 위의 PYTHON= 지정으로 맞추거나,
+      대상 컴퓨터의 파이썬 버전으로 USB 를 다시 만드세요.
   - 오프라인 설치 실패
       이 컴퓨터의 Python 버전이 USB 제작 시와 다릅니다.
       인터넷이 있으면:  cd ~/RhoBench && .venv/bin/pip install -r requirements.txt
