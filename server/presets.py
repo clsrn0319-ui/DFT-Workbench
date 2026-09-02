@@ -141,15 +141,17 @@ ACCURACY = {
     "빠름": {"n_conf": 5, "n_dft_rank": 1, "do_opt": False, "do_thermo": False,
              "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-svp",
              "basis_anion": None,
-             "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) — 사전 스크리닝"},
+             "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) · 음이온 diffuse 없음 — 사전 스크리닝"},
     "표준": {"n_conf": 15, "n_dft_rank": 3, "do_opt": True, "do_thermo": True,
              "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
              "basis_anion": "ma-def2-tzvp",
-             "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·열보정 + 단일점(def2-TZVP)"},
+             "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·qRRHO 열보정 "
+                     "+ 단일점(def2-TZVP) · 음이온 ma-def2-TZVP"},
     "정밀": {"n_conf": 30, "n_dft_rank": 5, "do_opt": True, "do_thermo": True,
              "ensemble": True, "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
              "basis_anion": "def2-tzvpd",
-             "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수·단일점 def2-TZVP"},
+             "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수(qRRHO)·"
+                     "단일점 def2-TZVP · 음이온 def2-TZVPD"},
 }
 
 # 범함수별 진동수 스케일 인자 (문헌 대표값 — 조화근사 과대평가 보정, basis 의존성 있음)

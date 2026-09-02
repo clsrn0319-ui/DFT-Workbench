@@ -201,6 +201,7 @@ async function init() {
   fillSelect("purpose", PRESETS.purposes.map(p => [p, p]), PRESETS.defaults.purpose);
   fillSelect("functional", PRESETS.functionals.map(f => [f, f]), PRESETS.defaults.expert.functional);
   for (const b of PRESETS.basisSets) $("basis").add(new Option(b, b));
+  for (const b of (PRESETS.diffuseBasisSets || [])) $("basis-anion").add(new Option(b, b));
   for (const f of PRESETS.functionals) $("cmp-functionals").add(new Option(f, f));
 
   $("accuracy").onchange = syncAccuracyDesc;
@@ -306,6 +307,8 @@ async function submit() {
         nConformers: $("n-conformers").value ? parseInt($("n-conformers").value) : null,
         functional: $("functional").value,
         basis: $("basis").value || null,
+        basisAnion: $("basis-anion").value || null,
+        qrrho: $("qrrho").value === "" ? null : $("qrrho").value === "true",
         optimizeGeometry: $("optimize").value === "" ? null : $("optimize").value === "true",
         thermochemistry: $("thermo").value === "" ? null : $("thermo").value === "true",
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",

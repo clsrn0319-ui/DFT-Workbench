@@ -46,6 +46,8 @@ class ExpertSettings(BaseModel):
     nConformers: Optional[int] = Field(None, ge=1, le=200)
     functional: str = "PBE0-D3(BJ)"
     basis: Optional[str] = None
+    basisAnion: Optional[str] = None      # 음이온 전용 diffuse 기저 (비우면 정확도 프리셋)
+    qrrho: Optional[bool] = None          # 저진동수 엔트로피 qRRHO 보정 (기본 수행)
     optimizeGeometry: Optional[bool] = None
     thermochemistry: Optional[bool] = None
     redoxAdiabatic: Optional[bool] = None
@@ -154,6 +156,7 @@ def get_presets(_: bool = Depends(require_login)):
         "accuracy": {k: v["desc"] for k, v in presets.ACCURACY.items()},
         "functionals": list(presets.FUNCTIONALS.keys()),
         "basisSets": presets.BASIS_SETS,
+        "diffuseBasisSets": presets.DIFFUSE_BASIS_SETS,
         "purposes": presets.PURPOSES,
         "structures": ["모노머", "2량체", "3량체"],
         "atmospheres": ["불활성", "공기", "사용자 정의"],

@@ -918,6 +918,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
           <select class="input" id="functional"></select></div>
         <div class="field"><span class="field-label">Basis (단일점, 비우면 프리셋)</span>
           <select class="input" id="basis"><option value="">(정확도 프리셋)</option></select></div>
+        <div class="field"><span class="field-label">음이온 기저 (비우면 프리셋)</span>
+          <select class="input" id="basis-anion"><option value="">(정확도 프리셋)</option></select></div>
+        <div class="field"><span class="field-label">진동 엔트로피 모델</span>
+          <select class="input" id="qrrho">
+            <option value="">(기본 — qRRHO)</option>
+            <option value="true">qRRHO — 저진동수 보정</option>
+            <option value="false">RRHO — 조화 근사 그대로</option>
+          </select></div>
         <div class="field"><span class="field-label">전하</span>
           <input class="input" type="number" id="charge" value="0" step="1"></div>
         <div class="field"><span class="field-label">스핀 다중도</span>
