@@ -174,6 +174,7 @@ def confidence_of(verdict: dict | None, desc: dict,
     full = protocol.confidence(
         desc, settings or {},
         redox_basis=desc.get("basis_anion"),
+        conformer_spread_v=desc.get("conformer_spread_v"),
         chain_converged=desc.get("chain_converged"))
     weakest = min(full["axes"], key=lambda a: protocol.LEVELS.index(a["level"]))
     return full["overall"], f"{weakest['label']}: {weakest['reason']}"
@@ -185,6 +186,7 @@ def confidence_detail(verdict: dict | None, desc: dict,
     return protocol.confidence(
         desc, settings or {},
         redox_basis=desc.get("basis_anion"),
+        conformer_spread_v=desc.get("conformer_spread_v"),
         chain_converged=desc.get("chain_converged"))
 
 

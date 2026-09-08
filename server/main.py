@@ -53,6 +53,8 @@ class ExpertSettings(BaseModel):
     redoxAdiabatic: Optional[bool] = None
     nonequilibriumSolvation: Optional[bool] = None
     boltzmannEnsemble: Optional[bool] = None
+    # 전위 conformer 민감도 (v2.0 P0-5) — None: 프리셋(표준 3·정밀 5), True: 최소 3, False: 끔
+    conformerSensitivity: Optional[bool] = None
     optimizeInSolvent: bool = False
     bdeRelaxFragments: Optional[bool] = None
     bdeThermalCorrection: Optional[bool] = None
@@ -388,7 +390,9 @@ def esw_gate(req: EswDiagnoseRequest, _: bool = Depends(require_login)):
     win = esw.ELECTRODE_BY_KEY.get(req.electrode)
     if win is None:
         raise HTTPException(400, f"알 수 없는 전극: {req.electrode}")
-    return esw.gate_with_uncertainty(red, ox, win)
+    # conformer 편차가 있으면 잠정 폭에 합성해 구간을 넓힌다 (P0-5)
+    return esw.gate_with_uncertainty(red, ox, win,
+                                     conformer_std_v=desc.get("conformer_spread_v"))
 
 
 class MechanicalRequest(BaseModel):

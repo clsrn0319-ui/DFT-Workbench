@@ -261,6 +261,10 @@ def card(settings: dict, params: dict | None = None,
         "geometry_optimized": p.get("do_opt"),
         "redox_adiabatic": p.get("redox_adiabatic"),
     }
+    # conformer 민감도(P0-5)는 프로토콜의 일부다 — 켜져 있을 때만 키를 넣어,
+    # 민감도가 없는 기존 결과의 해시는 그대로 유지한다.
+    if (p.get("conf_sens") or 0) >= 2:
+        body["conformer_sensitivity"] = int(p["conf_sens"])
     digest = hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
     return {**body, "protocol_hash": digest,

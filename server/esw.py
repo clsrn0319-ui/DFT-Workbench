@@ -335,31 +335,45 @@ UNCERTAINTY_SOURCE = ("참조 데이터셋 검증 전 잠정값 — v2.0 기획�
 
 
 def gate_with_uncertainty(red_v: float, ox_v: float, window: dict,
-                          uncertainty_v: float = DEFAULT_UNCERTAINTY_V) -> dict:
+                          uncertainty_v: float = DEFAULT_UNCERTAINTY_V,
+                          conformer_std_v: float | None = None) -> dict:
     """전위 불확실성을 반영한 4단계 판정 (Robust Pass / Borderline / Robust Fail).
 
     점추정 하나로 «안정/분해»를 가르면, 임계값에서 0.05 V 떨어진 후보와
     0.5 V 떨어진 후보가 같은 취급을 받는다. 예측구간을 함께 보면 어느 쪽이
     추가 계산·실험이 필요한지 구분된다.
+
+    conformer_std_v 가 있으면(P0-5) 방법 불확실성과 구조 편차를 독립 오차로 보고
+    제곱합으로 합성한다 — 구조 의존성이 큰 물질일수록 구간이 넓어져 Borderline 으로
+    간다.
     """
     lo = window["low"]
-    best = containment(red_v - uncertainty_v, ox_v + uncertainty_v, window)
-    worst = containment(red_v + uncertainty_v, ox_v - uncertainty_v, window)
+    band = uncertainty_v
+    if conformer_std_v:
+        band = round((uncertainty_v ** 2 + float(conformer_std_v) ** 2) ** 0.5, 3)
+    best = containment(red_v - band, ox_v + band, window)
+    worst = containment(red_v + band, ox_v - band, window)
     if not worst["fails"]:
         grade, action = "Robust Pass", "다음 단계로 진행"
     elif not best["fails"]:
         grade, action = "Borderline", "더 높은 정확도로 재계산하거나 실험을 우선하세요"
     else:
         grade, action = "Robust Fail", "탈락 — 또는 메커니즘 연구 대상"
-    return {
+    out = {
         "grade": grade,
         "action": action,
-        "uncertainty_v": uncertainty_v,
+        "uncertainty_v": band,
+        "method_uncertainty_v": uncertainty_v,
         "uncertainty_source": UNCERTAINTY_SOURCE,
-        "interval_v": [round(red_v - uncertainty_v, 3), round(red_v + uncertainty_v, 3)],
+        "interval_v": [round(red_v - band, 3), round(red_v + band, 3)],
         "point_verdict": containment(red_v, ox_v, window)["verdict"],
         "margin_v": round(lo - red_v, 3),
-        "note": (f"환원 전위 {red_v:+.2f} V ± {uncertainty_v:.2f} V 를 구동 범위 "
+        "note": (f"환원 전위 {red_v:+.2f} V ± {band:.2f} V 를 구동 범위 "
                  f"{window['low']:.2f}~{window['high']:.2f} V 와 대조한 결과입니다. "
                  "이 폭은 검증된 예측구간이 아니라 잠정값입니다."),
     }
+    if conformer_std_v:
+        out["conformer_std_v"] = round(float(conformer_std_v), 3)
+        out["note"] += (f" conformer 편차 σ {float(conformer_std_v):.2f} V 를 "
+                        f"잠정 폭 {uncertainty_v:.2f} V 와 제곱합으로 합성했습니다.")
+    return out

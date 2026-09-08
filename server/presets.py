@@ -137,21 +137,26 @@ WATER_SMD_FOR_MIX = [1.3328, 1.3323, 0.82, 0.35, 103.6, 78.355, 0.0, 0.0]
 #  - do_opt: DFT 구조 최적화 여부 (기체상, geomeTRIC/pyberny)
 #  - do_thermo: 진동수 계산 기반 열역학 보정 (ZPE·엔탈피·깁스, 설정 온도 반영)
 #  - basis_opt / basis_sp: 최적화·진동수 / 최종 단일점 basis
+#  - conf_sens: 전위 conformer 민감도 — 상위 몇 개 conformer 에서 IP/EA 를 다시 낼지
+#               (v2.0 P0-5. 0 이면 지배 conformer 한 값만)
 ACCURACY = {
     "빠름": {"n_conf": 5, "n_dft_rank": 1, "do_opt": False, "do_thermo": False,
-             "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-svp",
+             "ensemble": False, "conf_sens": 0,
+             "basis_opt": "def2-svp", "basis_sp": "def2-svp",
              "basis_anion": None,
              "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) · 음이온 diffuse 없음 — 사전 스크리닝"},
     "표준": {"n_conf": 15, "n_dft_rank": 3, "do_opt": True, "do_thermo": True,
-             "ensemble": False, "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
+             "ensemble": False, "conf_sens": 3,
+             "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
              "basis_anion": "ma-def2-tzvp",
              "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·qRRHO 열보정 "
-                     "+ 단일점(def2-TZVP) · 음이온 ma-def2-TZVP"},
+                     "+ 단일점(def2-TZVP) · 음이온 ma-def2-TZVP · 전위 conformer 민감도 3"},
     "정밀": {"n_conf": 30, "n_dft_rank": 5, "do_opt": True, "do_thermo": True,
-             "ensemble": True, "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
+             "ensemble": True, "conf_sens": 5,
+             "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
              "basis_anion": "def2-tzvpd",
              "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수(qRRHO)·"
-                     "단일점 def2-TZVP · 음이온 def2-TZVPD"},
+                     "단일점 def2-TZVP · 음이온 def2-TZVPD · 전위 conformer 민감도 5"},
 }
 
 # 범함수별 진동수 스케일 인자 (문헌 대표값 — 조화근사 과대평가 보정, basis 의존성 있음)
@@ -215,6 +220,7 @@ DEFAULT_SETTINGS = {
         "redoxAdiabatic": None,    # None → 구조 최적화 여부 따름 (단열 전위)
         "nonequilibriumSolvation": None,  # None → 용매 있는 수직 전위에 자동 적용
         "boltzmannEnsemble": None,        # None → 정확도 프리셋 값 (정밀에서 활성)
+        "conformerSensitivity": None,     # None → 정확도 프리셋 값 (표준 3 · 정밀 5 · 빠름 없음)
         "freqScale": None,                # None → 범함수별 문헌 스케일 인자
         "scfTol": 1e-8,
     },

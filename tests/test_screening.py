@@ -803,3 +803,73 @@ def test_stage_threshold_reaches_campaign_and_estimate():
     assert est["stages"][0]["threshold"] == -0.5
     assert est["stages"][1]["keep"] == 5
     assert est["total_s"] > 0
+
+
+# ---------------------------------------------------------------- conformer 민감도 판정 (v2.0 P0-5)
+def _sens(eas, ips, e_abs=1.44):
+    from server import confsens
+    members = [{"conformer": i + 1, "e_hartree": -100.0, "ea_ev": ea, "ip_ev": ip,
+                "dominant": i == 0} for i, (ea, ip) in enumerate(zip(eas, ips))]
+    return confsens.summarize(members, 298.15, "단열", e_abs)
+
+
+def test_judge_uses_range_when_conformer_spread_is_large():
+    """σ ≥ 0.20 V 면 단일값이 아니라 범위 전체로 판정한다."""
+    # 지배 conformer: 환원 −1.0 · 산화 5.0 → NCM811(3.0~4.3) 여유 0.7 → 단일값으로는 적합
+    base = {"reduction_potential_gibbs_v": -1.0, "oxidation_potential_gibbs_v": 5.0}
+    # 다른 conformer 의 IP 가 0.6 eV 낮다 → 산화 전위 범위 4.4~5.0, 최악 여유 0.1 < 0.3
+    desc = {**base, "conformer_sensitivity": _sens([0.44, 0.44, 0.44], [6.44, 5.84, 6.44])}
+    v = screening.judge(desc, ["ncm811"], 0.3)
+    assert v["grade"] == "조건부"
+    assert v["conformer_range"]["oxidation_v"] == [4.4, 5.0]
+    assert v["per_electrode"][0]["range_judged"] and v["per_electrode"][0]["margin_v"] == pytest.approx(0.1)
+    assert v["per_electrode"][0]["margin_best_v"] == pytest.approx(0.7)
+    assert "범위" in v["note"]
+    # 범위 전체가 여유를 넘으면 적합 — 산화 5.0~5.5 V
+    desc3 = {**base, "conformer_sensitivity": _sens([0.44, 0.44], [6.24, 6.74])}
+    assert screening.judge(desc3, ["ncm811"], 0.3)["grade"] == "적합"
+    # 지배 conformer 로는 부적합(산화 4.2 V)이라도 범위가 4.3 V 를 넘으면 조건부 —
+    # 구조 선택이 결론을 바꾸는 물질을 점추정 하나로 떨어뜨리지 않는다
+    low = {"reduction_potential_gibbs_v": -1.0, "oxidation_potential_gibbs_v": 4.2}
+    rescued = {**low, "conformer_sensitivity": _sens([0.44, 0.44], [6.44, 6.84])}
+    assert screening.judge(rescued, ["ncm811"], 0.3)["grade"] == "조건부"
+    # 범위 전체가 구동 범위를 침범해야 부적합 — 산화 3.8~4.2 V
+    desc2 = {**low, "conformer_sensitivity": _sens([0.44, 0.44], [6.44, 6.04])}
+    assert screening.judge(desc2, ["ncm811"], 0.3)["grade"] == "부적합"
+
+
+def test_judge_keeps_point_value_below_range_threshold():
+    """σ < 0.20 V 면 판정 값은 그대로 두고 편차 정보만 싣는다 (신뢰도는 scoring 몫)."""
+    base = {"reduction_potential_gibbs_v": -1.0, "oxidation_potential_gibbs_v": 5.0}
+    desc = {**base, "conformer_sensitivity": _sens([0.44, 0.64], [6.44, 6.44])}
+    v = screening.judge(desc, ["ncm811"], 0.3)
+    assert v["grade"] == "적합" and v["conformer_range"] is None
+    assert v["conformer_spread"]["rule"] == "downgrade"
+    assert "range_judged" not in v["per_electrode"][0]
+    # 민감도 정보가 없으면 예전과 완전히 같다
+    v0 = screening.judge(base, ["ncm811"], 0.3)
+    assert v0["conformer_range"] is None and v0["conformer_spread"] is None
+
+
+def test_cut_score_uses_conservative_end_of_range(no_worker, monkeypatch):
+    """범위 판정 대상은 컷 순위에서도 보수적인 끝값을 쓴다."""
+    monkeypatch.setattr(screening, "BATCH_PARALLEL", 10)
+    camp = _make_campaign(n=2, stages=[{"accuracy": "표준", "keep": 1}, {"accuracy": "정밀"}])
+    screening._advance(camp)
+    jobs = _stage_jobs(camp, 0)
+    # m0: 점추정 여유 0.7 이지만 conformer 범위로는 산화 4.4 → 여유 0.1
+    _fake_publish(jobs["m0"], -1.0, 5.0)
+    j0 = store.get_job(jobs["m0"])
+    j0["result"]["descriptors"]["reduction_potential_gibbs_v"] = -1.0
+    j0["result"]["descriptors"]["oxidation_potential_gibbs_v"] = 5.0
+    j0["result"]["descriptors"]["conformer_sensitivity"] = _sens([0.44, 0.44], [6.44, 5.84])
+    # m1: 점추정 여유 0.4, 편차 없음
+    _fake_publish(jobs["m1"], -1.0, 4.7)
+    j1 = store.get_job(jobs["m1"])
+    j1["result"]["descriptors"]["reduction_potential_gibbs_v"] = -1.0
+    j1["result"]["descriptors"]["oxidation_potential_gibbs_v"] = 4.7
+    c0 = next(c for c in camp["candidates"] if c["name"] == "m0")
+    c1 = next(c for c in camp["candidates"] if c["name"] == "m1")
+    assert screening._cut_score(c0, camp, 0) == pytest.approx(0.1)
+    assert screening._cut_score(c1, camp, 0) == pytest.approx(0.4)
+    assert screening._cut_score(c1, camp, 0) > screening._cut_score(c0, camp, 0)

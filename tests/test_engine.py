@@ -867,3 +867,127 @@ def test_convergence_thresholds_follow_property_type():
     # 쌍극자는 사슬 길이에 딸려 커지므로 절대 임계값으로 판정하지 않는다
     r = c.analyze_property("dipole_debye", [(2, 0.5), (3, 0.9), (5, 1.4)])
     assert r["status"] == "size_dependent" and "환산" in r["note"]
+
+
+# ---------------------------------------------------------------- conformer 민감도 (v2.0 P0-5)
+def test_resolve_params_conformer_sensitivity_presets():
+    """표준 3 · 정밀 5 · 빠름 0 — 켜면 재순위 수가 그만큼은 돼야 한다."""
+    assert _resolve_params(_settings(accuracy="빠름"))["conf_sens"] == 0
+    p = _resolve_params(_settings(accuracy="표준"))
+    assert p["conf_sens"] == 3 and p["n_dft_rank"] == 3
+    p = _resolve_params(_settings(accuracy="정밀"))
+    assert p["conf_sens"] == 5 and p["n_dft_rank"] == 5
+    # 빠름에서 켜면 최소 3 — 재순위 후보도 1 → 3 으로 늘어난다
+    p = _resolve_params(_settings(accuracy="빠름", expert={"conformerSensitivity": True}))
+    assert p["conf_sens"] == 3 and p["n_dft_rank"] == 3
+    # 표준에서 끄면 0 이고 재순위 수는 프리셋 그대로
+    p = _resolve_params(_settings(accuracy="표준", expert={"conformerSensitivity": False}))
+    assert p["conf_sens"] == 0 and p["n_dft_rank"] == 3
+
+
+def _sens_members(eas, ips, rel_kcal=None):
+    """테스트용 conformer 목록 — 첫 항목이 지배 conformer."""
+    rel = rel_kcal or [0.0] * len(eas)
+    return [{"conformer": i + 1, "e_hartree": -100.0 + r / 627.5095,
+             "ea_ev": ea, "ip_ev": ip, "dominant": i == 0}
+            for i, (ea, ip, r) in enumerate(zip(eas, ips, rel))]
+
+
+def test_confsens_rules_follow_spread_thresholds():
+    """σ < 0.10 유지 · 0.10~0.20 하향 · ≥ 0.20 범위 판정 (기획서 3.6)."""
+    from server import confsens
+    tight = confsens.summarize(_sens_members([0.50, 0.52, 0.48], [6.4, 6.42, 6.41]), 298.15, "단열", 1.44)
+    assert tight["rule"] == "ok" and tight["spread_v"] < 0.10
+    assert tight["n_conformers"] == 3 and tight["reduction_v"]["min"] == pytest.approx(-0.96, abs=1e-3)
+    mid = confsens.summarize(_sens_members([0.50, 0.75, 0.50], [6.4, 6.4, 6.4]), 298.15, "단열", 1.44)
+    assert mid["rule"] == "downgrade" and 0.10 <= mid["spread_v"] < 0.20
+    wide = confsens.summarize(_sens_members([0.50, 1.00, 0.50], [6.4, 6.4, 6.4]), 298.15, "단열", 1.44)
+    assert wide["rule"] == "range_only" and wide["spread_v"] >= 0.20
+    # 범위 판정 오프셋은 지배 conformer 대비 — 판정 전위에 그대로 더해 쓴다
+    rng = confsens.judgement_range(wide)
+    assert rng["red"] == (0.0, 0.5) and rng["ox"] == (0.0, 0.0)
+    assert confsens.judgement_range(mid) is None
+    # 산화 쪽 편차만 커도 규칙은 작동한다 (σ 는 두 축의 최댓값)
+    ox_wide = confsens.summarize(_sens_members([0.5, 0.5], [6.0, 6.6]), 298.15, "수직", 1.44)
+    assert ox_wide["rule"] == "range_only" and ox_wide["spread_v"] == pytest.approx(0.30, abs=1e-3)
+    # 비교 대상이 하나면 편차를 낼 수 없다 — «없다»가 아니라 «미산출»
+    single = confsens.summarize(_sens_members([0.5], [6.4]), 298.15, "단열", 1.44)
+    assert single["rule"] == "n/a" and "spread_v" not in single
+
+
+def test_confsens_population_weights_follow_energy():
+    """Boltzmann 평균은 낮은 에너지 conformer 쪽으로 쏠려야 한다."""
+    from server import confsens
+    # 두 번째 conformer 가 3 kcal/mol 높다 — 298 K 에서 분포 0.6 % 수준
+    s = confsens.summarize(_sens_members([0.5, 1.5], [6.4, 6.4], rel_kcal=[0.0, 3.0]),
+                           298.15, "단열", 1.44)
+    pops = [m["population_pct"] for m in s["members"]]
+    assert pops[0] > 99 and s["ea_ev"]["boltzmann"] < 0.51
+    assert s["ea_ev"]["std"] == pytest.approx(0.5)   # 편차 자체는 분포와 무관
+
+
+def test_hard_gate_widens_with_conformer_std():
+    """구조 편차가 크면 같은 점추정도 Borderline 으로 가야 한다."""
+    from server.esw import ELECTRODE_BY_KEY, gate_with_uncertainty
+    gr = ELECTRODE_BY_KEY["graphite"]
+    assert gate_with_uncertainty(-0.30, 5.0, gr)["grade"] == "Robust Pass"
+    g = gate_with_uncertainty(-0.30, 5.0, gr, conformer_std_v=0.25)
+    assert g["grade"] == "Borderline"
+    assert g["uncertainty_v"] == pytest.approx((0.25 ** 2 + 0.25 ** 2) ** 0.5, abs=1e-3)
+    assert g["method_uncertainty_v"] == 0.25 and g["conformer_std_v"] == 0.25
+
+
+def test_confidence_model_axis_reads_conformer_spread():
+    """편차가 결과에 실리면 scoring 이 Model 축에 반영해야 한다."""
+    from server import scoring
+    base = {"zpe_kcal": 50.0, "n_imaginary_freqs": 0, "reduction_potential_gibbs_v": -1.0,
+            "basis_anion": "ma-def2-tzvp"}
+    by = lambda d: {a["key"]: a["level"] for a in scoring.confidence_detail(None, d)["axes"]}
+    assert by(base)["model"] == "Medium"                                    # 단일 구조
+    assert by({**base, "conformer_spread_v": 0.05})["model"] == "Medium"    # 편차 작음 — 올리진 않는다
+    assert by({**base, "conformer_spread_v": 0.15})["model"] == "Medium"
+    assert by({**base, "conformer_spread_v": 0.25})["model"] == "Low"
+    _, why = scoring.confidence_of(None, {**base, "conformer_spread_v": 0.25})
+    assert "conformer" in why
+
+
+def test_protocol_hash_changes_only_when_sensitivity_is_on():
+    """민감도는 프로토콜의 일부지만, 꺼진 결과의 기존 해시는 흔들리면 안 된다."""
+    from server import protocol
+    s = _settings(accuracy="표준")
+    off = protocol.card(s, {**_resolve_params(s), "conf_sens": 0})
+    absent = protocol.card(s, {k: v for k, v in _resolve_params(s).items() if k != "conf_sens"})
+    on = protocol.card(s, _resolve_params(s))
+    assert off["protocol_hash"] == absent["protocol_hash"]
+    assert on["protocol_hash"] != off["protocol_hash"]
+    assert on["conformer_sensitivity"] == 3 and "conformer_sensitivity" not in off
+
+
+def test_run_job_conformer_sensitivity_real_scf():
+    """실제 SCF — 에틸렌글리콜(gauche/anti)에서 conformer 별 수직 IP/EA 를 낸다."""
+    job = {
+        "id": "TEST-CONFSENS",
+        "material": {"id": None, "name": "ethylene glycol", "smiles": "OCCO"},
+        "settings": _settings(
+            envType="진공·기체", solventId=None, accuracy="빠름",
+            purpose="전자구조 + 산화/환원 전위",
+            expert={"basis": "sto-3g", "nConformers": 8, "conformerSensitivity": True},
+        ),
+        "logs": [],
+    }
+    state = {}
+    run_job(job, update=state.update)
+    assert state["status"] == "PUBLISHED", state.get("error")
+    d = state["result"]["descriptors"]
+    s = d["conformer_sensitivity"]
+    assert s["basis"] == "수직" and s["n_conformers"] >= 2
+    assert sum(1 for m in s["members"] if m["dominant"]) == 1
+    assert all("ea_ev" in m and "reduction_v" in m for m in s["members"])
+    assert d["conformer_spread_v"] == s["spread_v"] >= 0
+    assert s["rule"] in ("ok", "downgrade", "range_only")
+    # 지배 conformer 의 값은 주 결과와 같아야 한다 — 같은 함수를 탔다는 증거
+    dom = next(m for m in s["members"] if m["dominant"])
+    assert dom["ea_ev"] == d["ea_vertical_ev"] and dom["ip_ev"] == d["ip_vertical_ev"]
+    assert state["result"]["provenance"]["n_conformers_redox_sensitivity"] == 3
+    assert state["result"]["protocol_card"]["conformer_sensitivity"] == 3
+    assert any("conformer 민감도" in n for n in state["result"]["notes"])

@@ -27,7 +27,7 @@ from pathlib import Path
 
 from rdkit import Chem
 
-from . import esw, geometry, presets, scoring, store, worker
+from . import confsens, esw, geometry, presets, scoring, store, worker
 
 DATA_DIR = Path(os.environ.get(
     "RHOBENCH_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
@@ -240,9 +240,34 @@ def judge(desc: dict, electrodes: list[str], margin_v: float,
         return {"grade": "판정 불가", "per_electrode": [], "worst_margin_v": None,
                 "reduction_v": red, "oxidation_v": ox, "basis": None,
                 "note": "산화·환원 전위가 없어 판정할 수 없습니다"}
+
+    # conformer 민감도 (v2.0 P0-5). 편차가 0.20 V 이상이면 단일값이 아니라
+    # «범위»로 판정한다 — 범위 전체가 여유를 넘어야 적합, 범위 전체가 침범해야
+    # 부적합, 걸치면 조건부. 그 아래 편차는 신뢰도 축(scoring)에서 다룬다.
+    sens = desc.get("conformer_sensitivity") or {}
+    rng = confsens.judgement_range(sens)
+    conformer_range = None
+    if rng:
+        conformer_range = {
+            "reduction_v": [round(red + rng["red"][0], 3), round(red + rng["red"][1], 3)],
+            "oxidation_v": [round(ox + rng["ox"][0], 3), round(ox + rng["ox"][1], 3)],
+            "spread_v": rng["spread_v"], "n_conformers": rng["n_conformers"],
+        }
     per = []
     for key in electrodes:
         win = (windows or esw.ELECTRODE_BY_KEY)[key]
+        if conformer_range:
+            r_lo, r_hi = conformer_range["reduction_v"]
+            o_lo, o_hi = conformer_range["oxidation_v"]
+            m_worst = round(min(win["low"] - r_hi, o_lo - win["high"]), 3)
+            m_best = round(min(win["low"] - r_lo, o_hi - win["high"]), 3)
+            grade = ("적합" if m_worst >= margin_v
+                     else "부적합" if m_best < 0 else "조건부")
+            per.append({"electrode": key, "label": win["label"], "side": win["side"],
+                        "window": [win["low"], win["high"]],
+                        "margin_v": m_worst, "margin_best_v": m_best,
+                        "grade": grade, "range_judged": True})
+            continue
         m = round(min(win["low"] - red, ox - win["high"]), 3)
         grade = "적합" if m >= margin_v else ("조건부" if m >= 0 else "부적합")
         per.append({"electrode": key, "label": win["label"], "side": win["side"],
@@ -259,6 +284,16 @@ def judge(desc: dict, electrodes: list[str], margin_v: float,
     if basis == "수직":
         note = ("수직 전위 기반 — 구조 완화·열보정이 빠져 환원 위험을 낮잡을 수 "
                 "있습니다. 표준·정밀 단계 재확인을 권장합니다.")
+    if conformer_range:
+        rn = (f"conformer 편차 σ {conformer_range['spread_v']:.2f} V ≥ 0.20 V — "
+              f"{conformer_range['n_conformers']}개 conformer 의 전위 범위 "
+              f"(환원 {conformer_range['reduction_v'][0]:+.2f}~{conformer_range['reduction_v'][1]:+.2f} V)로 "
+              "판정했습니다. 범위 전체가 여유를 넘어야 적합입니다.")
+        note = rn if note is None else note + " " + rn
+    conformer_spread = None
+    if sens.get("spread_v") is not None:
+        conformer_spread = {"spread_v": sens["spread_v"], "rule": sens.get("rule"),
+                            "n_conformers": sens.get("n_conformers")}
 
     # LUMO 불일치 경고 — 수직 EA 판정은 «안전»인데 LUMO 소박 추정
     # (−LUMO − E_abs)은 구동 범위를 침범하는 경우. 수직 EA는 음이온의 구조
@@ -300,7 +335,8 @@ def judge(desc: dict, electrodes: list[str], margin_v: float,
                                       + lumo_check["note"])
     return {"grade": grade, "per_electrode": per, "worst_margin_v": worst,
             "reduction_v": red, "oxidation_v": ox, "basis": basis, "note": note,
-            "lumo_check": lumo_check}
+            "lumo_check": lumo_check,
+            "conformer_range": conformer_range, "conformer_spread": conformer_spread}
 
 
 # ---------------------------------------------------------------- 캠페인
@@ -433,7 +469,8 @@ def _relevant(settings: dict) -> tuple:
             round(float(settings.get("temperature", 298.15)), 2),
             settings.get("referenceElectrode"), settings.get("envType"),
             exp.get("functional"), exp.get("basis"),
-            exp.get("charge", 0), exp.get("multiplicity", 1))
+            exp.get("charge", 0), exp.get("multiplicity", 1),
+            exp.get("conformerSensitivity"))
 
 
 def _find_cached(canonical: str, settings: dict):
@@ -547,6 +584,10 @@ def _cut_score(c: dict, camp: dict, stage_idx: int):
     if (desc.get("reduction_potential_gibbs_v") is None
             and desc.get("ea_adiabatic_ev") is None):
         red = red + VERTICAL_RED_BUFFER
+    # 범위 판정 대상(P0-5)은 컷 순위에서도 보수적인 끝값을 쓴다 — judge 와 같은 원칙
+    rng = confsens.judgement_range(desc.get("conformer_sensitivity"))
+    if rng:
+        red, ox = red + rng["red"][1], ox + rng["ox"][0]
     wins = _windows(camp)
     return min(min(wins[e]["low"] - red, ox - wins[e]["high"])
                for e in camp["electrodes"])

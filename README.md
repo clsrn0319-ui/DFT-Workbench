@@ -330,6 +330,27 @@ SMILES 대신 3D 구조 파일을 올릴 수 있습니다 — 단건(DFT 계산 
 - `RHOBENCH_BATCH_FAIL_RATIO` (기본 0.3) — 자동 일시정지 실패율 임계
 - 판정은 열역학적 스크리닝 — SEI/CEI 동역학 미포함 (화면에 명시)
 
+### 전위 conformer 민감도 (v2.0 개정 기획서 P0-5 · 3.6)
+
+표준·정밀 정확도는 지배 conformer 한 값으로 전위를 내지 않는다. DFT 재순위
+상위 conformer(표준 3 · 정밀 5, 지배 conformer 대비 5 kcal/mol 창 안) 각각에서
+**같은 경로(수직 → 단열)로 IP/EA 를 다시 계산**해 전위 편차 σ 를 낸다.
+
+| 편차 σ | 처리 |
+|---|---|
+| < 0.10 V | 단일값 판정 유지 |
+| 0.10 ~ 0.20 V | 5축 신뢰도의 Molecular Model 축을 Medium 으로 하향 |
+| ≥ 0.20 V | 단일값 대신 **범위**로 판정 — 범위 전체가 여유를 넘어야 적합, 전체가 침범해야 부적합, 걸치면 조건부. 깔때기 컷 순위도 보수적인 끝값 사용 |
+
+- 결과의 `descriptors.conformer_sensitivity` 에 conformer 별 ΔE·분포·전위, σ, 규칙을 기록하고
+  `conformer_spread_v` 를 단독 키로도 둔다. 화면에서는 «전위 conformer 민감도» 표로 보인다
+- 불확실성 Hard Gate(`/api/esw/gate`)는 σ 를 잠정 폭 0.25 V 와 제곱합으로 합성해 구간을 넓힌다
+- 열보정(ΔG)은 지배 conformer 에서만 — 다른 conformer 의 차이는 전자 IP/EA 오프셋으로 옮겨 붙인다
+- 이온 구조는 각 중성 conformer 에서 재최적화한 것이며, 이온 상태 자체의 독립 conformer 탐색은 아직 없다
+- 전문가 설정 «전위 conformer 민감도»로 끄거나(지배 conformer 한 값) 빠름에서도 켤 수 있다.
+  켜져 있을 때만 protocol_card 에 `conformer_sensitivity` 가 들어가 해시가 달라진다
+- 0.10 / 0.20 V 는 기획서 3.6 의 초기 운영값 — 벤치마크 후 조정 대상
+
 ## 물성 지문 (확장 기술자)
 
 목적을 "물성 지문 (확장 기술자 전체)"으로 두면 아래가 추가로 계산되고, 결과
@@ -406,11 +427,11 @@ SMILES 대신 3D 구조 파일을 올릴 수 있습니다 — 단건(DFT 계산 
 
 ## 정확도 프리셋
 
-| 프리셋 | conformer (DFT 재순위) | 구조 최적화 | 열보정 | 최종 basis | 용도 |
-|---|---|---|---|---|---|
-| 빠름 | 5 (1) | MMFF만 | — | def2-SVP | 사전 스크리닝 (분자당 수십 초) |
-| 표준 | 15 (3) | DFT(def2-SVP) | ✓ | def2-TZVP | 권장 연구용 (분자당 수 분~수십 분) |
-| 정밀 | 30 (5) | DFT(def2-TZVP) | ✓ | def2-TZVP | 최종 확인 |
+| 프리셋 | conformer (DFT 재순위) | 구조 최적화 | 열보정 | 최종 basis | 전위 conformer 민감도 | 용도 |
+|---|---|---|---|---|---|---|
+| 빠름 | 5 (1) | MMFF만 | — | def2-SVP | — | 사전 스크리닝 (분자당 수십 초) |
+| 표준 | 15 (3) | DFT(def2-SVP) | ✓ | def2-TZVP | 3 | 권장 연구용 (분자당 수 분~수십 분, 민감도로 전위 부분이 최대 3배) |
+| 정밀 | 30 (5) | DFT(def2-TZVP) | ✓ | def2-TZVP | 5 | 최종 확인 |
 
 범함수는 PBE0-D3(BJ) 기본, B3LYP-D3(BJ)/PBE-D3(BJ)/M06-2X/HF 선택 가능.
 전문가 설정에서 전하·스핀 다중도·basis·conformer 수·구조 최적화·열보정·

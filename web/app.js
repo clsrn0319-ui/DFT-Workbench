@@ -315,6 +315,7 @@ async function submit() {
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
         nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
+        conformerSensitivity: $("conf-sens").value === "" ? null : $("conf-sens").value === "true",
         optimizeInSolvent: $("opt-solvent").value === "true",
         bdeRelaxFragments: $("bde-relax").value === "" ? null : $("bde-relax").value === "true",
         bdeThermalCorrection: $("bde-thermal").value === "" ? null : $("bde-thermal").value === "true",
@@ -577,6 +578,9 @@ const DESC_LABELS = {
   reduction_potential_v: ["환원 전위", "V"],
   oxidation_potential_gibbs_v: ["산화 전위 (ΔG 기반)", "V"],
   reduction_potential_gibbs_v: ["환원 전위 (ΔG 기반)", "V"],
+  conformer_spread_v: ["conformer 간 전위 편차 σ (최대)", "V"],
+  reduction_potential_conf_std_v: ["환원 전위 conformer 편차 σ", "V"],
+  oxidation_potential_conf_std_v: ["산화 전위 conformer 편차 σ", "V"],
 };
 
 let CURRENT_RESULT = null;
@@ -633,6 +637,40 @@ function svgEswBar(red, ox, ref) {
   return sv + "</svg>";
 }
 
+
+/* conformer 민감도 (v2.0 P0-5) — conformer 별 전위와 편차·판정 규칙 */
+function htmlConfSens(s, ref) {
+  if (!s) return "";
+  const badge = {ok: "verdict-ok", downgrade: "verdict-mid", range_only: "verdict-no"}[s.rule] || "queued";
+  if (!Array.isArray(s.members) || s.members.length < 2) {
+    return `<p class="muted small" style="margin:4px 0 0">${esc(s.note || "")}</p>`;
+  }
+  const hasV = s.members[0].reduction_v != null;
+  const rows = s.members.map(m => `<tr${m.dominant ? ' style="font-weight:600"' : ""}>
+      <td>#${m.conformer}${m.dominant ? " (지배)" : ""}</td>
+      <td class="num">+${(+m.rel_e_kcal).toFixed(2)}</td>
+      <td class="num">${m.population_pct}%</td>
+      <td class="num">${hasV ? (+m.reduction_v).toFixed(3) : (+m.ea_ev).toFixed(3)}</td>
+      <td class="num">${hasV ? (+m.oxidation_v).toFixed(3) : (+m.ip_ev).toFixed(3)}</td></tr>`).join("");
+  const red = hasV ? s.reduction_v : s.ea_ev, ox = hasV ? s.oxidation_v : s.ip_ev;
+  const unit = hasV ? `V vs ${esc(ref || "Li/Li⁺")}` : "eV";
+  return `<div class="scroll-x"><table class="table" style="min-width:420px">
+      <tr><th>conformer</th><th class="num">ΔE (kcal/mol)</th><th class="num">분포</th>
+        <th class="num">${hasV ? "환원 전위" : "EA"} (${unit})</th>
+        <th class="num">${hasV ? "산화 전위" : "IP"} (${unit})</th></tr>
+      ${rows}
+      <tr class="muted small"><td>범위 (min~max)</td><td></td><td></td>
+        <td class="num">${(+red.min).toFixed(2)}~${(+red.max).toFixed(2)}</td>
+        <td class="num">${(+ox.min).toFixed(2)}~${(+ox.max).toFixed(2)}</td></tr>
+      <tr class="muted small"><td>Boltzmann 평균</td><td></td><td></td>
+        <td class="num">${(+red.boltzmann).toFixed(3)}</td><td class="num">${(+ox.boltzmann).toFixed(3)}</td></tr>
+      <tr><td><b>편차 σ</b></td><td></td><td></td>
+        <td class="num"><b>${(+red.std).toFixed(3)}</b></td><td class="num"><b>${(+ox.std).toFixed(3)}</b></td></tr>
+    </table></div>
+    <p class="small" style="margin:6px 0 0"><span class="badge ${badge}">σ ${(+s.spread_v).toFixed(2)} V · ${esc(s.rule_label || "")}</span></p>
+    <p class="muted small" style="margin:4px 0 0">${esc(s.note || "")} ${esc(s.basis)} IP/EA 기준 ·
+      ${s.window_kcal} kcal/mol 창 안의 conformer 만 대상 · 기준 0.10/0.20 V 는 기획서 3.6 초기 운영값</p>`;
+}
 
 function svgPops(pops) {
   const W = 340, rowH = 24, H = pops.length * rowH + 6;
@@ -1291,8 +1329,14 @@ function showResult(job) {
         Conformer Boltzmann 분포 (상대 에너지 kcal/mol)</h3>
       ${svgPops(d.conformer_populations)}`;
   }
+  if (d.conformer_sensitivity) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        전위 conformer 민감도 (P0-5)</h3>
+      ${htmlConfSens(d.conformer_sensitivity, ref)}`;
+  }
 
   const shown = new Set(["potential_reference", "conformer_populations",
+                         "conformer_sensitivity",
                          "mep_points", "surface_adsorption", "bde_all",
                          "bde_weakest_bond"]);
   const ordered = [...PINNED, ...KV_GROUPS.flatMap(g => g[1]), ...Object.keys(d)];
@@ -3426,7 +3470,12 @@ async function scrRenderDetail() {
           ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}${vd.basis === "수직"
             ? `<span class="muted small" title="${esc(vd.note || "")}"> · 수직</span>` : ""}${vd.lumo_check
             ? `<br><span class="badge failed" style="border:1px solid currentColor"
-                 title="${esc(vd.lumo_check.note)}">⚠ LUMO 불일치</span>` : ""}</td>
+                 title="${esc(vd.lumo_check.note)}">⚠ LUMO 불일치</span>` : ""}${vd.conformer_range
+            ? `<br><span class="badge failed" style="border:1px solid currentColor"
+                 title="${esc(vd.note || "")}">범위 판정 σ ${(+vd.conformer_range.spread_v).toFixed(2)} V</span>`
+            : vd.conformer_spread?.rule === "downgrade"
+            ? `<br><span class="muted small" title="conformer 간 전위 편차 — Model 신뢰도 하향">σ ${(+vd.conformer_spread.spread_v).toFixed(2)} V</span>`
+            : ""}</td>
         ${v.scoring?.enabled ? (() => {
           const sc = cd.score;
           if (!sc || sc.total == null) return '<td class="muted small">—</td><td></td>';
@@ -3876,8 +3925,9 @@ let WIZ_CUSTOM = false;      // 프리셋 값을 사용자가 손댔는가
 const WIZ_PRESET_NOTE = {
   "빠름": "1차(빠름)만 실행 — 수직 전위 중심이라 환원 위험을 낮잡습니다. " +
           "우선순위 분류용이며 최종 탈락 확정에 쓰지 마세요.",
-  "표준": "1차 → 2차(표준) — 구조 최적화·단열/ΔG 전위·열보정까지. 본 판정 수준입니다.",
-  "정밀": "1차 → 2차 → 3차(정밀) — diffuse 기저와 앙상블까지. 계산 시간이 크게 늘어납니다.",
+  "표준": "1차 → 2차(표준) — 구조 최적화·단열/ΔG 전위·열보정에 conformer 3개 전위 민감도(σ)까지. " +
+          "본 판정 수준이며, σ ≥ 0.20 V 인 후보는 단일값 대신 범위로 판정합니다.",
+  "정밀": "1차 → 2차 → 3차(정밀) — diffuse 기저·앙상블·conformer 5개 민감도까지. 계산 시간이 크게 늘어납니다.",
 };
 
 async function wizProtocol() {

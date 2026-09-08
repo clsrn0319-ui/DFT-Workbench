@@ -989,6 +989,13 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
             <option value="true">적용 (유의 conformer 가중 평균)</option>
             <option value="false">지배 conformer만</option>
           </select></div>
+        <div class="field"><span class="field-label">전위 conformer 민감도</span>
+          <select class="input" id="conf-sens"
+            title="상위 conformer 각각에서 IP/EA 를 다시 내어 전위 편차 σ 를 냅니다 (v2.0 P0-5). σ ≥ 0.10 V 면 Model 신뢰도 하향, ≥ 0.20 V 면 범위로만 판정. 전위 계산량이 conformer 수만큼 늘어납니다.">
+            <option value="">(정확도 프리셋 — 표준 3 · 정밀 5)</option>
+            <option value="true">적용 (최소 3개)</option>
+            <option value="false">끔 (지배 conformer 한 값)</option>
+          </select></div>
       </div>
     </details>
     <div class="form-error" id="form-error"></div>
@@ -1352,7 +1359,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
             <em>저비용 기저 · 수직 전위 — 최종 탈락 확정에 쓰지 않음</em></button>
           <button type="button" class="wiz-preset selected" data-preset="표준">
             <b>Standard</b><span>본 screening</span>
-            <em>구조 최적화 · 단열/ΔG 전위 · 열보정</em></button>
+            <em>구조 최적화 · 단열/ΔG 전위 · 열보정 · conformer 민감도 σ</em></button>
           <button type="button" class="wiz-preset" data-preset="정밀">
             <b>Accurate</b><span>상위 후보 검증</span>
             <em>diffuse 기저 · 앙상블 · 최종 후보용</em></button>
@@ -1412,8 +1419,10 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
           <ul class="log-list">
             <li><b>A. Polymer Model</b> — 공중합체 서열·택티시티·치환도(DS). 현재는 단일 반복 단위와
               올리고머 길이만 다룹니다.</li>
-            <li><b>B. Conformer 상세</b> — 에너지 창·RMSD cutoff·전하 상태별 앙상블. 현재는 정확도
-              프리셋의 conformer 수만 조정됩니다.</li>
+            <li><b>B. Conformer 상세</b> — RMSD cutoff·전하 상태별 독립 conformer 탐색은 미구현.
+              상위 conformer 별 전위 민감도(σ, 표준 3·정밀 5, 5 kcal/mol 창)는 구현되어 판정·신뢰도에
+              반영됩니다. 이온 구조는 각 중성 conformer 에서 재최적화한 것이며, 이온 상태 자체의
+              conformer 탐색은 아직 하지 않습니다.</li>
             <li><b>H. Li⁺ 상호작용</b> — 용매 경쟁 반응(ΔG_exchange)·배위수 앙상블. 현재는 고립 Li⁺
               결합 에너지만 산출되며, 이는 탈용매화 비용을 무시해 trapping 을 과대평가합니다.</li>
           </ul>

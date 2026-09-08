@@ -27,6 +27,7 @@ from pyscf.hessian import thermo as pyscf_thermo
 from pyscf.solvent import smd
 
 from . import binder as binder_mod
+from . import confsens
 from . import descriptors as desc_mod
 from . import presets
 from . import protocol as protocol_mod
@@ -102,9 +103,20 @@ def _resolve_params(settings):
     do_thermo = acc["do_thermo"] if exp.get("thermochemistry") is None else bool(exp["thermochemistry"])
     # 단열 전위는 구조 최적화가 켜져 있을 때 기본 활성 (이온 상태 재최적화 필요)
     redox_adiabatic = do_opt if exp.get("redoxAdiabatic") is None else bool(exp["redoxAdiabatic"])
+    # 전위 conformer 민감도 (v2.0 P0-5) — 상위 몇 개 conformer 에서 IP/EA 를 다시 낼지.
+    # None 이면 프리셋(표준 3·정밀 5), True 면 최소 3, False 면 끔.
+    sens_pref = exp.get("conformerSensitivity")
+    conf_sens = int(acc.get("conf_sens", 0))
+    if sens_pref is True:
+        conf_sens = max(conf_sens, 3)
+    elif sens_pref is False:
+        conf_sens = 0
+    # 민감도를 낼 conformer 는 DFT 재순위 후보 안에서 고르므로 재순위 수가 그만큼은 돼야 한다
+    n_dft_rank = max(acc["n_dft_rank"], conf_sens) if conf_sens else acc["n_dft_rank"]
     return {
         "n_conf": exp.get("nConformers") or acc["n_conf"],
-        "n_dft_rank": acc["n_dft_rank"],
+        "n_dft_rank": n_dft_rank,
+        "conf_sens": conf_sens,
         "do_opt": do_opt,
         "do_thermo": do_thermo,
         "redox_adiabatic": redox_adiabatic,
@@ -346,6 +358,7 @@ def _provenance(params, settings, solvent_key):
         "n_conformers_searched": params["n_conf"],
         "n_conformers_dft_ranked": params["n_dft_rank"],
         "boltzmann_ensemble": params["ensemble"],
+        "n_conformers_redox_sensitivity": params.get("conf_sens", 0),
         "thermochemistry": params["do_thermo"],
         "freq_scale_factor": params["freq_scale"],
         "nonequilibrium_solvation": params["noneq"],
@@ -464,6 +477,100 @@ def _frontier_orbitals(mf):
     virtuals = mo_e[mo_occ == 0]
     lumo = float(virtuals.min() * HARTREE2EV) if virtuals.size else None
     return homo, lumo
+
+
+def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage,
+                      prog=66, tag=""):
+    """한 구조의 전자 IP/EA — 수직 ΔSCF, 켜져 있으면 단열까지. 열보정은 밖에서 한다.
+
+    지배 conformer 와 민감도용 conformer(P0-5)가 «같은 경로»를 타야 둘의 차이가
+    구조 차이만 반영한다. 그래서 주 경로와 민감도 경로가 이 함수 하나를 공유한다.
+
+    반환 dict:
+      ip_vertical_ev · ea_vertical_ev · basis_anion · noneq_skipped · use_noneq
+      (+ 단열) ip_adiabatic_ev · ea_adiabatic_ev · e_cation_adiabatic · e_anion_adiabatic
+               · cation_atoms · anion_atoms
+    """
+    use_noneq = params["noneq"] and solvent_key is not None
+    dm_neutral = mf_neutral.make_rdm1() if use_noneq else None
+
+    # 음이온·EA·환원 전위는 diffuse 기저에 민감하다 (v2.0 P0-1).
+    # 여분의 확산 함수가 없으면 여분 전자를 담을 자리가 부족해 EA 가
+    # 낮게 나온다. 음이온에만 diffuse 기저를 쓰고, 어떤 기저를 썼는지
+    # 결과에 남긴다.
+    def _basis_for(dq):
+        if dq < 0 and params.get("basis_anion"):
+            return params["basis_anion"]
+        return params["basis_sp"]
+
+    noneq_skipped = []
+    ref_cache = {}
+
+    # 서로 다른 기저의 절대 에너지를 빼면 안 된다. 음이온에 diffuse 기저를
+    # 쓰면 «중성 기준 에너지»도 그 기저에서 다시 계산해야 EA 가 의미를 갖는다.
+    # (이 보정 없이 sto-3g 중성 − def2-SVPD 음이온을 빼면 EA 가 28 eV 로
+    #  나온다 — 기저 불완전성 차이가 그대로 EA 에 실린다.)
+    def _neutral_ref(dq):
+        basis_i = _basis_for(dq)
+        if basis_i == params["basis_sp"]:
+            return e_neutral
+        if basis_i not in ref_cache:
+            log(f"중성 기준 에너지를 {basis_i} 에서 재계산 (EA 기저 정합){tag}")
+            mol_n = _build_mol(at, basis_i, params["charge"], params["multiplicity"])
+            ref_cache[basis_i] = _run_scf(
+                _make_mf(mol_n, params["xc"], params["disp"], solvent_key,
+                         params["scf_tol"]), f"중성({basis_i}){tag}", log)
+        return ref_cache[basis_i]
+
+    def ion_vertical(dq, label, p):
+        stage(f"{label} (수직 ΔSCF){tag}", p)
+        basis_i = _basis_for(dq)
+        mol_i = _build_mol(at, basis_i, params["charge"] + dq, 2)
+        mf_i = _make_mf(mol_i, params["xc"], params["disp"], solvent_key, params["scf_tol"])
+        # 동결 용매장과 초기 밀도는 «같은 기저»에서만 쓸 수 있다.
+        # 음이온에 diffuse 기저를 쓰면 행렬 크기가 달라 재사용이 불가능하다.
+        same_basis = basis_i == params["basis_sp"]
+        if use_noneq and same_basis:
+            _freeze_solvent_from(mf_i, dm_neutral)
+            return _run_scf(mf_i, f"{label}(비평형){tag}", log,
+                            dm0=(dm_neutral / 2, dm_neutral / 2))
+        if use_noneq and not same_basis:
+            noneq_skipped.append(label)
+        return _run_scf(mf_i, f"{label}{tag}", log)
+
+    e_cat_v = ion_vertical(+1, "양이온", prog)
+    e_an_v = ion_vertical(-1, "음이온", prog + 4)
+    out = {
+        "ip_vertical_ev": (e_cat_v - _neutral_ref(+1)) * HARTREE2EV,
+        "ea_vertical_ev": (_neutral_ref(-1) - e_an_v) * HARTREE2EV,
+        "basis_anion": _basis_for(-1),
+        "noneq_skipped": noneq_skipped,
+        "use_noneq": use_noneq,
+    }
+    if params["redox_adiabatic"]:
+        def ion_adiabatic(dq, label, p):
+            """이온 상태 재최적화 → 용매 SP."""
+            stage(f"{label} 구조 재최적화 (단열){tag}", p)
+            ion_atoms = _optimize_state(at, params, params["charge"] + dq, 2,
+                                        log, label=f" ({label}){tag}")
+            mol_i = _build_mol(ion_atoms, _basis_for(dq), params["charge"] + dq, 2)
+            e_i = _run_scf(
+                _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
+                         params["scf_tol"]),
+                f"{label}(단열){tag}", log)
+            return e_i, ion_atoms
+
+        e_cat_a, cat_atoms = ion_adiabatic(+1, "양이온", prog + 8)
+        e_an_a, an_atoms = ion_adiabatic(-1, "음이온", prog + 14)
+        out.update({
+            "ip_adiabatic_ev": (e_cat_a - _neutral_ref(+1)) * HARTREE2EV,
+            "ea_adiabatic_ev": (_neutral_ref(-1) - e_an_a) * HARTREE2EV,
+            "e_cation_adiabatic": e_cat_a,
+            "e_anion_adiabatic": e_an_a,
+            "cation_atoms": cat_atoms,
+            "anion_atoms": an_atoms,
+        })
+    return out
 
 
 def run_job(job, update, is_cancelled=lambda: False):
@@ -609,6 +716,10 @@ def run_job(job, update, is_cancelled=lambda: False):
             return at, mol_, mf_, e_, homo_, lumo_, dip_
 
         ensemble_avg = None
+        # conformer 민감도(P0-5)가 재사용할 «재순위 번호 → 최종 단일점 결과» 캐시와
+        # 지배 conformer 의 재순위 번호. 앙상블 경로에서는 여기서 채워진다.
+        sp_cache = {}
+        dominant_idx = 0
         if not explicit and params["ensemble"] and len(significant) > 1:
             # 2~3') Boltzmann 앙상블: 유의(≥5%) conformer 각각 최적화·단일점 후 가중 평균
             stage(f"Boltzmann 앙상블 ({len(significant)}개 conformer)", 18)
@@ -618,6 +729,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                     raise CancelledError()
                 res = final_singlepoint(ranked[ci][1], f"앙상블 conformer {k + 1}/{len(significant)}")
                 members.append(res)
+                sp_cache[ci] = res
             e_list = [m[3] for m in members]
             e_min2 = min(e_list)
             rel2 = [(e - e_min2) * HARTREE2KCAL for e in e_list]
@@ -625,6 +737,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             z2 = sum(ws2)
             p2 = [w / z2 for w in ws2]
             dom = max(range(len(members)), key=lambda i: p2[i])
+            dominant_idx = significant[dom]
             atoms, mol, mf, e_total, homo, lumo, dipole = members[dom]
             ensemble_avg = {
                 "homo_ev": sum(p * m[4] for p, m in zip(p2, members)),
@@ -813,74 +926,23 @@ def run_job(job, update, is_cancelled=lambda: False):
             else:
                 notes.append("기준 전극 '없음' — 전위 환산 없이 IP/EA만 보고합니다")
 
-            use_noneq = params["noneq"] and solvent_key is not None
-            dm_neutral = mf.make_rdm1() if use_noneq else None
-
-            # 음이온·EA·환원 전위는 diffuse 기저에 민감하다 (v2.0 P0-1).
-            # 여분의 확산 함수가 없으면 여분 전자를 담을 자리가 부족해 EA 가
-            # 낮게 나온다. 음이온에만 diffuse 기저를 쓰고, 어떤 기저를 썼는지
-            # 결과에 남긴다.
-            def _basis_for(dq):
-                if dq < 0 and params.get("basis_anion"):
-                    return params["basis_anion"]
-                return params["basis_sp"]
-
-            noneq_skipped = []
-
-            def ion_energy_vertical(dq, label, prog):
-                stage(f"{label} (수직 ΔSCF)", prog)
-                basis_i = _basis_for(dq)
-                mol_i = _build_mol(atoms, basis_i, params["charge"] + dq, 2)
-                mf_i = _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
-                                params["scf_tol"])
-                # 동결 용매장과 초기 밀도는 «같은 기저»에서만 쓸 수 있다.
-                # 음이온에 diffuse 기저를 쓰면 행렬 크기가 달라 재사용이 불가능하다.
-                same_basis = basis_i == params["basis_sp"]
-                if use_noneq and same_basis:
-                    _freeze_solvent_from(mf_i, dm_neutral)
-                    return _run_scf(mf_i, f"{label}(비평형)", log,
-                                    dm0=(dm_neutral / 2, dm_neutral / 2))
-                if use_noneq and not same_basis:
-                    noneq_skipped.append(label)
-                return _run_scf(mf_i, label, log)
-
-            # 서로 다른 기저의 절대 에너지를 빼면 안 된다. 음이온에 diffuse 기저를
-            # 쓰면 «중성 기준 에너지»도 그 기저에서 다시 계산해야 EA 가 의미를 갖는다.
-            # (이 보정 없이 sto-3g 중성 − def2-SVPD 음이온을 빼면 EA 가 28 eV 로
-            #  나온다 — 기저 불완전성 차이가 그대로 EA 에 실린다.)
-            def _neutral_ref(dq):
-                basis_i = _basis_for(dq)
-                if basis_i == params["basis_sp"]:
-                    return e_total
-                key = ("neutral_ref", basis_i)
-                if key not in _ref_cache:
-                    log(f"중성 기준 에너지를 {basis_i} 에서 재계산 (EA 기저 정합)")
-                    mol_n = _build_mol(atoms, basis_i, params["charge"],
-                                       params["multiplicity"])
-                    _ref_cache[key] = _run_scf(
-                        _make_mf(mol_n, params["xc"], params["disp"], solvent_key,
-                                 params["scf_tol"]), f"중성({basis_i})", log)
-                return _ref_cache[key]
-
-            _ref_cache = {}
-            e_cat_v = ion_energy_vertical(+1, "양이온", 66)
-            e_an_v = ion_energy_vertical(-1, "음이온", 70)
-            if noneq_skipped:
+            # 지배 conformer 의 전자 IP/EA — 민감도 conformer 와 같은 함수를 탄다
+            rx = _redox_electronic(atoms, e_total, mf, params, solvent_key, log, stage, 66)
+            if rx["noneq_skipped"]:
                 notes.append(
-                    f"{' · '.join(noneq_skipped)}은 중성과 다른 기저(diffuse)를 써서 "
+                    f"{' · '.join(rx['noneq_skipped'])}은 중성과 다른 기저(diffuse)를 써서 "
                     "비평형 용매화(동결 용매장)를 적용하지 않았습니다 — 평형 용매화로 "
                     "계산되어 수직 EA 가 다소 크게 나올 수 있습니다")
-            if use_noneq and not noneq_skipped:
+            if rx["use_noneq"] and not rx["noneq_skipped"]:
                 notes.append(
                     "수직 IP/EA는 비평형 용매화(중성 밀도로 동결한 용매장) 근사 — "
                     "용매 핵 재배향이 없는 순간 이온화를 기술. 광학 유전 응답 완화는 미포함(상한 추정)")
-            ip_v = (e_cat_v - _neutral_ref(+1)) * HARTREE2EV
-            ea_v = (_neutral_ref(-1) - e_an_v) * HARTREE2EV
+            ip_v, ea_v = rx["ip_vertical_ev"], rx["ea_vertical_ev"]
             descriptors.update({
                 "ip_vertical_ev": round(ip_v, 3),
                 "ea_vertical_ev": round(ea_v, 3),
                 # 어떤 기저로 음이온을 풀었는지 남긴다 — EA 의 기저 의존성 추적용
-                "basis_anion": _basis_for(-1),
+                "basis_anion": rx["basis_anion"],
                 "basis_diffuse_anion": bool(params.get("basis_anion")),
             })
             if not params.get("basis_anion"):
@@ -889,28 +951,8 @@ def run_job(job, update, is_cancelled=lambda: False):
                     "기저에 민감할 수 있어 신뢰도 Method 축이 낮아집니다")
 
             if params["redox_adiabatic"]:
-                def ion_adiabatic(dq, label, prog):
-                    """이온 상태 재최적화 → 용매 SP (+열보정)."""
-                    stage(f"{label} 구조 재최적화 (단열)", prog)
-                    ion_atoms = _optimize_state(atoms, params, params["charge"] + dq, 2,
-                                                log, label=f" ({label})")
-                    mol_i = _build_mol(ion_atoms, _basis_for(dq), params["charge"] + dq, 2)
-                    e_i = _run_scf(
-                        _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
-                                 params["scf_tol"]),
-                        f"{label}(단열)", log)
-                    g_corr_i = None
-                    if params["do_thermo"] and thermo_neutral is not None:
-                        stage(f"{label} 진동수 계산", min(prog + 6, 97))
-                        th_i = _thermo_correction(ion_atoms, params, params["charge"] + dq, 2,
-                                                  temperature, log, label=f" ({label})")
-                        g_corr_i = th_i["g_corr_hartree"]
-                    return e_i, g_corr_i
-
-                e_cat_a, g_cat = ion_adiabatic(+1, "양이온", 74)
-                e_an_a, g_an = ion_adiabatic(-1, "음이온", 86)
-                ip_a = (e_cat_a - _neutral_ref(+1)) * HARTREE2EV
-                ea_a = (_neutral_ref(-1) - e_an_a) * HARTREE2EV
+                ip_a, ea_a = rx["ip_adiabatic_ev"], rx["ea_adiabatic_ev"]
+                e_cat_a, e_an_a = rx["e_cation_adiabatic"], rx["e_anion_adiabatic"]
                 descriptors.update({
                     "ip_adiabatic_ev": round(ip_a, 3),
                     "ea_adiabatic_ev": round(ea_a, 3),
@@ -923,6 +965,15 @@ def run_job(job, update, is_cancelled=lambda: False):
                     notes.append(
                         f"전위는 단열(adiabatic) IP/EA 기반 — 이온 상태 구조 재최적화 포함, "
                         f"{ref} 절대 전위 {e_abs} V 가정")
+                # 이온 상태 열보정 — 지배 conformer 에서만 (Hessian 3벌은 민감도에 쓰기엔 무겁다)
+                g_cat = g_an = None
+                if params["do_thermo"] and thermo_neutral is not None:
+                    stage("양이온 진동수 계산", 80)
+                    g_cat = _thermo_correction(rx["cation_atoms"], params, params["charge"] + 1, 2,
+                                               temperature, log, label=" (양이온)")["g_corr_hartree"]
+                    stage("음이온 진동수 계산", 92)
+                    g_an = _thermo_correction(rx["anion_atoms"], params, params["charge"] - 1, 2,
+                                              temperature, log, label=" (음이온)")["g_corr_hartree"]
                 if g_cat is not None and g_an is not None:
                     g0 = thermo_neutral["g_corr_hartree"]
                     dg_ox = (e_cat_a + g_cat - e_total - g0) * HARTREE2EV
@@ -945,6 +996,57 @@ def run_job(job, update, is_cancelled=lambda: False):
                 notes.append(
                     f"전위는 수직 IP/EA 기반 근사 (구조 완화 미포함), "
                     f"{ref} 절대 전위 {e_abs} V 가정")
+
+            # 7.5) conformer 민감도 (v2.0 P0-5 · 3.6) — 다른 저에너지 conformer 에서도
+            # 같은 경로로 IP/EA 를 내어 «구조 선택이 판정을 바꾸는가»를 본다.
+            # 클러스터·업로드 구조는 conformer 집합이 없어 대상이 아니다.
+            n_sens = params.get("conf_sens", 0)
+            if n_sens >= 2 and not explicit and len(ranked) >= 2:
+                sens_basis = "단열" if params["redox_adiabatic"] else "수직"
+                key_ip = "ip_adiabatic_ev" if params["redox_adiabatic"] else "ip_vertical_ev"
+                key_ea = "ea_adiabatic_ev" if params["redox_adiabatic"] else "ea_vertical_ev"
+                e_rank0 = ranked[0][0]
+                pool = [ci for ci, (e_r, _) in enumerate(ranked)
+                        if ci != dominant_idx
+                        and (e_r - e_rank0) * HARTREE2KCAL <= confsens.ENERGY_WINDOW_KCAL]
+                extra = pool[:n_sens - 1]
+                sens_members = [{"conformer": dominant_idx + 1, "e_hartree": e_total,
+                                 "ip_ev": round(rx[key_ip], 3), "ea_ev": round(rx[key_ea], 3),
+                                 "dominant": True}]
+                if not extra:
+                    log(f"conformer 민감도 — {confsens.ENERGY_WINDOW_KCAL:.0f} kcal/mol 창 안에 "
+                        "지배 conformer 외 후보가 없어 편차를 낼 수 없습니다")
+                for k, ci in enumerate(extra):
+                    if is_cancelled():
+                        raise CancelledError()
+                    tag = f" [conf {ci + 1}]"
+                    try:
+                        stage(f"conformer 민감도 {k + 1}/{len(extra)} — 구조 준비{tag}", 91)
+                        if ci not in sp_cache:
+                            sp_cache[ci] = final_singlepoint(
+                                ranked[ci][1], f"민감도 conformer{tag}")
+                        at_i, _mol_i, mf_i, e_i, _h, _l, _d = sp_cache[ci]
+                        rx_i = _redox_electronic(at_i, e_i, mf_i, params, solvent_key,
+                                                 log, stage, 91, tag=tag)
+                        sens_members.append({
+                            "conformer": ci + 1, "e_hartree": e_i,
+                            "ip_ev": round(rx_i[key_ip], 3), "ea_ev": round(rx_i[key_ea], 3),
+                            "dominant": False})
+                    except CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — conformer 하나의 실패가 결과를 막지 않는다
+                        log(f"conformer 민감도{tag} 실패 — 건너뜀: {exc}")
+                sens = confsens.summarize(sens_members, temperature, sens_basis, e_abs)
+                descriptors["conformer_sensitivity"] = sens
+                if sens.get("spread_v") is not None:
+                    descriptors["conformer_spread_v"] = sens["spread_v"]
+                    descriptors["reduction_potential_conf_std_v"] = sens["ea_ev"]["std"]
+                    descriptors["oxidation_potential_conf_std_v"] = sens["ip_ev"]["std"]
+                    log(f"conformer 민감도 — {sens['n_conformers']}개, 전위 편차 σ "
+                        f"{sens['spread_v']:.2f} V → {sens['rule_label']}")
+                notes.append("conformer 민감도: " + sens["note"])
+            elif n_sens >= 2 and explicit:
+                log("클러스터 계산에서는 conformer 민감도를 산출하지 않습니다")
 
         # 8) 물성 지문 — 확장 기술자 (MEP · 반응성 지표 · 결합/흡착 · TDDFT)
         if want_fingerprint:
