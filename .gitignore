@@ -5,3 +5,5 @@ data/
 rhobench_results*.html
 build/
 data-binder/
+# scripts/make_usb.sh 산출물 — USB 이동용 오프라인 패키지 (수백 MB)
+RhoBench-USB/
