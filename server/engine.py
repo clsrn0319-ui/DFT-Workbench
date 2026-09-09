@@ -28,6 +28,7 @@ from pyscf.hessian import thermo as pyscf_thermo
 from pyscf.solvent import smd
 
 from . import binder as binder_mod
+from . import checkpoint as checkpoint_mod
 from . import confsens
 from . import descriptors as desc_mod
 from . import licomp
@@ -897,6 +898,53 @@ def run_job(job, update, is_cancelled=lambda: False):
         settings = job["settings"]
         params = _resolve_params(settings)
         _SCF_MAX_CYCLE = params.get("scf_max_cycle")
+        # ── 단계별 체크포인트 (10.2) — 같은 조건이면 끝난 단계를 건너뛴다 ──
+        ckpt = checkpoint_mod.load(job)
+        done = set(ckpt.get("done") or [])
+        if ckpt.get("stale"):
+            log("체크포인트가 있지만 조건(설정·분자)이 달라 처음부터 계산합니다")
+        elif done:
+            log("체크포인트에서 이어서 계산 — 완료된 단계: "
+                + ", ".join(checkpoint_mod.STAGE_LABEL.get(d, d)
+                            for d in checkpoint_mod.STAGES if d in done)
+                + f" (저장 {ckpt.get('saved_at_text', '')})")
+        restored = "geometry" in done
+        # 저장 시점에 아직 없을 수 있는 이름들 — 저장 도우미가 참조한다
+        ranked = None; significant = None; conformer_populations = None; dominant_idx = 0
+        geom_info = None; ensemble_avg = None; thermo_neutral = None; rx = None; mep = None
+        descriptors = None; notes = None; fingerprint_structures = {}; spin_checks = []
+
+        def _thermo_scalars(th):
+            if not th:
+                return None
+            return {k: th.get(k) for k in ("zpe_hartree", "g_corr_hartree", "h_corr_hartree",
+                                           "entropy_hartree_per_k", "n_imaginary",
+                                           "lowest_freq_cm", "qrrho")}
+
+        def save_ckpt(stage_name):
+            """단계가 끝난 직후의 상태를 남긴다 — 실패해도 계산은 계속한다."""
+            done.add(stage_name)
+            try:
+                info = checkpoint_mod.save(job, done, {
+                    "atoms": atoms, "ranked": ranked, "significant": significant,
+                    "conformer_populations": conformer_populations,
+                    "dominant_idx": dominant_idx, "geom_info": geom_info,
+                    "ensemble_avg": ensemble_avg, "descriptors": descriptors, "notes": notes,
+                    "structures": fingerprint_structures, "thermo": _thermo_scalars(thermo_neutral),
+                    "rx": ({k: v for k, v in rx.items() if k in (
+                        "ip_vertical_ev", "ea_vertical_ev", "ip_adiabatic_ev", "ea_adiabatic_ev",
+                        "basis_anion", "noneq_skipped", "use_noneq")} if rx else None),
+                    "spin_checks": spin_checks, "fragments": fragments, "mep": mep,
+                })
+                update({"checkpoint": info})
+            except Exception as exc:  # noqa: BLE001
+                log(f"체크포인트 저장 실패 (계산은 계속): {exc}")
+
+        def add_note(text):
+            """주석은 한 번만 — 체크포인트에서 복원한 주석과 겹치지 않게."""
+            if text not in notes:
+                notes.append(text)
+
         solvent_key = _solvent_key(settings)
         smiles = job["material"]["smiles"]
         temperature = float(settings.get("temperature") or 298.15)
@@ -925,7 +973,25 @@ def run_job(job, update, is_cancelled=lambda: False):
                 "업로드 3D 구조를 사용하지 않습니다")
             user_atoms = None
 
-        if explicit:
+        if restored:
+            # 0) 체크포인트 복원 — 구조·conformer 정보를 되살리고 단일점만 다시 계산한다
+            stage("체크포인트 복원", 3)
+            atoms = checkpoint_mod.as_tuples(ckpt["atoms"])
+            ranked = ([(e, checkpoint_mod.as_tuples(at)) for e, at in ckpt["ranked"]]
+                      if ckpt.get("ranked") else [(0.0, atoms)])
+            significant = ckpt.get("significant") or [0]
+            conformer_populations = ckpt.get("conformer_populations") or []
+            dominant_idx = int(ckpt.get("dominant_idx") or 0)
+            geom_info = ckpt.get("geom_info") or {"n_conformers": 1, "forcefield": "체크포인트"}
+            ensemble_avg = ckpt.get("ensemble_avg")
+            fragments = ckpt.get("fragments")
+            kT_kcal = 1.98720425e-3 * temperature
+            if explicit and params["do_thermo"]:
+                params["do_thermo"] = False
+            if explicit and params["redox_adiabatic"]:
+                params["redox_adiabatic"] = False
+            log(f"저장된 구조({len(atoms)}원자)를 그대로 씁니다 — 구조 생성·최적화 생략")
+        elif explicit:
             # 1') 명시적 주변 분자 클러스터 생성 (cluster-continuum)
             stage("클러스터 생성 (명시적 주변 분자 배치)", 5)
             atoms, fragments, cl_info = build_cluster(
@@ -1043,7 +1109,16 @@ def run_job(job, update, is_cancelled=lambda: False):
         # 지배 conformer 의 재순위 번호. 앙상블 경로에서는 여기서 채워진다.
         sp_cache = {}
         dominant_idx = 0
-        if not explicit and params["ensemble"] and len(significant) > 1:
+        if restored:
+            stage("체크포인트 복원 — 단일점 재계산", 20)
+            ensemble_avg = ckpt.get("ensemble_avg")
+            dominant_idx = int(ckpt.get("dominant_idx") or 0)
+            mol = _build_mol(atoms, params["basis_sp"], params["charge"], params["multiplicity"])
+            mf = _make_mf(mol, params["xc"], params["disp"], solvent_key, params["scf_tol"])
+            e_total = _run_scf(mf, "복원 단일점", log)
+            homo, lumo = _frontier_orbitals(mf)
+            dipole = float(np.linalg.norm(mf.dip_moment(unit="Debye", verbose=0)))
+        elif not explicit and params["ensemble"] and len(significant) > 1:
             # 2~3') Boltzmann 앙상블: 유의(≥5%) conformer 각각 최적화·단일점 후 가중 평균
             stage(f"Boltzmann 앙상블 ({len(significant)}개 conformer)", 18)
             members = []
@@ -1091,9 +1166,9 @@ def run_job(job, update, is_cancelled=lambda: False):
             "nelectron": int(mol.nelectron), "spin": int(mol.spin), "natm": int(mol.natm),
             "converged": bool(mf.converged),
         })
-        spin_checks = []
+        spin_checks = list(ckpt.get("spin_checks") or []) if restored else []
         sc = _spin_check(mf, mol, "중성")
-        if sc:
+        if sc and not restored:
             spin_checks.append(sc)
         charges = charge_models[charge_models["primary"]]
         try:
@@ -1101,16 +1176,25 @@ def run_job(job, update, is_cancelled=lambda: False):
         except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
             density_cloud = None
             log(f"전자밀도 구름 생성 생략: {exc}")
-        descriptors = {
-            "total_energy_hartree": e_total,
-            "homo_ev": round(homo, 3),
-            "lumo_ev": round(lumo, 3) if lumo is not None else None,
-            "gap_ev": round(gap, 3) if gap is not None else None,
-            "dipole_debye": round(dipole, 3),
-        }
-        if not explicit:
+        if restored:
+            descriptors = dict(ckpt.get("descriptors") or {})
+            notes = list(ckpt.get("notes") or [])
+            fingerprint_structures = dict(ckpt.get("structures") or {})
+            thermo_neutral = ckpt.get("thermo")
+            rx = ckpt.get("rx")
+            mep = ckpt.get("mep")
+            notes_ensemble = None
+        else:
+            descriptors = {
+                "total_energy_hartree": e_total,
+                "homo_ev": round(homo, 3),
+                "lumo_ev": round(lumo, 3) if lumo is not None else None,
+                "gap_ev": round(gap, 3) if gap is not None else None,
+                "dipole_debye": round(dipole, 3),
+            }
+        if not explicit and not restored:
             descriptors["conformer_populations"] = conformer_populations
-        if ensemble_avg is not None:
+        if ensemble_avg is not None and not restored:
             descriptors.update({
                 "homo_ev": round(ensemble_avg["homo_ev"], 3),
                 "lumo_ev": round(ensemble_avg["lumo_ev"], 3),
@@ -1119,22 +1203,25 @@ def run_job(job, update, is_cancelled=lambda: False):
             })
             notes_ensemble = ("전자 기술자(HOMO/LUMO/갭/쌍극자)는 Boltzmann 가중 평균 "
                               f"({temperature} K) — 열보정·용매화·전위는 지배 conformer 기준")
-        else:
+        elif not restored:
             notes_ensemble = None
-        notes = [
-            (("구조 최적화를 SMD 용매장 안에서 수행 (용매 중 구조 완화 반영)"
-              if params["opt_in_solvent"] and solvent_key else
-              "구조 최적화는 기체상에서 수행, 용매 효과는 최종 단일점에 SMD로 반영"))
-            if params["do_opt"] else
-            f"{geom_info['forcefield']} 역장 구조에서의 DFT 단일점 (사전 스크리닝 수준)",
-            "분위기는 기록용 조건 — 명시적 대기 분자 모델은 미포함",
-        ]
-        if notes_ensemble:
-            notes.append(notes_ensemble)
+        if not restored:
+            notes = [
+                (("구조 최적화를 SMD 용매장 안에서 수행 (용매 중 구조 완화 반영)"
+                  if params["opt_in_solvent"] and solvent_key else
+                  "구조 최적화는 기체상에서 수행, 용매 효과는 최종 단일점에 SMD로 반영"))
+                if params["do_opt"] else
+                f"{geom_info['forcefield']} 역장 구조에서의 DFT 단일점 (사전 스크리닝 수준)",
+                "분위기는 기록용 조건 — 명시적 대기 분자 모델은 미포함",
+            ]
+            if notes_ensemble:
+                notes.append(notes_ensemble)
+            save_ckpt("geometry")
 
         # 5) 진동수·열역학 보정 (기체상, 최적화 수준)
-        thermo_neutral = None
-        if params["do_thermo"]:
+        if params["do_thermo"] and "thermo" in done:
+            log("열보정 — 체크포인트 값 사용 (진동수 계산 생략)")
+        elif params["do_thermo"]:
             stage("진동수 계산·열역학 보정", 50)
             thermo_neutral = _thermo_correction(
                 atoms, params, params["charge"], params["multiplicity"], temperature, log)
@@ -1201,11 +1288,12 @@ def run_job(job, update, is_cancelled=lambda: False):
                 notes.append(
                     f"경고: 허수 진동수 {thermo_neutral['n_imaginary']}개 — 안정점이 아닐 수 있어 "
                     "열보정 신뢰도가 낮습니다 (구조 최적화 설정 확인 필요)")
+            save_ckpt("thermo")
         else:
-            notes.append("열역학 보정 미수행 — 온도는 기록용 조건")
+            add_note("열역학 보정 미수행 — 온도는 기록용 조건")
 
         # 6) 용매화 에너지 (동일 구조 기체상 대비)
-        if solvent_key:
+        if solvent_key and "solvation" not in done:
             stage("용매화 에너지 (기체상 참조)", 58)
             mf_gas = _make_mf(mol, params["xc"], params["disp"], None, params["scf_tol"])
             e_gas = _run_scf(mf_gas, "기체상 참조", log)
@@ -1213,6 +1301,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             e_cds = getattr(mf.with_solvent, "e_cds", None)
             if e_cds is not None:
                 descriptors["smd_cds_kcal"] = round(float(e_cds) * HARTREE2KCAL, 2)
+            save_ckpt("solvation")
 
         # 6.2) 1 atm → 1 M 표준 상태 보정 + 용액상 깁스 자유에너지
         if params["do_thermo"] and thermo_neutral is not None and solvent_key:
@@ -1221,12 +1310,12 @@ def run_job(job, update, is_cancelled=lambda: False):
             descriptors["standard_state_corr_kcal"] = round(ss_corr_kcal, 2)
             descriptors["gibbs_energy_solution_hartree"] = round(
                 e_total + thermo_neutral["g_corr_hartree"] + ss_corr_kcal / HARTREE2KCAL, 6)
-            notes.append(
+            add_note(
                 f"용액상 깁스 자유에너지 = 용매 단일점 에너지 + 기체상 열보정 + "
                 f"1 atm→1 M 표준 상태 보정(+{ss_corr_kcal:.2f} kcal/mol)")
 
         # 6.5) 클러스터 상호작용 에너지 (조각 분해, 클러스터 구조 고정)
-        if fragments and len(fragments) <= MAX_INTERACTION_FRAGMENTS:
+        if fragments and len(fragments) <= MAX_INTERACTION_FRAGMENTS and "interaction" not in done:
             stage("상호작용 에너지 (조각 분해)", 62)
             e_frag_sum = 0.0
             for fi, frag in enumerate(fragments):
@@ -1243,12 +1332,15 @@ def run_job(job, update, is_cancelled=lambda: False):
                 "상호작용 에너지: 클러스터 구조 고정 조각 분해 · "
                 "BSSE counterpoise 보정 적용(변형 에너지는 미포함) — "
                 "음수일수록 주변 분자와의 결합이 안정함")
-        elif fragments:
+            save_ckpt("interaction")
+        elif fragments and "interaction" not in done:
             log(f"분자 수 {len(fragments)} > {MAX_INTERACTION_FRAGMENTS} — 상호작용 에너지 분해 생략")
 
         if fragments:
-            notes.insert(0, "명시적 주변 분자 포함 클러스터 계산 (cluster-continuum): "
+            cluster_note = ("명시적 주변 분자 포함 클러스터 계산 (cluster-continuum): "
                             "모든 기술자는 클러스터 전체에 대한 값")
+            if cluster_note not in notes:
+                notes.insert(0, cluster_note)
 
         # 7) 산화/환원 전위
         if want_redox and not closed_shell:
@@ -1260,8 +1352,11 @@ def run_job(job, update, is_cancelled=lambda: False):
             if not no_ref:
                 descriptors["potential_reference"] = ref
             else:
-                notes.append("기준 전극 '없음' — 전위 환산 없이 IP/EA만 보고합니다")
+                add_note("기준 전극 '없음' — 전위 환산 없이 IP/EA만 보고합니다")
 
+        if want_redox and closed_shell and "redox" in done:
+            log("산화/환원 전위 — 체크포인트 값 사용")
+        elif want_redox and closed_shell:
             # 지배 conformer 의 전자 IP/EA — 민감도 conformer 와 같은 함수를 탄다
             rx = _redox_electronic(atoms, e_total, mf, params, solvent_key, log, stage, 66)
             spin_checks.extend(rx.get("spins") or [])
@@ -1333,12 +1428,16 @@ def run_job(job, update, is_cancelled=lambda: False):
                 notes.append(
                     f"전위는 수직 IP/EA 기반 근사 (구조 완화 미포함), "
                     f"{ref} 절대 전위 {e_abs} V 가정")
+            save_ckpt("redox")
 
+        if want_redox and closed_shell and rx:
             # 7.5) conformer 민감도 (v2.0 P0-5 · 3.6) — 다른 저에너지 conformer 에서도
             # 같은 경로로 IP/EA 를 내어 «구조 선택이 판정을 바꾸는가»를 본다.
             # 클러스터·업로드 구조는 conformer 집합이 없어 대상이 아니다.
             n_sens = params.get("conf_sens", 0)
-            if n_sens >= 2 and not explicit and len(ranked) >= 2:
+            if "confsens" in done:
+                pass
+            elif n_sens >= 2 and not explicit and len(ranked) >= 2:
                 sens_basis = "단열" if params["redox_adiabatic"] else "수직"
                 key_ip = "ip_adiabatic_ev" if params["redox_adiabatic"] else "ip_vertical_ev"
                 key_ea = "ea_adiabatic_ev" if params["redox_adiabatic"] else "ea_vertical_ev"
@@ -1382,6 +1481,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                     log(f"conformer 민감도 — {sens['n_conformers']}개, 전위 편차 σ "
                         f"{sens['spread_v']:.2f} V → {sens['rule_label']}")
                 notes.append("conformer 민감도: " + sens["note"])
+                save_ckpt("confsens")
             elif n_sens >= 2 and explicit:
                 log("클러스터 계산에서는 conformer 민감도를 산출하지 않습니다")
 
@@ -1407,33 +1507,39 @@ def run_job(job, update, is_cancelled=lambda: False):
                     solvent_key, params["scf_tol"], f"{label} 게스트(CP)", log)
                 return (e_c - e_host_cp - e_guest_cp) * HARTREE2KJ, cl_atoms
 
-            stage("MEP · 반응성 지표", 60)
-            mep = desc_mod.mep_extremes(mf, mol)
-            if mep:
-                descriptors.update({k: v for k, v in mep.items() if k.endswith("_kcal")})
-                descriptors["mep_points"] = {"max": mep["mep_max_point"],
-                                             "min": mep["mep_min_point"]}
-            if "ip_vertical_ev" in descriptors and "ea_vertical_ev" in descriptors:
-                descriptors.update(desc_mod.reactivity_indices(
-                    descriptors["ip_vertical_ev"], descriptors["ea_vertical_ev"]))
+            if "mep" not in done:
+                stage("MEP · 반응성 지표", 60)
+                mep = desc_mod.mep_extremes(mf, mol)
+                if mep:
+                    mep = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in mep.items()}
+                    descriptors.update({k: v for k, v in mep.items() if k.endswith("_kcal")})
+                    descriptors["mep_points"] = {"max": mep["mep_max_point"],
+                                                 "min": mep["mep_min_point"]}
+                if "ip_vertical_ev" in descriptors and "ea_vertical_ev" in descriptors:
+                    descriptors.update(desc_mod.reactivity_indices(
+                        descriptors["ip_vertical_ev"], descriptors["ea_vertical_ev"]))
+                save_ckpt("mep")
 
             # Li⁺ 상호작용 — site 별 결합 에너지 + 용매 경쟁 ΔE_exchange (v2.0 P0-6)
-            if mep and closed_shell:
+            if mep and closed_shell and "li" not in done:
                 li_out = _li_interaction(
                     atoms, mol, e_total, smiles, params, settings, solvent_key, temperature,
                     mep, log, stage, site_search=not explicit and not user_atoms)
                 descriptors.update(li_out["descriptors"])
                 fingerprint_structures.update(li_out["structures"])
-                notes.extend(li_out["notes"])
+                for n_ in li_out["notes"]:
+                    add_note(n_)
+                save_ckpt("li")
 
             # 자기 이량체 (바인더–바인더 수소결합/응집) 에너지
-            if closed_shell:
+            if closed_shell and "dimer" not in done:
                 e_dim, dim_atoms = pair_energy(atoms, smiles, "이량체 결합 에너지", 72)
                 descriptors["dimer_binding_kj"] = round(e_dim, 1)
                 fingerprint_structures["dimer"] = atoms_to_xyz_block(dim_atoms, "이량체")
+                save_ckpt("dimer")
 
             # 활물질 표면 흡착 에너지 (대용 클러스터 모델)
-            if closed_shell:
+            if closed_shell and "adsorption" not in done:
                 ads = {}
                 for si, sm in enumerate(desc_mod.SURFACE_MODELS):
                     try:
@@ -1452,9 +1558,10 @@ def run_job(job, update, is_cancelled=lambda: False):
                     notes.append(
                         "표면 흡착 에너지는 슬랩이 아닌 대용 클러스터 모델 기반 — "
                         "같은 모델끼리의 상대 경향만 유효하고 다른 표면 모델·문헌 절대값과는 비교 금지")
+                save_ckpt("adsorption")
 
             # 최약 결합 해리에너지 (BDE) — 균일 분해 + 라디칼 조각 재최적화
-            if closed_shell:
+            if closed_shell and "bde" not in done:
                 bonds = desc_mod.breakable_bonds(smiles)
                 bde_list = []
                 opt_solv = solvent_key if params["opt_in_solvent"] else None
@@ -1548,17 +1655,20 @@ def run_job(job, update, is_cancelled=lambda: False):
                         notes.append(
                             "결합 해리에너지(BDE)는 조각 구조를 고정한 근사 — "
                             "라디칼 완화가 빠져 실제보다 크게 나오며 결합 간 상대 비교에 사용")
+                save_ckpt("bde")
 
             # UV-Vis λmax (TDDFT)
-            try:
-                stage("UV-Vis λmax (TDDFT)", 94)
-                uv = desc_mod.tddft_lambda_max(mf)
-                if uv:
-                    descriptors.update(uv)
-                    notes.append("UV-Vis λmax는 TDDFT 수직 여기 근사 — "
-                                 "진동 구조·용매 재조직화 미포함")
-            except Exception as exc:  # noqa: BLE001 — TDDFT 실패는 나머지 결과 유지
-                log(f"TDDFT 계산 실패: {exc}")
+            if "tddft" not in done:
+                try:
+                    stage("UV-Vis λmax (TDDFT)", 94)
+                    uv = desc_mod.tddft_lambda_max(mf)
+                    if uv:
+                        descriptors.update(uv)
+                        notes.append("UV-Vis λmax는 TDDFT 수직 여기 근사 — "
+                                     "진동 구조·용매 재조직화 미포함")
+                except Exception as exc:  # noqa: BLE001 — TDDFT 실패는 나머지 결과 유지
+                    log(f"TDDFT 계산 실패: {exc}")
+                save_ckpt("tddft")
 
         # 건식 음극 바인더 적합성 판정 — 산출된 기술자를 바인더 관점으로 번역
         binder_report = None
@@ -1571,8 +1681,8 @@ def run_job(job, update, is_cancelled=lambda: False):
             descriptors["spin_contamination"] = spin_checks
             worst = max(spin_checks, key=lambda s: abs(s["deviation"]))
             if abs(worst["deviation"]) > 0.1:
-                notes.append(f"스핀 오염 — {worst['label']} ⟨S²⟩ {worst['s2']:.3f} "
-                             f"(기대 {worst['expected']:.3f}). UKS 이온 에너지·전위의 신뢰도가 낮습니다")
+                add_note(f"스핀 오염 — {worst['label']} ⟨S²⟩ {worst['s2']:.3f} "
+                         f"(기대 {worst['expected']:.3f}). UKS 이온 에너지·전위의 신뢰도가 낮습니다")
 
         # 검증 보고서 (모니터링 가이드 §5) — 프로세스 정상 종료와 계산의 과학적
         # 완결성을 분리해 PASS / REVIEW / FAIL 로 등급을 매긴다.
@@ -1619,8 +1729,13 @@ def run_job(job, update, is_cancelled=lambda: False):
             "wall_time_s": round(elapsed, 1),
         }
         update({"status": "PUBLISHED", "progress": 100, "stage": "완료",
-                "result": result, "validation": validation, "finishedAt": time.time()})
-        log(f"계산 완료 — 총 {elapsed:.1f}s")
+                "result": result, "validation": validation, "finishedAt": time.time(),
+                "checkpoint": None, "interrupted": False})
+        checkpoint_mod.clear(job["id"])
+        if restored:
+            log(f"계산 완료 — 체크포인트에서 이어서 {elapsed:.1f}s (이번 실행분)")
+        else:
+            log(f"계산 완료 — 총 {elapsed:.1f}s")
         update({"logs": list(log_lines)})
     except CancelledError as exc:
         _MON.error(exc, "CANCELLED")

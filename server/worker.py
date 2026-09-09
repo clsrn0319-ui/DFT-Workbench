@@ -48,6 +48,20 @@ def _worker_loop():
             _queue.task_done()
 
 
+def resubmit_pending() -> int:
+    """서버 시작 시 QUEUED 상태로 남은 작업(중단된 작업 포함)을 큐에 다시 넣는다.
+
+    캠페인 작업은 배치 우선순위, 단건은 대화형 우선순위 — 제출 순서(createdAt)를 지킨다.
+    """
+    n = 0
+    for job in sorted(store.list_jobs(), key=lambda j: j.get("createdAt") or 0):
+        if job.get("status") != "QUEUED":
+            continue
+        submit(job["id"], priority=PRIORITY_BATCH if job.get("campaign") else PRIORITY_INTERACTIVE)
+        n += 1
+    return n
+
+
 def ensure_started():
     global _started
     with _start_lock:

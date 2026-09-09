@@ -26,10 +26,17 @@ def _load():
     if JOBS_FILE.exists():
         try:
             for job in json.loads(JOBS_FILE.read_text(encoding="utf-8")):
-                # 서버 재시작 시 미완료 작업은 실패 처리 (워커 상태가 사라졌으므로)
+                # 서버 재시작 시 미완료 작업은 «재개 대기»로 — 워커가 다시 뜨면
+                # 단계별 체크포인트에서 이어서 계산한다 (예전에는 실패 처리했다)
                 if job.get("status") in ("QUEUED", "RUNNING"):
-                    job["status"] = "FAILED"
-                    job["error"] = "서버 재시작으로 중단됨"
+                    was = job["status"]
+                    job["status"] = "QUEUED"
+                    job["interrupted"] = True
+                    job["stage"] = "서버 재시작 — 재개 대기"
+                    job.setdefault("logs", []).append(
+                        time.strftime("%H:%M:%S") + (" 서버 재시작으로 중단됨 — 체크포인트에서 재개 예정"
+                                                     if was == "RUNNING" else
+                                                     " 서버 재시작 — 대기열에 다시 넣음"))
                 _jobs[job["id"]] = job
         except (json.JSONDecodeError, OSError):
             pass
@@ -127,8 +134,8 @@ def delete_job(job_id: str) -> bool:
         if job_id in _jobs:
             del _jobs[job_id]
             _persist()
-            # 작업을 지우면 로그도 함께 지운다 — 남겨 두면 디스크만 먹는다
-            for p in job_files(job_id):
+            # 작업을 지우면 로그·체크포인트도 함께 지운다 — 남겨 두면 디스크만 먹는다
+            for p in job_files(job_id) + [DATA_DIR / "checkpoints" / f"{safe_id(job_id)}.json"]:
                 try:
                     p.unlink(missing_ok=True)
                 except OSError:

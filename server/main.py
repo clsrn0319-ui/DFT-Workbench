@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
 from . import lookup as lookup_mod
-from . import monitor
+from . import checkpoint, monitor
 from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
@@ -37,7 +37,10 @@ app = FastAPI(title="RhoBench DFT Workbench", version="1.0")
 
 @app.on_event("startup")
 def _resume_campaigns():
-    """서버 재시작 시 진행 중이던 배치 스크리닝 캠페인을 이어서 진행한다."""
+    """서버 재시작 시 중단된 작업을 체크포인트에서 재개하고, 캠페인을 이어서 진행한다."""
+    n = worker.resubmit_pending()
+    if n:
+        print(f"\n  RhoBench: 중단됐던 작업 {n}건을 체크포인트에서 재개합니다.\n", flush=True)
     screening.ensure_started()
 
 
@@ -1262,8 +1265,14 @@ def retry_job(job_id: str, _: bool = Depends(require_login)):
         raise HTTPException(400, f"동시 실행 가능한 작업은 {MAX_ACTIVE_JOBS}개입니다.")
     job = store.create_job(old["material"], old["settings"])
     job["logs"].append(f"재시도 — 원본 작업 {job_id}")
-    store.update_job(job["id"], {"logs": job["logs"]})
-    worker.submit(job["id"])
+    # 원본 작업의 체크포인트가 있으면 물려받아 끝난 단계부터 이어서 계산한다
+    if checkpoint.copy(job_id, job["id"]):
+        cp = checkpoint.summary(job["id"]) or {}
+        job["logs"].append("원본 작업의 체크포인트 승계 — 완료 단계: " + ", ".join(cp.get("labels") or []))
+        store.update_job(job["id"], {"logs": job["logs"], "checkpoint": cp})
+    else:
+        store.update_job(job["id"], {"logs": job["logs"]})
+    worker.submit(job["id"], priority=worker.PRIORITY_BATCH if old.get("campaign") else worker.PRIORITY_INTERACTIVE)
     return job
 
 

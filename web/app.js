@@ -393,7 +393,7 @@ async function showRawLog(jobId, btn, keepOpen) {
 }
 
 function jobsSignature() {
-  return JOBS_CACHE.map(j => `${j.id}:${j.status}:${j.progress}:${j.logs.length}:${j.monitor?.scf?.cycle ?? ""}:${j.monitor?.opt?.step ?? ""}:${j.validation?.grade ?? ""}`).join("|")
+  return JOBS_CACHE.map(j => `${j.id}:${j.status}:${j.progress}:${j.logs.length}:${j.checkpoint?.done?.length ?? ""}:${j.monitor?.scf?.cycle ?? ""}:${j.monitor?.opt?.step ?? ""}:${j.validation?.grade ?? ""}`).join("|")
     + "#" + [...EXPORT_SEL].sort().join(",");
 }
 
@@ -478,6 +478,8 @@ function jobRowHtml(job) {
       ${job.status === "RUNNING" && job.monitor?.scf?.cycle != null
         ? `<div class="small muted mono">SCF ${esc(job.monitor.scf.label || "")} cycle ${job.monitor.scf.cycle}${job.monitor.scf.max_cycle ? "/" + job.monitor.scf.max_cycle : ""} · |g| ${fmtExp(job.monitor.scf.gorb)}${job.monitor.opt?.step ? ` · OPT step ${job.monitor.opt.step}${job.monitor.opt.max_steps ? "/" + job.monitor.opt.max_steps : ""} |grad| ${fmtExp(job.monitor.opt.grad_norm)}` : ""}${job.monitor.scf.recovered ? ` · 복구 ${job.monitor.scf.recovered}` : ""}</div>` : ""}
       ${job.validation ? `<div class="small"><span class="badge ${MON_GRADE_BADGE[job.validation.grade] || "queued"}">검증 ${esc(job.validation.grade)}</span> <span class="muted">${esc(job.validation.summary || "")}</span></div>` : ""}
+      ${job.checkpoint?.done?.length && ["QUEUED", "RUNNING", "FAILED"].includes(job.status)
+        ? `<div class="small"><span class="badge review" style="border:1px solid currentColor" title="서버가 꺼져도 끝난 단계는 다시 계산하지 않습니다">체크포인트 ${job.checkpoint.done.length}단계</span> <span class="muted">${esc((job.checkpoint.labels || job.checkpoint.done).join(" · "))}${job.interrupted ? " · 재개 대기" : ""}</span></div>` : ""}
       ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
       <details><summary class="small muted">로그 (${job.logs.length})</summary>
         <ul class="log-list mono">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
