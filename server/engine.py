@@ -17,6 +17,7 @@
   - 분위기: 기록용 메타데이터 (단일 분자 DFT는 대기를 명시적으로 모델링하지 않음)
 """
 
+import json
 import math
 import time
 import traceback
@@ -29,6 +30,7 @@ from pyscf.solvent import smd
 from . import binder as binder_mod
 from . import confsens
 from . import descriptors as desc_mod
+from . import monitor as monitor_mod
 from . import presets
 from . import protocol as protocol_mod
 from . import store
@@ -148,6 +150,10 @@ def _resolve_params(settings):
         "charge": int(exp.get("charge") or 0),
         "multiplicity": int(exp.get("multiplicity") or 1),
         "scf_tol": float(exp.get("scfTol") or 1e-8),
+        # SCF 최대 반복 — 기록·모니터링용으로 실제 사용값을 드러낸다 (가이드 §2.1).
+        # None 이면 PySCF 기본(50). 자동 복구는 이 값과 무관하게 200 으로 올린다.
+        "scf_max_cycle": int(exp["scfMaxCycle"]) if exp.get("scfMaxCycle") else None,
+        "opt_max_steps": 100,
     }
 
 
@@ -159,7 +165,9 @@ def _resolve_params(settings):
 # 로그를 job dict 에 담으면 수 MB 가 통째로 메모리·JSON 에 들어가므로,
 # 파일로 흘리고 필요할 때만 읽는다.
 LOG_LEVELS = {"간략": 0, "상세": 4, "디버그": 5}
-DEFAULT_LOG_LEVEL = "간략"
+# 기본을 «상세»로 — 원본 로그는 개발자의 1차 근거(ground truth)라 항상 남긴다
+# (모니터링 설계 가이드 §1). 크기는 MAX_RAW_LOG_BYTES 로 막는다.
+DEFAULT_LOG_LEVEL = "상세"
 #: 파일이 무한정 커지지 않도록 — 넘으면 기록을 멈추고 그 사실을 남긴다
 MAX_RAW_LOG_BYTES = 40 * 1024 * 1024
 
@@ -220,6 +228,8 @@ class _RawLog:
 #: 작업 하나를 도는 동안만 살아 있는 전역. 계산은 한 번에 하나씩만 돌므로
 #: (store.count_active 로 직렬화) 스레드 경합을 만들지 않는다.
 _RAW = _RawLog()
+#: 현재 작업의 구조화 모니터 — SCF·최적화 콜백이 여기로 사건을 보낸다
+_MON = None
 
 
 def _build_mol(atoms, basis, charge, multiplicity):
@@ -248,7 +258,31 @@ def _make_mf(mol, xc, disp, solvent_key, scf_tol):
     if solvent_key:
         mf = mf.SMD()
         mf.with_solvent.solvent = solvent_key
+    if _MON is not None:
+        # 반복마다 cycle·E·|g|·|ddm| 을 구조화 로그로 — 최적화 스텝·진동수 안의
+        # SCF 까지 같은 mf 객체를 쓰므로 전부 잡힌다
+        mf.callback = _MON.scf_callback
+    if _SCF_MAX_CYCLE:
+        mf.max_cycle = _SCF_MAX_CYCLE
     return mf
+
+
+#: 전문가 설정의 SCF 최대 반복 — 작업 동안만 유효
+_SCF_MAX_CYCLE = None
+
+
+def _spin_check(mf, mol, label):
+    """열린 껍질 계산의 ⟨S²⟩ — 기대값과 0.1 이상 어긋나면 스핀 오염 (가이드 §2.5)."""
+    if mol.spin == 0:
+        return None
+    try:
+        s2, _mult = mf.spin_square()
+        s = mol.spin / 2.0
+        expected = s * (s + 1)
+        return {"label": label, "s2": round(float(s2), 4), "expected": round(expected, 4),
+                "deviation": round(float(s2) - expected, 4)}
+    except Exception:  # noqa: BLE001 — 진단값이 계산을 막지 않는다
+        return None
 
 
 def _atomic_charges(mf, mol):
@@ -278,30 +312,65 @@ def _atomic_charges(mf, mol):
 
 
 def _run_scf(mf, label, log, dm0=None):
-    """SCF 실행. 미수렴 시 damping·level shift·2차 수렴(SOSCF)으로 단계적 복구를 시도한다."""
+    """SCF 실행. 미수렴 시 damping·level shift·2차 수렴(SOSCF)으로 단계적 복구를 시도한다.
+
+    자동 복구는 «기록이 핵심»이다 (모니터링 가이드 §6.1) — 어떤 attempt 에서 무엇을
+    왜 바꿨고 결과가 어땠는지 monitor 에 남긴다. 복구로 수렴해도 검증 등급은
+    REVIEW 로 내려간다.
+    """
     t0 = time.time()
+    mon = _MON
+
+    def begin(attempt_label):
+        if mon:
+            mon.attempt_label = attempt_label
+            mon.begin_scf(f"{label}", max_cycle=getattr(mf, "max_cycle", None),
+                          conv_tol=getattr(mf, "conv_tol", None))
+
+    begin(label)
     energy = mf.kernel(dm0) if dm0 is not None else mf.kernel()
+    if mon:
+        mon.end_scf(mf.converged, energy, getattr(mf, "cycles", None))
     if not mf.converged:
+        if mon:
+            mon.recovery(1, label, "기본 설정", "SCF 미수렴", "FAILED")
         dm_last = mf.make_rdm1()
         # 1) 진동 억제: damping + level shift + 사이클 증가
         log(f"{label} SCF 미수렴 — damping·level shift로 재시도")
         mf.max_cycle = max(mf.max_cycle, 200)
         mf.damp = 0.4
         mf.level_shift = 0.4
+        begin(f"{label} attempt 2")
         energy = mf.kernel(dm_last)
+        if mon:
+            mon.end_scf(mf.converged, energy, getattr(mf, "cycles", None))
+            mon.recovery(2, label, f"max_cycle→{mf.max_cycle} · damping 0.4 · level shift 0.4",
+                         "미수렴 — 진동 억제", "CONVERGED" if mf.converged else "FAILED")
         if not mf.converged:
             # 2) level shift를 낮춰 해에 접근
             log(f"{label} 재시도 2 — level shift 완화")
             mf.damp = 0.1
             mf.level_shift = 0.1
+            begin(f"{label} attempt 3")
             energy = mf.kernel(mf.make_rdm1())
+            if mon:
+                mon.end_scf(mf.converged, energy, getattr(mf, "cycles", None))
+                mon.recovery(3, label, "damping 0.1 · level shift 0.1",
+                             "여전히 미수렴 — level shift 완화", "CONVERGED" if mf.converged else "FAILED")
         if not mf.converged:
             # 3) 2차 수렴(뉴턴) — 초기 밀도는 직전 결과 사용
             log(f"{label} 재시도 3 — 2차 수렴(SOSCF)")
+            ok = False
             try:
                 mf_n = mf.newton()
                 mf_n.max_cycle = 100
+                if mon:
+                    mf_n.callback = mon.scf_callback
+                begin(f"{label} attempt 4 (SOSCF)")
                 energy = mf_n.kernel(mf.make_rdm1())
+                ok = bool(mf_n.converged)
+                if mon:
+                    mon.end_scf(ok, energy, getattr(mf_n, "cycles", None))
                 if mf_n.converged:
                     mf.converged = True
                     mf.mo_coeff, mf.mo_energy, mf.mo_occ = (
@@ -309,7 +378,12 @@ def _run_scf(mf, label, log, dm0=None):
                     mf.e_tot = energy
             except Exception as exc:  # noqa: BLE001 — 마지막 복구 시도
                 log(f"{label} SOSCF 실패: {exc}")
+            if mon:
+                mon.recovery(4, label, "2차 수렴(SOSCF, max 100)", "DIIS 계열 실패",
+                             "CONVERGED" if ok else "FAILED")
     if not mf.converged:
+        if mon:
+            mon.fail_scf(label)
         raise RuntimeError(f"{label} SCF 미수렴 — damping·level shift·SOSCF 모두 실패")
     log(f"{label} SCF 수렴 — E = {energy:.6f} Ha ({time.time() - t0:.1f}s)")
     return float(energy)
@@ -380,16 +454,46 @@ def _freeze_solvent_from(mf_ion, dm_neutral):
     sv.frozen = True
 
 
-def _optimize_geometry(mf, log, label=""):
-    """DFT 기체상 구조 최적화. geomeTRIC → pyberny 순으로 시도."""
+def _optimize_geometry(mf, log, label="", max_steps=100):
+    """DFT 기체상 구조 최적화. geomeTRIC → pyberny 순으로 시도.
+
+    optimize() 는 수렴 여부를 버리고 구조만 돌려준다 — 최대 스텝에서 멈춰도
+    조용히 «성공»처럼 보였다. kernel() 을 직접 불러 수렴 플래그를 받고, 스텝마다
+    energy·gradient·displacement 를 모니터에 남긴다 (가이드 §2.3).
+    """
+    mon = _MON
+    cb = mon.opt_callback if mon else None
+    if mon:
+        mon.begin_opt(label.strip() or "구조 최적화", max_steps=max_steps)
     try:
-        from pyscf.geomopt.geometric_solver import optimize as geo_opt
-        log(f"구조 최적화 시작{label} (geomeTRIC)")
-        return geo_opt(mf, maxsteps=100)
-    except ImportError:
-        from pyscf.geomopt.berny_solver import optimize as berny_opt
-        log(f"구조 최적화 시작{label} (pyberny)")
-        return berny_opt(mf, maxsteps=100)
+        try:
+            from pyscf.geomopt.geometric_solver import kernel as geo_kernel
+            log(f"구조 최적화 시작{label} (geomeTRIC)")
+            converged, mol_opt = geo_kernel(mf, callback=cb, maxsteps=max_steps)
+        except ImportError:
+            from pyscf.geomopt.berny_solver import kernel as berny_kernel
+            log(f"구조 최적화 시작{label} (pyberny)")
+            converged, mol_opt = berny_kernel(mf, callback=cb, maxsteps=max_steps)
+    except RuntimeError as exc:
+        # 스텝 안의 SCF 가 수렴하지 않으면 최적화기가 여기서 멈춘다 — 프로세스 오류가
+        # 아니라 계산 미수렴이다. 문구를 사람이 읽을 수 있게 바꾸고 기록을 남긴다.
+        if "not converged" in str(exc).lower():
+            if mon:
+                mon.close_auto_scf(False)
+                mon.fail_scf(f"구조 최적화{label} 스텝 내부 SCF")
+                mon.end_opt(False, mon.summary["opt"].get("step"))
+            raise RuntimeError(f"구조 최적화{label} 스텝 안의 SCF 가 수렴하지 않아 최적화를 "
+                               f"중단했습니다 (PySCF: {exc})") from exc
+        raise
+    steps = (mon.summary["opt"].get("step") if mon else None)
+    if mon:
+        mon.end_opt(bool(converged), steps)
+    if not converged:
+        log(f"구조 최적화{label} — 최대 {max_steps} 스텝에서 수렴 기준 미달 (결과는 마지막 구조, "
+            "검증 등급 FAIL)")
+    else:
+        log(f"구조 최적화{label} 수렴 ({steps or '?'} 스텝)")
+    return mol_opt
 
 
 def _mol_to_atoms(mol):
@@ -401,7 +505,7 @@ def _optimize_state(atoms, params, charge, multiplicity, log, label="", solvent_
     """구조 최적화 후 좌표를 반환. solvent_key가 있으면 용매장(SMD) 안에서 최적화한다."""
     mol = _build_mol(atoms, params["basis_opt"], charge, multiplicity)
     mf = _make_mf(mol, params["xc"], params["disp"], solvent_key, params["scf_tol"])
-    mol_opt = _optimize_geometry(mf, log, label)
+    mol_opt = _optimize_geometry(mf, log, label, max_steps=params.get("opt_max_steps", 100))
     return _mol_to_atoms(mol_opt)
 
 
@@ -414,9 +518,9 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
     t0 = time.time()
     mol = _build_mol(atoms, params["basis_opt"], charge, multiplicity)
     mf = _make_mf(mol, params["xc"], params["disp"], None, params["scf_tol"])
-    e_elec = mf.kernel()
-    if not mf.converged:
-        raise RuntimeError(f"열보정{label} SCF 미수렴")
+    e_elec = _run_scf(mf, f"열보정{label}", log)
+    if _MON:
+        _MON.event("HESSIAN_BEGIN", label=f"열보정{label}", natm=mol.natm)
     hess = mf.Hessian().kernel()
     freq_info = pyscf_thermo.harmonic_analysis(mol, hess)
     freqs = freq_info["freq_wavenumber"]
@@ -447,6 +551,8 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
     q = result.get("qrrho")
     log(f"진동수 계산{label} 완료 — 허수 진동수 {n_imag}개, "
         f"ZPE {result['zpe_hartree'] * HARTREE2KCAL:.2f} kcal/mol ({time.time() - t0:.1f}s)")
+    if _MON:
+        _MON.freq(f"진동수{label}", n_imag, float(np.min(freqs_real)), np.sort(freqs_real))
     if q:
         log(f"  qRRHO 보정{label} — 저진동수 {q['n_low_freq']}개(<{q['cutoff_cm']:.0f} cm⁻¹), "
             f"ΔG {q['delta_g_kcal']:+.2f} kcal/mol")
@@ -522,6 +628,8 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
                          params["scf_tol"]), f"중성({basis_i}){tag}", log)
         return ref_cache[basis_i]
 
+    spins = []   # 이온 계산의 ⟨S²⟩ — 스핀 오염 진단 (가이드 §2.5)
+
     def ion_vertical(dq, label, p):
         stage(f"{label} (수직 ΔSCF){tag}", p)
         basis_i = _basis_for(dq)
@@ -532,11 +640,16 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
         same_basis = basis_i == params["basis_sp"]
         if use_noneq and same_basis:
             _freeze_solvent_from(mf_i, dm_neutral)
-            return _run_scf(mf_i, f"{label}(비평형){tag}", log,
-                            dm0=(dm_neutral / 2, dm_neutral / 2))
-        if use_noneq and not same_basis:
-            noneq_skipped.append(label)
-        return _run_scf(mf_i, f"{label}{tag}", log)
+            e = _run_scf(mf_i, f"{label}(비평형){tag}", log,
+                         dm0=(dm_neutral / 2, dm_neutral / 2))
+        else:
+            if use_noneq and not same_basis:
+                noneq_skipped.append(label)
+            e = _run_scf(mf_i, f"{label}{tag}", log)
+        sc = _spin_check(mf_i, mol_i, f"{label} 수직{tag}")
+        if sc:
+            spins.append(sc)
+        return e
 
     e_cat_v = ion_vertical(+1, "양이온", prog)
     e_an_v = ion_vertical(-1, "음이온", prog + 4)
@@ -546,6 +659,7 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
         "basis_anion": _basis_for(-1),
         "noneq_skipped": noneq_skipped,
         "use_noneq": use_noneq,
+        "spins": spins,
     }
     if params["redox_adiabatic"]:
         def ion_adiabatic(dq, label, p):
@@ -554,10 +668,12 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
             ion_atoms = _optimize_state(at, params, params["charge"] + dq, 2,
                                         log, label=f" ({label}){tag}")
             mol_i = _build_mol(ion_atoms, _basis_for(dq), params["charge"] + dq, 2)
-            e_i = _run_scf(
-                _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
-                         params["scf_tol"]),
-                f"{label}(단열){tag}", log)
+            mf_a = _make_mf(mol_i, params["xc"], params["disp"], solvent_key,
+                            params["scf_tol"])
+            e_i = _run_scf(mf_a, f"{label}(단열){tag}", log)
+            sc = _spin_check(mf_a, mol_i, f"{label} 단열{tag}")
+            if sc:
+                spins.append(sc)
             return e_i, ion_atoms
 
         e_cat_a, cat_atoms = ion_adiabatic(+1, "양이온", prog + 8)
@@ -592,7 +708,10 @@ def run_job(job, update, is_cancelled=lambda: False):
         update({"stage": name, "progress": progress})
         log(f"[{name}]")
         _RAW.note(name)
+        if _MON is not None:
+            _MON.stage(name)
 
+    global _MON, _SCF_MAX_CYCLE
     t_start = time.time()
     # 원본 로그 수준은 전문가 설정에서 정한다. 켜져 있을 때만 파일이 생긴다.
     _level = (job["settings"].get("expert") or {}).get("logLevel") or DEFAULT_LOG_LEVEL
@@ -602,9 +721,21 @@ def run_job(job, update, is_cancelled=lambda: False):
             log(f"PySCF 원본 로그 기록 시작 (수준: {_level}, verbose={_RAW.verbose})")
     except OSError as exc:
         log(f"원본 로그 파일을 열지 못했습니다: {exc}")
+
+    # 구조화 모니터 — SCF 반복·최적화 스텝·진동수·자동 복구를 이벤트로 남기고
+    # 작업 dict 의 monitor 요약을 갱신한다. 잦은 갱신은 메모리에만(persist=False).
+    def mon_update(patch, persist=True):
+        if persist:
+            update(patch)
+        else:
+            store.update_job(job["id"], patch, persist=False)
+
+    _MON = monitor_mod.JobMonitor(job["id"], raw=_RAW, update=mon_update)
+    params = None
     try:
         settings = job["settings"]
         params = _resolve_params(settings)
+        _SCF_MAX_CYCLE = params.get("scf_max_cycle")
         solvent_key = _solvent_key(settings)
         smiles = job["material"]["smiles"]
         temperature = float(settings.get("temperature") or 298.15)
@@ -703,6 +834,37 @@ def run_job(job, update, is_cancelled=lambda: False):
                 for dk, p in zip(rel_kcal, pops)]
             significant = [i for i, p in enumerate(pops) if p >= 0.05][:4]
 
+        # 계산 시작부 입력값 검증 (모니터링 가이드 §2.1) — 실제로 엔진에 들어가는
+        # 값을 남기고, 전하·스핀 조합이 물리적으로 가능한지 먼저 본다. PySCF 도
+        # 걸러 주지만 오류 문구가 불친절해 여기서 명확히 막는다.
+        n_elec = sum(gto.charge(a[0]) for a in atoms) - params["charge"]
+        spin_ok = (n_elec - (params["multiplicity"] - 1)) % 2 == 0 and n_elec >= 0
+        input_info = {
+            "n_atoms": len(atoms),
+            "elements": sorted({a[0] for a in atoms}),
+            "charge": params["charge"], "multiplicity": params["multiplicity"],
+            "n_electrons": int(n_elec), "charge_spin_consistent": bool(spin_ok),
+            "functional": params["functional"], "xc": params["xc"], "dispersion": params["disp"],
+            "basis_opt": params["basis_opt"], "basis_sp": params["basis_sp"],
+            "basis_anion": params.get("basis_anion"),
+            "solvent": solvent_key or "vacuum", "scf_conv_tol": params["scf_tol"],
+            "scf_max_cycle": params.get("scf_max_cycle") or 50,
+            "opt_max_steps": params.get("opt_max_steps"),
+            "do_opt": params["do_opt"], "do_thermo": params["do_thermo"],
+            "temperature_k": temperature, "purpose": purpose,
+            "geometry_source": geom_info.get("forcefield"),
+        }
+        _MON.input_echo(input_info)
+        if _RAW.fh:
+            _RAW.note("입력값 검증 — " + json.dumps(input_info, ensure_ascii=False))
+        log(f"입력 검증 — {len(atoms)}원자 · 전자 {int(n_elec)}개 · 전하 {params['charge']} · "
+            f"다중도 {params['multiplicity']} · {params['functional']} · "
+            f"{params['basis_opt']}→{params['basis_sp']} · {solvent_key or 'vacuum'}")
+        if not spin_ok:
+            raise ValueError(
+                f"전하 {params['charge']}·다중도 {params['multiplicity']} 조합이 전자 {int(n_elec)}개와 "
+                "맞지 않습니다 (홀수 전자면 짝수 다중도) — 전문가 설정을 확인하세요")
+
         def final_singlepoint(at, label):
             """(옵션 최적화 후) 환경 반영 최종 단일점 → 구조·mf·에너지·프런티어·쌍극자."""
             if params["do_opt"]:
@@ -759,6 +921,19 @@ def run_job(job, update, is_cancelled=lambda: False):
         stage("기술자 추출", 40)
         gap = (lumo - homo) if lumo is not None else None
         charge_models = _atomic_charges(mf, mol)
+        # 실제 실행값 — UI 선택값과 대조한다 (가이드 §2.1 «프로그램 기본값이 아닌 실제 사용값»)
+        _MON.actual({
+            "xc": getattr(mf, "xc", None) or ("hf" if params["xc"] == "hf" else None),
+            "disp": getattr(mf, "disp", None),
+            "solvent": getattr(getattr(mf, "with_solvent", None), "solvent", None),
+            "basis": str(mol.basis), "conv_tol": mf.conv_tol, "max_cycle": mf.max_cycle,
+            "nelectron": int(mol.nelectron), "spin": int(mol.spin), "natm": int(mol.natm),
+            "converged": bool(mf.converged),
+        })
+        spin_checks = []
+        sc = _spin_check(mf, mol, "중성")
+        if sc:
+            spin_checks.append(sc)
         charges = charge_models[charge_models["primary"]]
         try:
             density_cloud = desc_mod.density_cloud(mf, mol)
@@ -928,6 +1103,7 @@ def run_job(job, update, is_cancelled=lambda: False):
 
             # 지배 conformer 의 전자 IP/EA — 민감도 conformer 와 같은 함수를 탄다
             rx = _redox_electronic(atoms, e_total, mf, params, solvent_key, log, stage, 66)
+            spin_checks.extend(rx.get("spins") or [])
             if rx["noneq_skipped"]:
                 notes.append(
                     f"{' · '.join(rx['noneq_skipped'])}은 중성과 다른 기저(diffuse)를 써서 "
@@ -1244,9 +1420,25 @@ def run_job(job, update, is_cancelled=lambda: False):
             binder_report = binder_mod.report(job["material"], descriptors)
             log(f"바인더 판정: {binder_report['summary']}")
 
+        if spin_checks:
+            descriptors["spin_contamination"] = spin_checks
+            worst = max(spin_checks, key=lambda s: abs(s["deviation"]))
+            if abs(worst["deviation"]) > 0.1:
+                notes.append(f"스핀 오염 — {worst['label']} ⟨S²⟩ {worst['s2']:.3f} "
+                             f"(기대 {worst['expected']:.3f}). UKS 이온 에너지·전위의 신뢰도가 낮습니다")
+
+        # 검증 보고서 (모니터링 가이드 §5) — 프로세스 정상 종료와 계산의 과학적
+        # 완결성을 분리해 PASS / REVIEW / FAIL 로 등급을 매긴다.
+        stage("검증 보고서", 99)
+        sanity = monitor_mod.sanity_geometry(
+            atoms, smiles, check_bonds=not explicit and not user_atoms)
+        validation = monitor_mod.validate(_MON.snapshot(), params, descriptors, geometry=sanity)
+        log(f"검증: {validation['summary']}")
+
         elapsed = time.time() - t_start
         result = {
             "descriptors": descriptors,
+            "validation": validation,
             "binder_report": binder_report,
             "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
                            for f in fragments] if fragments else None),
@@ -1280,12 +1472,15 @@ def run_job(job, update, is_cancelled=lambda: False):
             "wall_time_s": round(elapsed, 1),
         }
         update({"status": "PUBLISHED", "progress": 100, "stage": "완료",
-                "result": result, "finishedAt": time.time()})
+                "result": result, "validation": validation, "finishedAt": time.time()})
         log(f"계산 완료 — 총 {elapsed:.1f}s")
         update({"logs": list(log_lines)})
-    except CancelledError:
+    except CancelledError as exc:
+        _MON.error(exc, "CANCELLED")
         update({"status": "FAILED", "error": "사용자 취소", "stage": "취소됨",
-                "finishedAt": time.time()})
+                "finishedAt": time.time(),
+                "validation": monitor_mod.validate(_MON.snapshot(), params, error="사용자 취소",
+                                                   error_kind="CANCELLED")})
     except Exception as exc:  # noqa: BLE001 — 작업 단위 오류는 작업 실패로 기록
         log(f"오류: {exc}")
         # 실패했을 때야말로 원본 로그가 필요하다 — 파이썬 예외까지 같이 남긴다
@@ -1295,8 +1490,20 @@ def run_job(job, update, is_cancelled=lambda: False):
                 _RAW.fh.write(traceback.format_exc())
             except (OSError, ValueError):
                 pass
+        # 실행 실패(CRASHED)와 계산 목적 미달(FAILED)을 나눈다 (가이드 §5)
+        kind = monitor_mod.classify_error(exc)
+        _MON.error(exc, kind)
         update({"status": "FAILED", "error": str(exc), "stage": "실패",
-                "finishedAt": time.time(),
-                "traceback": traceback.format_exc()[-2000:]})
+                "errorKind": kind, "finishedAt": time.time(),
+                "traceback": traceback.format_exc()[-2000:],
+                "validation": monitor_mod.validate(_MON.snapshot(), params, error=str(exc),
+                                                   error_kind=kind)})
     finally:
         _RAW.close()
+        _SCF_MAX_CYCLE = None
+        # 원본 로그를 닫은 뒤 해시를 찍어야 파일 전체가 들어간다 (가이드 §3.2)
+        try:
+            update({"monitor": _MON.finish(store.raw_log_path(job["id"]))})
+        except Exception:  # noqa: BLE001 — 마무리 기록 실패가 결과를 지우면 안 된다
+            pass
+        _MON = None

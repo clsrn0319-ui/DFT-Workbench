@@ -68,14 +68,18 @@ def create_job(material: dict, settings: dict) -> dict:
         return job
 
 
-def update_job(job_id: str, patch: dict):
+def update_job(job_id: str, patch: dict, persist: bool = True):
+    """작업 갱신. persist=False 면 메모리만 바꾼다 — SCF 반복마다 오는 모니터
+    요약처럼 잦은 갱신이 jobs.json 전체를 매번 다시 쓰지 않게 한다. 다음 persist
+    갱신(단계 전환·완료) 때 함께 저장된다."""
     with _lock:
         _load()
         job = _jobs.get(job_id)
         if job is None:
             return None
         job.update(patch)
-        _persist()
+        if persist:
+            _persist()
         return job
 
 
@@ -101,10 +105,20 @@ def count_active() -> int:
 LOGS_DIR = DATA_DIR / "logs"
 
 
+def safe_id(job_id: str) -> str:
+    return "".join(c for c in str(job_id) if c.isalnum() or c in "-_")
+
+
 def raw_log_path(job_id: str):
     """PySCF 원본 로그 파일 위치. 크기가 커질 수 있어 jobs.json 밖에 둔다."""
-    safe = "".join(c for c in str(job_id) if c.isalnum() or c in "-_")
-    return LOGS_DIR / f"{safe}.log"
+    return LOGS_DIR / f"{safe_id(job_id)}.log"
+
+
+def job_files(job_id: str) -> list:
+    """작업에 딸린 파일 전부 — 원본 로그·구조화 이벤트·최적화 궤적."""
+    s = safe_id(job_id)
+    return [LOGS_DIR / f"{s}.log", LOGS_DIR / f"{s}.events.jsonl",
+            LOGS_DIR / f"{s}.trajectory.xyz"]
 
 
 def delete_job(job_id: str) -> bool:
@@ -114,10 +128,11 @@ def delete_job(job_id: str) -> bool:
             del _jobs[job_id]
             _persist()
             # 작업을 지우면 로그도 함께 지운다 — 남겨 두면 디스크만 먹는다
-            try:
-                raw_log_path(job_id).unlink(missing_ok=True)
-            except OSError:
-                pass
+            for p in job_files(job_id):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return True
         return False
 

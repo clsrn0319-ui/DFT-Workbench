@@ -834,13 +834,28 @@ def _candidate_view(c: dict, camp: dict) -> dict:
         score = scoring.evaluate(desc, verdict, camp["electrodes"],
                                  weights=sc_cfg.get("weights"),
                                  preset=sc_cfg.get("preset") or "균등")
+    # 계산 검증 등급(PASS/REVIEW/FAIL) — 마지막 작업의 monitor 검증 보고서.
+    # 판정(적합/부적합)과는 별개다: 프로세스가 끝났다고 계산이 정확한 것은 아니다.
+    last_job = None
+    for si in range(len(camp["stages"]) - 1, -1, -1):
+        last_job = store.get_job(c["jobs"].get(str(si)))
+        if last_job:
+            break
+    val = (last_job or {}).get("validation") if last_job else None
+    mon = (last_job or {}).get("monitor") or {}
     return {"idx": c["idx"], "name": c["name"], "smiles": c["smiles"],
             "calcSmiles": c["calcSmiles"], "atoms": c["atoms"],
             "state": state, "detail": detail,
             "alive": c["alive"], "failed": c["failed"], "cutStage": c["cutStage"],
             "jobs": c["jobs"], "verdict": verdict, "provisional": provisional,
             "score": score, "fgroups": c.get("fgroups") or [],
-            "progress": (job or {}).get("progress") if job else None}
+            "progress": (job or {}).get("progress") if job else None,
+            "validation": ({"grade": val.get("grade"), "summary": val.get("summary")}
+                           if val else None),
+            "monitorJob": last_job["id"] if last_job else None,
+            "scf": (mon.get("scf") or {}).get("cycle") if job and job["status"] == "RUNNING" else None,
+            "anomalies": sum(1 for a in (mon.get("anomalies") or [])
+                             if a.get("severity") in ("WARN", "ERROR", "FATAL"))}
 
 
 def _overall_pct(camp: dict) -> int:

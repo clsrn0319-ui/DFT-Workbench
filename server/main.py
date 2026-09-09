@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
 from . import lookup as lookup_mod
+from . import monitor
 from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
@@ -60,6 +61,8 @@ class ExpertSettings(BaseModel):
     bdeThermalCorrection: Optional[bool] = None
     freqScale: Optional[float] = Field(None, gt=0.5, lt=1.5)
     scfTol: float = 1e-8
+    # SCF 최대 반복 (비우면 PySCF 기본 50). 모니터링 시나리오 «max_cycle 을 작게» 용도 포함
+    scfMaxCycle: Optional[int] = Field(None, ge=1, le=1000)
     # PySCF 원본 로그 수준 — 간략(끔) / 상세(SCF 반복·궤도) / 디버그
     logLevel: Optional[str] = None
 
@@ -1106,10 +1109,17 @@ def get_job(job_id: str, _: bool = Depends(require_login)):
 
 @app.get("/api/jobs/{job_id}/log")
 def get_job_log(job_id: str, tail: int = 400, download: bool = False,
+                start: Optional[int] = None, count: int = 400,
+                search: Optional[str] = None, offset: Optional[int] = None,
                 _: bool = Depends(require_login)):
-    """PySCF 원본 로그. 기본은 «끝부분»만 — 전체는 수십 MB 가 될 수 있다.
+    """PySCF 원본 로그 (모니터링 가이드 §9 Raw Log Viewer).
 
-    tail=0 이면 전체를 준다 (다운로드용).
+    - 기본: 끝 tail 줄 (실시간 tail)
+    - start=&count=: line range (대용량 로그를 한 번에 주지 않는다)
+    - offset=: byte offset → 그 줄 주변 (구조화 이벤트의 «원본에서 보기»)
+    - search=: 검색 — 일치하는 줄 번호·내용 (최대 200건)
+    - download=true: 전체 파일
+    - 단계별 시작 줄(sections)을 함께 준다 — SCF/OPT/FREQ 구간으로 바로 이동
     """
     job = _job_or_404(job_id)
     path = store.raw_log_path(job_id)
@@ -1124,12 +1134,109 @@ def get_job_log(job_id: str, tail: int = 400, download: bool = False,
     if download:
         return FileResponse(path, media_type="text/plain; charset=utf-8",
                             filename=f"rhobench-{job_id}.log")
+    if search:
+        return {"exists": True, "bytes": size, **monitor.search_log(path, search)}
+    mon = job.get("monitor") or {}
+    sections = [{"name": s["name"], "line": monitor.offset_to_line(path, s.get("offset")),
+                 "t": s.get("t")} for s in (mon.get("sections") or [])]
+    raw_info = mon.get("raw_log")
+    if offset is not None:
+        line = monitor.offset_to_line(path, offset) or 1
+        start = max(1, line - 5)
+    if start is not None:
+        rng = monitor.read_log_lines(path, start, max(1, min(count, 5000)))
+        return {"exists": True, "bytes": size, "lines": rng["total"], "start": rng["start"],
+                "end": rng["end"], "text": "".join(rng["lines"]), "sections": sections,
+                "sha256": (raw_info or {}).get("sha256"), "truncated": True}
     with open(path, encoding="utf-8", errors="replace") as fh:
         lines = fh.readlines()
     shown = lines if tail <= 0 else lines[-tail:]
+    first = 1 if tail <= 0 else max(1, len(lines) - len(shown) + 1)
     return {"exists": True, "bytes": size, "lines": len(lines),
             "truncated": tail > 0 and len(lines) > tail,
+            "start": first, "end": len(lines), "sections": sections,
+            "sha256": (raw_info or {}).get("sha256"),
             "text": "".join(shown)}
+
+
+@app.get("/api/jobs/{job_id}/events")
+def get_job_events(job_id: str, after: int = 0, limit: int = 500,
+                   kinds: Optional[str] = None, _: bool = Depends(require_login)):
+    """구조화 로그(JSONL) — 원본 로그에서 파생된 이벤트. after=N 이후만 준다."""
+    _job_or_404(job_id)
+    ks = tuple(k for k in (kinds or "").split(",") if k) or None
+    return monitor.read_events(job_id, after, max(1, min(limit, 5000)), kinds=ks)
+
+
+@app.get("/api/jobs/{job_id}/monitor")
+def get_job_monitor(job_id: str, _: bool = Depends(require_login)):
+    """작업 하나의 모니터 상세 — 요약·검증 보고서·SCF/OPT 이력·attempt."""
+    job = _job_or_404(job_id)
+    mon = job.get("monitor") or {}
+    path = store.raw_log_path(job_id)
+    anomalies = []
+    for a in mon.get("anomalies") or []:
+        a = dict(a)
+        a["line"] = monitor.offset_to_line(path, a.get("raw_offset")) if path.exists() else None
+        anomalies.append(a)
+    attempts = []
+    for a in mon.get("attempts") or []:
+        a = dict(a)
+        a["line"] = monitor.offset_to_line(path, a.get("raw_offset")) if path.exists() else None
+        attempts.append(a)
+    return {
+        "view": monitor.job_monitor_view(job),
+        "monitor": {**mon, "anomalies": anomalies, "attempts": attempts},
+        "validation": job.get("validation") or (job.get("result") or {}).get("validation"),
+        "scf_history": monitor.scf_history(job_id),
+        "opt_history": monitor.opt_history(job_id),
+        "raw_log_exists": path.exists(),
+        "trajectory_exists": monitor.trajectory_path(job_id).exists(),
+        "heartbeat_warn_s": monitor.HEARTBEAT_WARN_S,
+    }
+
+
+@app.get("/api/jobs/{job_id}/trajectory")
+def get_job_trajectory(job_id: str, _: bool = Depends(require_login)):
+    _job_or_404(job_id)
+    path = monitor.trajectory_path(job_id)
+    if not path.exists():
+        raise HTTPException(404, "최적화 궤적이 없습니다.")
+    return FileResponse(path, media_type="chemical/x-xyz", filename=f"rhobench-{job_id}-trajectory.xyz")
+
+
+@app.get("/api/monitor")
+def monitor_dashboard(campaign: Optional[str] = None, limit: int = 200,
+                      _: bool = Depends(require_login)):
+    """관리자 대시보드 (가이드 §8) — 모든 작업의 stage·SCF·OPT·FREQ·판정 한눈에.
+
+    실행·대기 중인 작업이 먼저, 그다음 최근 완료 순. campaign=ID 로 캠페인만 본다.
+    """
+    now = time.time()
+    jobs = store.list_jobs()
+    if campaign:
+        jobs = [j for j in jobs if (j.get("campaign") or {}).get("id") == campaign]
+    order = {"RUNNING": 0, "QUEUED": 1}
+    jobs.sort(key=lambda j: (order.get(j["status"], 2), -(j.get("createdAt") or 0)))
+    views = [monitor.job_monitor_view(j, now) for j in jobs[:max(1, min(limit, 1000))]]
+    counts = {"running": 0, "queued": 0, "PASS": 0, "REVIEW": 0, "FAIL": 0,
+              "CRASHED": 0, "CANCELLED": 0, "FAILED": 0, "ungraded": 0, "stale": 0}
+    for j in jobs:
+        if j["status"] == "RUNNING":
+            counts["running"] += 1
+            if monitor.heartbeat_view(j, now)["stale"]:
+                counts["stale"] += 1
+        elif j["status"] == "QUEUED":
+            counts["queued"] += 1
+        else:
+            g = ((j.get("validation") or (j.get("result") or {}).get("validation") or {})
+                 .get("grade"))
+            counts[g if g in counts else "ungraded"] += 1
+    campaigns = sorted({(j.get("campaign") or {}).get("id"): (j.get("campaign") or {}).get("name")
+                        for j in store.list_jobs() if j.get("campaign")}.items())
+    return {"jobs": views, "counts": counts, "total": len(jobs),
+            "campaigns": [{"id": cid, "name": name} for cid, name in campaigns],
+            "heartbeat_warn_s": monitor.HEARTBEAT_WARN_S, "now": now}
 
 
 @app.post("/api/jobs/{job_id}/retry")

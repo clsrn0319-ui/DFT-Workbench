@@ -310,6 +310,7 @@ async function submit() {
         basisAnion: $("basis-anion").value || null,
         qrrho: $("qrrho").value === "" ? null : $("qrrho").value === "true",
         logLevel: $("log-level").value,
+        scfMaxCycle: $("scf-max-cycle").value ? parseInt($("scf-max-cycle").value) : null,
         optimizeGeometry: $("optimize").value === "" ? null : $("optimize").value === "true",
         thermochemistry: $("thermo").value === "" ? null : $("thermo").value === "true",
         redoxAdiabatic: $("redox-mode").value === "" ? null : $("redox-mode").value === "true",
@@ -389,7 +390,7 @@ async function showRawLog(jobId, btn, keepOpen) {
 }
 
 function jobsSignature() {
-  return JOBS_CACHE.map(j => `${j.id}:${j.status}:${j.progress}:${j.logs.length}`).join("|")
+  return JOBS_CACHE.map(j => `${j.id}:${j.status}:${j.progress}:${j.logs.length}:${j.monitor?.scf?.cycle ?? ""}:${j.monitor?.opt?.step ?? ""}:${j.validation?.grade ?? ""}`).join("|")
     + "#" + [...EXPORT_SEL].sort().join(",");
 }
 
@@ -471,6 +472,9 @@ function jobRowHtml(job) {
       ${["RUNNING", "QUEUED"].includes(job.status)
         ? `<div class="progress-track"><div class="progress-fill" style="width:${job.progress}%"></div></div>
            <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
+      ${job.status === "RUNNING" && job.monitor?.scf?.cycle != null
+        ? `<div class="small muted mono">SCF ${esc(job.monitor.scf.label || "")} cycle ${job.monitor.scf.cycle}${job.monitor.scf.max_cycle ? "/" + job.monitor.scf.max_cycle : ""} · |g| ${fmtExp(job.monitor.scf.gorb)}${job.monitor.opt?.step ? ` · OPT step ${job.monitor.opt.step}${job.monitor.opt.max_steps ? "/" + job.monitor.opt.max_steps : ""} |grad| ${fmtExp(job.monitor.opt.grad_norm)}` : ""}${job.monitor.scf.recovered ? ` · 복구 ${job.monitor.scf.recovered}` : ""}</div>` : ""}
+      ${job.validation ? `<div class="small"><span class="badge ${MON_GRADE_BADGE[job.validation.grade] || "queued"}">검증 ${esc(job.validation.grade)}</span> <span class="muted">${esc(job.validation.summary || "")}</span></div>` : ""}
       ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
       <details><summary class="small muted">로그 (${job.logs.length})</summary>
         <ul class="log-list mono">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
@@ -484,6 +488,7 @@ function jobRowHtml(job) {
     <div class="job-side">
       <span class="badge ${badgeClass[job.status] || "queued"}">${badgeLabel[job.status] || esc(job.status)}</span>
       ${done ? `<button class="btn ghost" data-view-job="${esc(job.id)}">결과 보기</button>` : ""}
+      <button class="btn ghost" type="button" onclick="window.rbOpenMonitor('${esc(job.id)}')">모니터</button>
       ${job.status === "FAILED" ? `<button class="btn ghost" data-retry="${esc(job.id)}">재시도</button>` : ""}
       ${["QUEUED", "RUNNING"].includes(job.status)
         ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
@@ -1355,6 +1360,7 @@ function showResult(job) {
       <td class="small muted">${esc(unit)}${suffix}</td>
       <td class="num" style="text-align:right;font-variant-numeric:tabular-nums">${fmt(d[k])}</td></tr>`;
   }
+  if (r.validation) html += htmlValidationCard(r.validation, job.id);
   html += `<h3 style="font-size:13px;color:var(--accent);margin-top:18px">
       물성 전체 목록 <span class="muted small">(★를 클릭하면 고정 — 레이더 축이 됩니다)</span></h3>
     <div class="scroll-x"><table class="table" style="min-width:520px">
@@ -3449,7 +3455,7 @@ async function scrRenderDetail() {
 
   const tbl = `<div class="scroll-x"><table class="table" style="min-width:680px">
     <tr><th class="clickable" data-scr-sort="rank">#${sortMark("rank")}</th>
-      <th>후보</th><th>상태</th><th>판정</th>
+      <th>후보</th><th>상태</th><th>판정</th><th>검증</th>
       ${v.scoring?.enabled ? `<th class="clickable" data-scr-sort="total">총점${sortMark("total")}</th><th>신뢰도</th>` : ""}
       ${elecs.map(e => `<th class="small clickable" data-scr-sort="${esc(e)}"
         style="text-align:center">${esc(elecLabel(e))}${sortMark(e)}</th>`).join("")}
@@ -3476,6 +3482,11 @@ async function scrRenderDetail() {
             : vd.conformer_spread?.rule === "downgrade"
             ? `<br><span class="muted small" title="conformer 간 전위 편차 — Model 신뢰도 하향">σ ${(+vd.conformer_spread.spread_v).toFixed(2)} V</span>`
             : ""}</td>
+        <td class="small">${cd.validation
+            ? `<span class="badge ${MON_GRADE_BADGE[cd.validation.grade] || "queued"}" title="${esc(cd.validation.summary || "")}">${esc(cd.validation.grade)}</span>`
+            : (cd.scf != null ? `<span class="muted mono">SCF ${cd.scf}</span>` : '<span class="muted">—</span>')}${cd.anomalies
+            ? `<br><span class="verdict-mid">⚠ ${cd.anomalies}</span>` : ""}${cd.monitorJob
+            ? `<br><button class="btn ghost small" type="button" onclick="window.rbOpenMonitor('${esc(cd.monitorJob)}')">모니터</button>` : ""}</td>
         ${v.scoring?.enabled ? (() => {
           const sc = cd.score;
           if (!sc || sc.total == null) return '<td class="muted small">—</td><td></td>';
@@ -3565,6 +3576,7 @@ function scrWire() {
    "scr-th1", "scr-th2"].forEach(id =>
     $(id) && $(id).addEventListener("change", scrEstimate));
   wireWizard();
+  $("scr-monitor").addEventListener("click", () => { MON_CAMPAIGN = SCR_DETAIL_ID || ""; window.rbOpenMonitor(); });
   $("scr-detail-close").addEventListener("click", () => {
     SCR_DETAIL_ID = null;
     $("scr-detail").style.display = "none";
@@ -4213,4 +4225,331 @@ function wireWizard() {
     wizApplyPreset("표준", {silent: true});
     wizGo(1);
   })();
+}
+
+
+/* ══════════════ 계산 모니터 — 「DFT 계산 모니터링 · Raw Log 설계 가이드」 ══════════════
+   Raw Log(원본)는 그대로 보존하고, Structured Log(이벤트)는 원본에서 파생된 보조 계층이다.
+   대시보드는 대량 계산에서 이상 징후를 빨리 찾기 위한 것이지 원본을 대체하지 않는다.
+   단일 계산·배치 스크리닝의 작업이 모두 같은 store 를 쓰므로 한 화면에서 함께 본다. */
+const MON_GRADE_BADGE = {PASS: "verdict-ok", REVIEW: "verdict-mid", FAIL: "verdict-no", FAILED: "verdict-no",
+  CRASHED: "failed", CANCELLED: "queued", RUN: "running", QUEUED: "queued"};
+let MON_TIMER = null, MON_SEL = null, MON_CAMPAIGN = "", MON_WIRED = false, MON_DATA = null, MON_DETAIL = null;
+let MON_LOG = {mode: "tail", start: 1, follow: true, target: null, total: 0};
+
+function fmtExp(x, d = 1) { return x == null || !isFinite(x) ? "—" : Number(x).toExponential(d); }
+function fmtAge(s) {
+  if (s == null) return "—";
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+
+/* 검증 보고서 카드 — 결과 상세·모니터 상세가 공유 */
+function htmlValidationCard(v, jobId) {
+  if (!v) return "";
+  const b = MON_GRADE_BADGE[v.grade] || "queued";
+  const st = {pass: "PASS", review: "REVIEW", fail: "FAIL", skip: "—"};
+  return `<div class="card" style="margin:10px 0;padding:12px 16px">
+    <div class="card-head" style="margin-bottom:6px"><h3 style="font-size:13px;margin:0">계산 검증
+      <span class="badge ${b}">${esc(v.grade)}</span></h3>
+      ${jobId ? `<button class="btn ghost small" type="button" onclick="window.rbOpenMonitor('${esc(jobId)}')">모니터에서 보기</button>` : ""}</div>
+    <div class="small" style="margin-bottom:6px">${esc(v.summary || "")}</div>
+    ${(v.checks || []).map(c => `<div class="mon-check"><span class="st st-${esc(c.status)}">${st[c.status] || esc(c.status)}</span>
+      <b style="width:110px;flex-shrink:0">${esc(c.label)}</b><span class="muted">${esc(c.detail)}</span></div>`).join("")}
+    <p class="muted small" style="margin:6px 0 0">${esc(v.rule || "")}</p></div>`;
+}
+
+function monWire() {
+  if (MON_WIRED) return;
+  MON_WIRED = true;
+  $("mon-refresh").onclick = () => { monRenderList(); if (MON_SEL) monRenderDetail(); };
+  $("mon-campaign").onchange = e => { MON_CAMPAIGN = e.target.value; monRenderList(); };
+  $("mon-filter").onchange = () => monRenderList();
+  $("mon-detail-close").onclick = () => { MON_SEL = null; $("mon-detail").style.display = "none"; monRenderList(); };
+  $("mon-log-search-btn").onclick = () => monLogSearch();
+  $("mon-log-search").addEventListener("keydown", e => { if (e.key === "Enter") monLogSearch(); });
+  $("mon-log-tail").onclick = () => { MON_LOG.mode = "tail"; MON_LOG.follow = true; $("mon-log-follow").checked = true; monLoadLog(); };
+  $("mon-log-follow").onchange = e => { MON_LOG.follow = e.target.checked; };
+  $("mon-log-sections").onchange = e => { const ln = parseInt(e.target.value); if (ln) monLogGoto(ln); };
+  $("mon-log-prev").onclick = () => monLogPage(-1);
+  $("mon-log-next").onclick = () => monLogPage(+1);
+  // 화면이 열려 있는 동안만 폴링 — 실행 중 작업의 SCF cycle·heartbeat 가 살아 움직인다
+  MON_TIMER = setInterval(() => {
+    const real = document.getElementById("rb-real");
+    if (!real || !real.classList.contains("mode-monitor")) return;
+    monRenderList();
+    if (MON_SEL) monRenderDetail(true);
+  }, 3000);
+}
+
+window.rbRenderMonitor = function () {
+  monWire();
+  monRenderList();
+  if (MON_SEL) monRenderDetail();
+};
+window.rbMonitorSelect = function (jobId) {
+  monWire();
+  MON_SEL = jobId;
+  MON_LOG = {mode: "tail", start: 1, follow: true, target: null, total: 0};
+  $("mon-log-hits").innerHTML = "";
+  monRenderDetail().then(() => { const el = $("mon-detail"); if (el) el.scrollIntoView({block: "start"}); });
+};
+
+async function monRenderList() {
+  let d;
+  try {
+    const r = await fetch(`/api/monitor${MON_CAMPAIGN ? "?campaign=" + encodeURIComponent(MON_CAMPAIGN) : ""}`);
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (e) { return; }
+  MON_DATA = d;
+  const c = d.counts;
+  $("mon-tiles").innerHTML = [
+    ["실행 중", c.running, c.stale ? `heartbeat 경고 ${c.stale}건` : "heartbeat 정상", c.stale ? "var(--danger)" : ""],
+    ["대기", c.queued, "", ""],
+    ["PASS", c.PASS, "검증 통과", "var(--ok)"],
+    ["REVIEW", c.REVIEW, "연구자 확인 필요", "var(--pin)"],
+    ["FAIL", c.FAIL + c.FAILED, `CRASHED ${c.CRASHED} · 취소 ${c.CANCELLED}`, "var(--danger)"],
+  ].map(([l, n, sub, col]) => `<div class="stat-tile"><div class="stat-label">${l}</div>
+      <div class="stat-value" style="${col ? "color:" + col : ""}">${n}</div><div class="stat-sub">${esc(sub)}</div></div>`).join("");
+  const sel = $("mon-campaign");
+  const want = ["", ...d.campaigns.map(x => x.id)].join("|");
+  if ([...sel.options].map(o => o.value).join("|") !== want) {
+    sel.innerHTML = `<option value="">전체</option>`
+      + d.campaigns.map(x => `<option value="${esc(x.id)}">${esc(x.name || x.id)}</option>`).join("");
+  }
+  sel.value = MON_CAMPAIGN;
+  const filter = $("mon-filter").value;
+  let rows = d.jobs;
+  if (filter === "active") rows = rows.filter((j, i) => ["RUNNING", "QUEUED"].includes(j.status) || i < 40);
+  if (filter === "problem") rows = rows.filter(j => ["REVIEW", "FAIL", "FAILED", "CRASHED"].includes(j.grade)
+    || j.n_warn || j.n_error || j.heartbeat?.stale);
+  const box = $("mon-table");
+  if (!rows.length) { box.className = "empty small"; box.textContent = "표시할 작업이 없습니다."; return; }
+  box.className = "scroll-x";
+  const conv = x => x === true ? ' <span class="verdict-ok">✓</span>' : x === false ? ' <span class="verdict-no">✗</span>' : "";
+  box.innerHTML = `<table class="table" style="min-width:960px">
+    <tr><th>작업</th><th>캠페인</th><th>단계</th><th>SCF</th><th>OPT</th><th>FREQ</th><th>복구</th>
+      <th>heartbeat</th><th>판정</th><th>징후</th><th></th></tr>
+    ${rows.map(j => {
+      const s = j.scf || {}, o = j.opt || {}, f = j.freq || {};
+      const scf = s.cycle != null ? `${s.cycle}${s.max_cycle ? "/" + s.max_cycle : ""} · |g| ${fmtExp(s.gorb)}${conv(s.converged)}` : "—";
+      const opt = o.step != null ? `${o.step}${o.max_steps ? "/" + o.max_steps : ""} · |grad| ${fmtExp(o.grad_norm)}${conv(o.converged)}` : "—";
+      const freq = f.n_imag != null ? (f.n_imag === 0 ? '<span class="verdict-ok">허수 0</span>'
+        : `<span class="verdict-mid">허수 ${f.n_imag} (${Math.round(f.lowest_cm)} cm⁻¹)</span>`) : "—";
+      const hb = j.status === "RUNNING"
+        ? `<span style="${j.heartbeat?.stale ? "color:var(--danger);font-weight:700" : ""}">${fmtAge(j.heartbeat?.age_s)} 전</span>`
+        : (j.wall_s != null ? `<span class="muted">${fmtAge(j.wall_s)} 소요</span>` : "—");
+      const selStyle = MON_SEL === j.id ? ' style="background:color-mix(in srgb,var(--accent) 6%,transparent)"' : "";
+      return `<tr${selStyle}>
+        <td><b>${esc(j.name || "")}</b><br><span class="mono small muted">${esc(j.id)}</span></td>
+        <td class="small">${j.campaign
+          ? `${esc(j.campaign.name || j.campaign.id)}<br><span class="muted">${(j.campaign.stage ?? 0) + 1}단계 · ${esc(j.campaign.accuracy || "")}</span>`
+          : `<span class="muted">단건 · ${esc(j.accuracy || "")}</span>`}</td>
+        <td class="small">${esc(j.stage || "")}${j.status === "RUNNING" && j.progress != null ? ` <span class="muted">${j.progress}%</span>` : ""}</td>
+        <td class="small mono">${scf}</td><td class="small mono">${opt}</td><td class="small">${freq}</td>
+        <td class="small">${j.recovered ? `<span class="verdict-mid">${j.recovered}회</span>` : (j.attempts ? `${j.attempts} attempt` : '<span class="muted">—</span>')}</td>
+        <td class="small">${hb}</td>
+        <td><span class="badge ${MON_GRADE_BADGE[j.grade] || "queued"}" title="${esc(j.validation_summary || j.error || "")}">${esc(j.grade || j.status)}</span></td>
+        <td class="small">${j.n_error ? `<span class="verdict-no">ERROR ${j.n_error}</span> ` : ""}${j.n_warn ? `<span class="verdict-mid">WARN ${j.n_warn}</span>` : ""}${!j.n_error && !j.n_warn ? '<span class="muted">—</span>' : ""}</td>
+        <td><button class="btn ghost small" type="button" data-mon-open="${esc(j.id)}">열기</button></td></tr>`;
+    }).join("")}</table>`;
+  box.querySelectorAll("[data-mon-open]").forEach(b => b.onclick = () => window.rbMonitorSelect(b.dataset.monOpen));
+}
+
+async function monRenderDetail(quiet = false) {
+  if (!MON_SEL) return;
+  let d;
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(MON_SEL)}/monitor`);
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) { return; }
+  MON_DETAIL = d;
+  const v = d.view, m = d.monitor || {};
+  $("mon-detail").style.display = "";
+  $("mon-detail-title").textContent = `${v.name || ""} — ${v.id}`;
+  $("mon-log-download").href = `/api/jobs/${encodeURIComponent(v.id)}/log?download=true`;
+  const tj = $("mon-traj-download");
+  tj.style.display = d.trajectory_exists ? "" : "none";
+  tj.href = `/api/jobs/${encodeURIComponent(v.id)}/trajectory`;
+  const s = m.scf || {}, o = m.opt || {}, f = m.freq || {};
+  const h3 = t => `<h3 style="font-size:13px;color:var(--accent);margin-top:12px">${t}</h3>`;
+  let html = `<div class="mini-cards wide" style="margin-bottom:10px">
+    <div class="mini-card"><div class="stat-label">상태</div>
+      <div><span class="badge ${badgeClass[v.status] || "queued"}">${esc(v.status)}</span>
+        <span class="badge ${MON_GRADE_BADGE[v.grade] || "queued"}">${esc(v.grade || "")}</span></div>
+      <div class="small muted">${esc(v.stage || "")}${v.status === "RUNNING" && v.progress != null ? ` · ${v.progress}%` : ""}</div></div>
+    <div class="mini-card"><div class="stat-label">SCF (${esc(s.label || "—")})</div>
+      <div class="mono small">cycle ${s.cycle ?? "—"}${s.max_cycle ? "/" + s.max_cycle : ""} · E ${s.energy != null ? Number(s.energy).toFixed(6) : "—"}</div>
+      <div class="mono small">ΔE ${fmtExp(s.delta_e)} · |g| ${fmtExp(s.gorb)} · |ddm| ${fmtExp(s.ddm)}</div>
+      <div class="small muted">run ${s.runs || 0} · 복구 ${s.recovered || 0} · 실패 ${s.failed || 0} · tol ${fmtExp(s.conv_tol)}</div></div>
+    <div class="mini-card"><div class="stat-label">구조 최적화 (${esc(o.label || "—")})</div>
+      <div class="mono small">step ${o.step ?? "—"}${o.max_steps ? "/" + o.max_steps : ""} · |grad| ${fmtExp(o.grad_norm)}</div>
+      <div class="mono small">max grad ${fmtExp(o.grad_max)} · disp ${fmtExp(o.disp_max)} Å</div>
+      <div class="small muted">run ${o.runs || 0} · 미수렴 ${o.unconverged || 0}</div></div>
+    <div class="mini-card"><div class="stat-label">진동수 · heartbeat</div>
+      <div class="small">${f.n_imag != null ? `허수 ${f.n_imag}개 · 최저 ${Math.round(f.lowest_cm)} cm⁻¹` : "진동수 없음"}</div>
+      <div class="small muted">heartbeat ${fmtAge(v.heartbeat?.age_s)} 전${v.heartbeat?.stale ? ' <span class="verdict-no">정지 의심</span>' : ""} · 이벤트 ${v.events || 0}</div>
+      ${v.error ? `<div class="small" style="color:var(--danger)">${esc(v.error)}</div>` : ""}</div>
+  </div>`;
+  if (d.validation) html += htmlValidationCard(d.validation, null);
+  const an = m.anomalies || [];
+  html += h3(`이상 징후 (${an.length})`);
+  html += an.length ? `<ul class="log-list">${an.map(a => `<li>
+      <span class="${a.severity === "WARN" ? "verdict-mid" : "verdict-no"}">${esc(a.severity)}</span>
+      <span class="muted small">+${a.t}s · ${esc(a.stage || "")}</span> ${esc(a.msg)}
+      ${a.line ? `<button class="btn ghost small" type="button" data-mon-goto="${a.line}">원본에서 보기 (L${a.line})</button>` : ""}</li>`).join("")}</ul>`
+    : `<p class="muted small">없음</p>`;
+  const at = m.attempts || [];
+  if (at.length) {
+    html += h3(`자동 복구 attempt (${at.length}) <span class="muted small">— 무엇을 왜 바꿨고 결과가 어땠는가</span>`);
+    html += `<div class="scroll-x"><table class="table" style="min-width:560px">
+      <tr><th>#</th><th>대상</th><th>변경</th><th>이유</th><th>결과</th><th></th></tr>
+      ${at.map(a => `<tr><td>${a.n}</td><td class="small">${esc(a.label)}</td><td class="small">${esc(a.change)}</td>
+        <td class="small muted">${esc(a.reason)}</td>
+        <td><span class="${a.result === "CONVERGED" ? "verdict-ok" : "verdict-no"}">${esc(a.result)}</span></td>
+        <td>${a.line ? `<button class="btn ghost small" type="button" data-mon-goto="${a.line}">L${a.line}</button>` : ""}</td></tr>`).join("")}
+    </table></div>`;
+  }
+  html += `<div class="grid-2" style="margin-top:12px">
+    <div>${h3(`SCF 수렴 이력 <span class="muted small">(${d.scf_history.total_runs} run · 최근 ${d.scf_history.runs.length})</span>`)}${svgScfRuns(d.scf_history.runs)}</div>
+    <div>${h3("구조 최적화 이력")}${d.opt_history.runs.length ? svgOptRuns(d.opt_history.runs) : '<p class="muted small">없음</p>'}</div></div>`;
+  const inp = m.input || {}, act = m.actual || {};
+  const kv = obj => `<table class="kv-table">${Object.entries(obj).map(([k, x]) =>
+    `<tr><th>${esc(k)}</th><td>${esc(Array.isArray(x) ? x.join(", ") : String(x))}</td></tr>`).join("")}</table>`;
+  html += `<details style="margin-top:10px"><summary class="small muted">입력값 검증 · 실제 실행값 (엔진에 실제로 들어간 값)</summary>
+    <div class="grid-2" style="margin-top:6px"><div><b class="small">입력</b>${kv(inp)}</div><div><b class="small">실제 실행값 (최종 SCF 객체)</b>${kv(act)}</div></div></details>`;
+  if (m.raw_log) html += `<p class="muted small" style="margin:8px 0 0">원본 로그 ${(m.raw_log.bytes / 1024).toFixed(0)} KB · SHA-256 ${esc(m.raw_log.sha256)} — 완료 후 변조·누락 확인용</p>`;
+  $("mon-detail-body").innerHTML = html;
+  $("mon-detail-body").querySelectorAll("[data-mon-goto]").forEach(b => b.onclick = () => monLogGoto(parseInt(b.dataset.monGoto)));
+  if (!quiet || (MON_LOG.mode === "tail" && MON_LOG.follow && v.status === "RUNNING")) monLoadLog();
+}
+
+/* 로그 스케일 시계열 — SCF |g| · OPT |grad| */
+function svgSeriesLog(series, yLabel, xLabel) {
+  const all = series.flatMap(s => s.pts).filter(p => p[1] > 0);
+  if (!all.length) return '<p class="muted small">데이터 없음</p>';
+  const W = 430, H = 200, L = 48, R = 10, T = 14, B = 30;
+  const xs = all.map(p => p[0]), ys = all.map(p => Math.log10(p[1]));
+  const x0 = Math.min(...xs), x1 = Math.max(Math.max(...xs), x0 + 1);
+  const y0 = Math.floor(Math.min(...ys)), y1 = Math.ceil(Math.max(...ys));
+  const X = x => L + (x - x0) / (x1 - x0) * (W - L - R);
+  const Y = y => T + (y1 - y) / ((y1 - y0) || 1) * (H - T - B);
+  let sv = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:470px" role="img">`;
+  const stepE = (y1 - y0) > 8 ? 2 : 1;
+  for (let e = y0; e <= y1; e += stepE) {
+    sv += `<line x1="${L}" x2="${W - R}" y1="${Y(e)}" y2="${Y(e)}" class="gridline"/>
+      <text x="${L - 4}" y="${Y(e) + 3.5}" text-anchor="end" class="axis-label">1e${e}</text>`;
+  }
+  sv += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" class="baseline"/>
+    <text x="${(L + W - R) / 2}" y="${H - 8}" text-anchor="middle" class="axis-label">${esc(xLabel)}</text>
+    <text x="6" y="${T - 2}" class="axis-label">${esc(yLabel)}</text>`;
+  series.forEach((s, i) => {
+    const pts = s.pts.filter(p => p[1] > 0);
+    if (!pts.length) return;
+    const col = `var(--series-${(i % 8) + 1})`;
+    sv += `<polyline fill="none" stroke="${col}" stroke-width="1.6"
+      points="${pts.map(p => `${X(p[0]).toFixed(1)},${Y(Math.log10(p[1])).toFixed(1)}`).join(" ")}"/>`;
+    const last = pts[pts.length - 1];
+    sv += `<circle cx="${X(last[0]).toFixed(1)}" cy="${Y(Math.log10(last[1])).toFixed(1)}" r="2.6" fill="${col}"/>`;
+  });
+  sv += "</svg>";
+  const legend = series.map((s, i) => `<span class="legend-item"><span class="legend-swatch"
+    style="background:var(--series-${(i % 8) + 1})"></span>${esc(s.label)}</span>`).join("");
+  return sv + `<div class="legend">${legend}</div>`;
+}
+function svgScfRuns(runs) {
+  const rs = (runs || []).slice(-4);
+  if (!rs.length) return '<p class="muted small">SCF 기록 없음</p>';
+  const mark = r => r.converged === false ? " ✗" : r.converged ? " ✓" : " …";
+  return svgSeriesLog(rs.map(r => ({label: `${r.label || "SCF"} (${r.cycles.length} cyc${mark(r)})`,
+    pts: r.cycles.map(c => [c.cycle, c.gorb])})), "|g| (log)", "SCF cycle");
+}
+function svgOptRuns(runs) {
+  const rs = (runs || []).slice(-3);
+  const mark = r => r.converged === false ? " ✗" : r.converged ? " ✓" : " …";
+  return svgSeriesLog(rs.map(r => ({label: `${r.label || "OPT"} (${r.steps.length} step${mark(r)})`,
+    pts: r.steps.map(s => [s.step, s.grad_norm])})), "|grad| (log)", "optimization step");
+}
+
+/* ── Raw Log Viewer (§9): tail · line range · 검색 · severity 강조 · 단계 이동 ── */
+function monLineClass(ln) {
+  const l = ln.toLowerCase();
+  if (/^== /.test(ln) || /^=+$/.test(ln)) return "l-sec";
+  if (/error|fatal|traceback|exception|abort|not converge|미수렴|오류|실패/.test(l)) return "l-err";
+  if (/warn|imaginary|재시도|경고|damping|attempt/.test(l)) return "l-warn";
+  if (/converged|수렴 —|완료/.test(l)) return "l-ok";
+  return "";
+}
+async function monLoadLog() {
+  if (!MON_SEL) return;
+  const q = MON_LOG.mode === "tail" ? "tail=300" : `start=${MON_LOG.start}&count=300`;
+  let d;
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(MON_SEL)}/log?${q}`);
+    d = await r.json();
+  } catch (e) { return; }
+  const pre = $("mon-log");
+  if (!d.exists) { pre.textContent = d.note || "원본 로그가 없습니다."; $("mon-log-meta").textContent = ""; return; }
+  MON_LOG.total = d.lines;
+  MON_LOG.start = d.start;
+  $("mon-log-meta").textContent = `— ${d.lines.toLocaleString()}줄 · ${(d.bytes / 1024).toFixed(0)} KB · 표시 L${d.start}–L${d.end}`;
+  const sel = $("mon-log-sections");
+  const secs = (d.sections || []).filter(s => s.line);
+  const want = secs.map(s => s.line).join("|");
+  if (sel.dataset.sig !== want) {
+    sel.dataset.sig = want;
+    sel.innerHTML = `<option value="">단계로 이동…</option>` + secs.map(s => `<option value="${s.line}">L${s.line} · ${esc(s.name)}</option>`).join("");
+  }
+  const query = $("mon-log-search").value.trim().toLowerCase();
+  const lines = d.text.split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  pre.innerHTML = lines.map((ln, i) => {
+    const n = d.start + i;
+    let cls = monLineClass(ln);
+    if (query && ln.toLowerCase().includes(query)) cls += " l-hit";
+    if (MON_LOG.target === n) cls += " l-target";
+    return `<span class="ln">${n}</span><span class="${cls.trim()}" id="mon-l-${n}">${esc(ln)}</span>`;
+  }).join("\n");
+  if (MON_LOG.target) {
+    const el = document.getElementById(`mon-l-${MON_LOG.target}`);
+    if (el) el.scrollIntoView({block: "center"});
+    MON_LOG.target = null;
+  } else if (MON_LOG.mode === "tail") {
+    pre.scrollTop = pre.scrollHeight;
+  }
+}
+function monLogGoto(line) {
+  MON_LOG.mode = "range";
+  MON_LOG.follow = false;
+  $("mon-log-follow").checked = false;
+  MON_LOG.start = Math.max(1, line - 8);
+  MON_LOG.target = line;
+  monLoadLog();
+}
+function monLogPage(dir) {
+  MON_LOG.mode = "range";
+  MON_LOG.follow = false;
+  $("mon-log-follow").checked = false;
+  MON_LOG.start = Math.max(1, (MON_LOG.start || 1) + dir * 300);
+  monLoadLog();
+}
+async function monLogSearch() {
+  if (!MON_SEL) return;
+  const q = $("mon-log-search").value.trim();
+  const box = $("mon-log-hits");
+  if (!q) { box.innerHTML = ""; monLoadLog(); return; }
+  let d;
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(MON_SEL)}/log?search=${encodeURIComponent(q)}`);
+    d = await r.json();
+  } catch (e) { return; }
+  if (!d.hits) { box.textContent = d.note || ""; return; }
+  box.innerHTML = `<span class="muted">«${esc(q)}» ${d.hits.length}건${d.truncated ? "+" : ""}</span> `
+    + d.hits.slice(0, 80).map(h => `<button class="btn ghost small" type="button" data-mon-goto="${h.line}"
+        title="${esc(h.text)}">L${h.line}</button>`).join(" ");
+  box.querySelectorAll("[data-mon-goto]").forEach(b => b.onclick = () => monLogGoto(parseInt(b.dataset.monGoto)));
+  if (d.hits.length) monLogGoto(d.hits[0].line);
 }

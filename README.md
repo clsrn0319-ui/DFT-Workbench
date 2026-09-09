@@ -351,6 +351,45 @@ SMILES 대신 3D 구조 파일을 올릴 수 있습니다 — 단건(DFT 계산 
   켜져 있을 때만 protocol_card 에 `conformer_sensitivity` 가 들어가 해시가 달라진다
 - 0.10 / 0.20 V 는 기획서 3.6 의 초기 운영값 — 벤치마크 후 조정 대상
 
+## 계산 모니터링 (Raw Log · Structured Log · PASS/REVIEW/FAIL)
+
+「DFT 계산 모니터링 및 Raw Log 설계 가이드」를 따라 **원본 로그는 그대로 보존**하고,
+프로그램이 읽는 **구조화 로그**를 따로 만들어 상태를 자동 판정한다. 단건 계산과
+배치 스크리닝의 작업이 같은 저장소를 쓰므로 «계산 모니터» 화면 하나에서 모두 본다.
+
+| 계층 | 파일 · 위치 | 내용 |
+|---|---|---|
+| Raw Log (원본) | `data/logs/<JOB>.log` | PySCF 원본 출력. 기본 «상세»(verbose 4)로 **항상** 남기고 40 MB 에서 멈춤. 완료 후 SHA-256 기록. 단계 구분선·attempt 구분선 포함 |
+| Structured Log | `data/logs/<JOB>.events.jsonl` | STAGE · INPUT · SCF(cycle·E·ΔE·|g|·|ddm|) · OPT(step·grad·disp) · FREQ · RECOVERY · ANOMALY · END. 각 이벤트에 원본 로그 byte offset — 화면에서 «원본에서 보기» |
+| Trajectory | `data/logs/<JOB>.trajectory.xyz` | 구조 최적화 스텝별 좌표 (20 MB 상한) |
+| 요약 | 작업 `monitor` 필드 | 현재 단계·SCF/OPT/FREQ 상태·이상 징후·attempt 이력·heartbeat. 콜백 갱신은 1초에 한 번만 메모리에, 단계 전환 때 저장 |
+| 검증 보고서 | 작업·결과 `validation` | PASS / REVIEW / FAIL (+ CRASHED · CANCELLED) 과 근거 checks |
+
+**자동 감지하는 이상 징후** (§6): SCF max cycle 근접 · 진동(ΔE 부호 교대) · 느린 수렴(10 cycle 에 |g| 절반 미만 감소) ·
+발산(|g| 5회 연속 증가, 에너지 1 Ha 튐) · 최적화 정체(8 스텝 기울기 정체) · 구조 붕괴(원자 접근 < 0.6 Å, 지름 1.6배) ·
+허수 진동수 · heartbeat 정지(`RHOBENCH_HEARTBEAT_WARN_S`, 기본 180 s).
+
+**검증 등급** (§5) — 프로세스 정상 종료와 계산의 과학적 완결성을 분리한다:
+
+- SCF: 기본 설정으로 모두 수렴 → pass · 자동 복구(damping/level shift/SOSCF)로 살림 → **REVIEW** (attempt 이력 확인) · 끝내 미수렴 → FAIL
+- 구조 최적화: 최대 스텝(100)에서 수렴 기준 미달이면 결과는 남기되 **FAIL** (예전에는 조용히 성공처럼 보였다)
+- 진동수: 허수 0 → pass · |ν| < 50 cm⁻¹ → REVIEW(수치 노이즈 가능) · 그 이상 → REVIEW(안장점)
+- 구조 sanity: 원자 간 비정상 접근, SMILES 결합 대비 늘어난 결합(절단 의심) → REVIEW
+- 전자 상태: UKS ⟨S²⟩ 편차 > 0.1 (스핀 오염) → REVIEW · HOMO > 0 또는 gap ≤ 0 → REVIEW
+- 설정 반영: 최종 SCF 객체의 실제 범함수·분산·용매가 요청과 다르면 REVIEW
+- 실행 오류는 FAILED(계산 목적 미달)와 CRASHED(메모리·OS)로 구분
+
+**화면**: 사이드바 «계산 모니터» — 실행/대기/PASS/REVIEW/FAIL 타일, 작업 표(단계·SCF cycle·|g|·OPT step·허수·복구·heartbeat·판정·징후),
+작업 상세(검증 보고서, 이상 징후 → 원본 줄로 이동, attempt 표, SCF |g|·OPT |grad| 로그 차트, 입력값/실제 실행값 대조),
+Raw Log Viewer(tail 실시간 따라가기 · 300줄 range · 검색 · 단계 이동 · severity 강조 · 내려받기).
+캠페인 상세 표의 «검증» 열과 결과 상세의 «계산 검증» 카드에서도 같은 등급을 본다.
+
+**API**: `GET /api/monitor?campaign=` · `GET /api/jobs/{id}/monitor` · `GET /api/jobs/{id}/events?after=&kinds=` ·
+`GET /api/jobs/{id}/log?tail=|start=&count=|offset=|search=|download=true` · `GET /api/jobs/{id}/trajectory`.
+전문가 설정 «SCF 최대 반복»(`scfMaxCycle`)으로 실패 시나리오를 재현할 수 있다.
+
+아직 없는 것: 체크포인트/재시작(중단 시 부분 재개), 자원(RSS·디스크) 모니터, 로그 기반 이상 탐지 확장 — 가이드의 2차 범위.
+
 ## 물성 지문 (확장 기술자)
 
 목적을 "물성 지문 (확장 기술자 전체)"으로 두면 아래가 추가로 계산되고, 결과

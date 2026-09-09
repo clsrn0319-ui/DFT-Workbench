@@ -802,6 +802,15 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-chain #rbv-chain{display:block}
 #rb-real.mode-mech #rbv-mech{display:block}
 #rb-real.mode-screen #rbv-screen{display:block}
+#rb-real.mode-monitor #rbv-monitor{display:block}
+.mon-log{margin:6px 0 0;padding:10px 12px;background:var(--grid);border-radius:8px;font-family:ui-monospace,Cascadia Code,Consolas,monospace;font-size:11.5px;line-height:1.45;white-space:pre;overflow:auto;max-height:520px;color:var(--text-2)}
+.mon-log .ln{display:inline-block;width:62px;color:var(--muted);text-align:right;margin-right:10px;user-select:none}
+.mon-log .l-err{color:var(--danger);font-weight:700}.mon-log .l-warn{color:var(--pin)}.mon-log .l-ok{color:var(--ok,#0ca30c)}
+.mon-log .l-sec{color:var(--accent);font-weight:700}.mon-log .l-hit{background:color-mix(in srgb,var(--pin) 25%,transparent)}
+.mon-log .l-target{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.mon-check{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--grid);font-size:13px}
+.mon-check .st{width:60px;flex-shrink:0;font-weight:700;font-size:11px}
+.st-pass{color:var(--ok,#0ca30c)}.st-review{color:var(--pin)}.st-fail{color:var(--danger)}.st-skip{color:var(--muted)}
 #rb-real .esw-chart{width:100%;max-width:860px}
 #rb-real .verdict-ok{color:var(--ok,#0ca30c);font-weight:700}
 #rb-real .verdict-no{color:var(--danger,#d03b3b);font-weight:700}
@@ -928,10 +937,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
           </select></div>
         <div class="field"><span class="field-label">원본 로그 수준 (PySCF)</span>
           <select class="input" id="log-level">
-            <option value="간략">간략 — 단계 요약만 (기본)</option>
-            <option value="상세">상세 — SCF 반복·궤도 에너지</option>
+            <option value="상세">상세 — SCF 반복·궤도 에너지 (기본 · 원본 로그는 1차 근거)</option>
+            <option value="간략">간략 — 단계 요약만 (원본 로그 없음)</option>
             <option value="디버그">디버그 — 적분·수렴 내부까지</option>
           </select></div>
+        <div class="field"><span class="field-label">SCF 최대 반복</span>
+          <input class="input" type="number" id="scf-max-cycle" min="1" max="1000" step="1"
+            placeholder="자동 (PySCF 기본 50)"
+            title="미수렴 시 자동 복구가 200 으로 올려 재시도합니다. 모니터링 테스트용으로 작게 둘 수 있습니다"></div>
         <div class="field"><span class="field-label">전하</span>
           <input class="input" type="number" id="charge" value="0" step="1"></div>
         <div class="field"><span class="field-label">스핀 다중도</span>
@@ -1509,12 +1522,63 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         <button class="btn" id="scr-cancel" type="button">취소</button>
         <button class="btn" id="scr-reverify" type="button" style="display:none"
           title="수직 EA와 LUMO 추정이 상반된 후보만 표준 정확도(단열·ΔG)로 다시 확인">⚠ 불일치 재검증(표준)</button>
+        <button class="btn" id="scr-monitor" type="button"
+          title="이 캠페인의 모든 DFT 작업을 계산 모니터에서 본다 — SCF·OPT·FREQ 진행과 PASS/REVIEW/FAIL">계산 모니터</button>
         <button class="btn" id="scr-export-csv" type="button">판정표 CSV</button>
         <button class="btn" id="scr-export-json" type="button">JSON</button>
         <button class="btn" id="scr-delete" type="button">삭제</button>
         <button class="btn ghost" id="scr-detail-close" type="button">닫기</button>
       </div></div>
     <div id="scr-detail-body"></div>
+  </div>
+</div>
+<div id="rbv-monitor" class="rbv">
+  <h1>계산 모니터</h1>
+  <p class="rb-note">단일 계산과 배치 스크리닝의 모든 DFT 작업을 한 화면에서 봅니다 — 지금 어느 단계인지,
+    SCF 가 몇 번째 반복에서 잔차 얼마인지, 구조 최적화가 어디까지 왔는지, 허수 진동수가 있는지.
+    <b>프로세스가 끝났다고 계산이 맞는 것은 아닙니다.</b> 계산이 끝나면 SCF·구조·진동수 수렴과 화학적
+    sanity 를 따로 검사해 <b>PASS / REVIEW / FAIL</b> 등급을 매기고, 원본(PySCF) 로그는 그대로 보존합니다.</p>
+
+  <div class="stat-row" id="mon-tiles"></div>
+
+  <div class="card">
+    <div class="card-head"><h2>작업</h2>
+      <div class="toolbar">
+        <label class="small">캠페인 <select class="input" id="mon-campaign"><option value="">전체</option></select></label>
+        <label class="small">보기 <select class="input" id="mon-filter">
+          <option value="active">진행 중 + 최근</option>
+          <option value="all">전체</option>
+          <option value="problem">REVIEW · FAIL · 경고만</option>
+        </select></label>
+        <button class="btn" id="mon-refresh" type="button">새로고침</button>
+      </div></div>
+    <div id="mon-table" class="empty small">작업이 없습니다.</div>
+  </div>
+
+  <div class="card" id="mon-detail" style="display:none">
+    <div class="card-head"><h2 id="mon-detail-title">작업 상세</h2>
+      <div class="toolbar">
+        <a class="btn small ghost" id="mon-log-download" href="#" download>원본 로그 내려받기</a>
+        <a class="btn small ghost" id="mon-traj-download" href="#" download style="display:none">최적화 궤적(XYZ)</a>
+        <button class="btn ghost" id="mon-detail-close" type="button">닫기</button>
+      </div></div>
+    <div id="mon-detail-body"></div>
+
+    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">PySCF 원본 로그
+      <span class="muted small" id="mon-log-meta"></span></h3>
+    <div class="toolbar" style="margin:6px 0">
+      <input class="input" id="mon-log-search" placeholder="검색 — converged, error, cycle, imaginary…" style="min-width:260px">
+      <button class="btn small" id="mon-log-search-btn" type="button">검색</button>
+      <label class="small">단계 <select class="input" id="mon-log-sections"><option value="">이동…</option></select></label>
+      <button class="btn small" id="mon-log-prev" type="button">◀ 이전</button>
+      <button class="btn small" id="mon-log-next" type="button">다음 ▶</button>
+      <button class="btn small" id="mon-log-tail" type="button">끝으로 (tail)</button>
+      <label class="small"><input type="checkbox" id="mon-log-follow" checked> 실시간 따라가기</label>
+    </div>
+    <div id="mon-log-hits" class="small"></div>
+    <pre class="mon-log" id="mon-log"></pre>
+    <p class="muted small" style="margin:6px 0 0">원본 로그는 수정하지 않고 그대로 보존합니다 (완료 후 SHA-256 기록).
+      한 번에 300줄만 가져오며, 경고·오류·수렴 줄은 색으로 강조됩니다. 구조화 이벤트의 «원본에서 보기»는 이 창의 해당 줄로 이동합니다.</p>
   </div>
 </div>
 </section>
@@ -1533,7 +1597,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       {label: "용매 라이브러리", proxy: "용매 라이브러리"}]},
     {group: "계산", items: [
       {label: "DFT 계산", mode: "calc"},
-      {label: "배치 스크리닝", mode: "screen"}]},
+      {label: "배치 스크리닝", mode: "screen"},
+      {label: "계산 모니터", mode: "monitor"}]},
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
       {label: "물질 비교", mode: "compare"}]},
@@ -1562,7 +1627,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.scrollTop = 0;
     setActive(label);
     real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
-      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen");
+      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen", "mode-monitor");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1574,9 +1639,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "chain" && window.rbRenderChain) try { window.rbRenderChain(); } catch (e) {}
     if (mode === "mech" && window.rbRenderMech) try { window.rbRenderMech(); } catch (e) {}
     if (mode === "screen" && window.rbRenderScreen) try { window.rbRenderScreen(); } catch (e) {}
+    if (mode === "monitor" && window.rbRenderMonitor) try { window.rbRenderMonitor(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
+  window.rbOpenMonitor = function (jobId) {
+    openReal("monitor", "계산 모니터");
+    if (jobId && window.rbMonitorSelect) try { window.rbMonitorSelect(jobId); } catch (e) {}
+  };
   window.rbOpenCalc = function () { openReal("calc", "DFT 계산"); };
 
   function mockItem(text) {
