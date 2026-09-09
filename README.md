@@ -234,6 +234,50 @@ python -m scripts.prune_jobs --match 테스트 --failed --yes
 > ⚠️ **사본에는 접속 비밀번호가 걸리지 않습니다.** 파일을 받은 사람은 누구나
 > 그 안의 결과를 볼 수 있으니, 공유 범위를 정한 뒤 보내세요.
 
+## 중단 없는 운영 — 백그라운드 실행과 단계별 체크포인트
+
+터미널 창을 닫으면 서버가 죽고 계산도 사라지던 문제를 두 층으로 막는다.
+
+```bash
+./scripts/start.sh --background   # 창을 닫아도 서버가 남는다 (로그 data/server.log, PID data/server.pid)
+./scripts/start.sh --status       # 실행 중인지
+./scripts/start.sh --stop         # 끄기 — 계산 중이던 작업은 다음 실행 때 체크포인트에서 재개
+```
+
+`RhoBench-start.bat`은 백그라운드 모드로 켜고 브라우저만 연다. 끄려면 `RhoBench-stop.bat`.
+
+**단계별 체크포인트** (기획서 v2.1 10.2): 엔진이 «구조 생성·최적화 → 진동수 → 용매화 → 전위 →
+conformer 민감도 → MEP → Li⁺ → 이량체 → 흡착 → BDE → TDDFT» 단계를 끝낼 때마다 상태를
+`data/checkpoints/<JOB>.json`에 저장한다. 서버가 꺼졌다 켜지면
+
+- 중단된 작업은 실패가 아니라 **재개 대기(QUEUED)** 로 바뀌고 워커가 자동으로 다시 집어 간다
+  (`worker.resubmit_pending`). 캠페인 작업은 배치 우선순위를 유지한다.
+- 엔진은 지문(분자 + 설정 전체 해시)이 같으면 끝난 단계를 건너뛰고, 저장된 구조에서 단일점만
+  다시 계산한 뒤 다음 단계부터 잇는다. 설정이 하나라도 다르면 처음부터 계산한다.
+- «재시도»로 만든 새 작업도 원본 작업의 체크포인트를 물려받는다.
+- 작업이 끝나면 체크포인트를 지운다. 작업 목록에는 «체크포인트 n단계» 배지가 보인다.
+
+이어 붙이는 단위는 단계다 — 단계 도중(예: 최적화 30스텝째)에 끊기면 그 단계는 처음부터 다시 한다.
+
+## 클라우드 서버 운영 (네이버 클라우드 등)
+
+같은 프로그램을 리눅스 서버에 **systemd 서비스**로 올려 어디서나 접속하고, GitHub 의 새
+코드를 한 줄로 업데이트합니다. 자세한 절차는 `docs/08_네이버클라우드_배포_업데이트_가이드.md`.
+
+```bash
+# 서버에서 최초 한 번 — apt · .venv · /etc/rhobench.env(비밀번호) · systemd · nginx(80→8000)
+git clone https://github.com/clsrn0319-ui/DFT-Workbench && cd DFT-Workbench && ./scripts/ncp_setup.sh
+
+# 업데이트 — 새 커밋 확인 → pull → (계산이 끝날 때까지 대기) → 재시작 → 응답 없으면 롤백
+./scripts/update.sh            # --check · --now · --test · --ref main · --no-restart
+
+# 백업 — data/ 를 tar.gz 로, Object Storage(S3 호환) 업로드까지
+./scripts/backup_data.sh --upload rhobench-backup --keep 14
+```
+
+`deploy/ncp/` 에 systemd 유닛·환경 파일 예시·nginx 설정이 있습니다. `update.sh` 는 WSL 에서도
+같은 명령으로 동작합니다(systemd 가 없으면 기존 uvicorn 을 찾아 환경변수를 물려받아 재시작).
+
 ## 원격 공유 (사내망 밖에서 보여주기)
 
 **구글 드라이브는 프로그램을 실행하지 못합니다** — 파일 보관소이므로 코드를

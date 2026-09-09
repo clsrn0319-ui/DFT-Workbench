@@ -1,0 +1,39 @@
+# RhoBench (DFT-Workbench) — systemd 서비스 (네이버 클라우드 등 리눅스 서버용)
+#
+# 설치:  scripts/ncp_setup.sh 가 이 파일의 __USER__/__DIR__ 를 채워
+#        /etc/systemd/system/rhobench.service 로 복사한다.
+# 수동:  sudo cp deploy/ncp/rhobench.service /etc/systemd/system/ && (아래 두 자리 수정)
+#        sudo systemctl daemon-reload && sudo systemctl enable --now rhobench
+#
+# 비밀번호·포트 등은 /etc/rhobench.env (deploy/ncp/rhobench.env.example 참고)
+
+[Unit]
+Description=RhoBench DFT-Workbench (uvicorn, port 8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+# 기본값 — /etc/rhobench.env 가 있으면 그 값이 덮어쓴다.
+# HOST 127.0.0.1 = nginx 뒤에서만 접근. nginx 없이 8000 을 직접 열려면 0.0.0.0
+Environment=RHOBENCH_HOST=127.0.0.1 RHOBENCH_PORT=8000
+EnvironmentFile=-/etc/rhobench.env
+# .venv 의 파이썬으로 직접 실행 — start.sh 는 비밀번호를 물어보므로 서비스에서는 쓰지 않는다
+ExecStart=__DIR__/.venv/bin/python -m uvicorn server.main:app --host ${RHOBENCH_HOST} --port ${RHOBENCH_PORT}
+# 계산 중 종료되면 작업은 «서버 재시작으로 중단됨»으로 실패 처리되고 캠페인은 자동 재시도한다.
+# 우발적 종료(OOM 등)에 대비해 항상 재시작한다.
+Restart=always
+RestartSec=5
+# uvicorn 에 SIGTERM → 정상 종료. 30초 안에 안 끝나면 강제 종료
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# 스레드·파일 한도 — PySCF 는 OpenMP 스레드를 많이 쓴다
+LimitNOFILE=65536
+# 표준 출력(비밀번호 최초 발급 안내 포함)은 journalctl -u rhobench 로 본다
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
