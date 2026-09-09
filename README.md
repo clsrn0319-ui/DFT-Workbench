@@ -351,6 +351,28 @@ SMILES 대신 3D 구조 파일을 올릴 수 있습니다 — 단건(DFT 계산 
   켜져 있을 때만 protocol_card 에 `conformer_sensitivity` 가 들어가 해시가 달라진다
 - 0.10 / 0.20 V 는 기획서 3.6 의 초기 운영값 — 벤치마크 후 조정 대상
 
+### Li⁺ 용매 경쟁 (v2.0 개정 기획서 P0-6 · 5.2)
+
+고립 Li⁺ 결합 에너지는 Li⁺ 탈용매화 비용을 무시해 trapping 을 과대평가한다.
+정밀 정확도(또는 전문가 설정 «Li⁺ 상호작용 모델 = 용매 경쟁»)에서는 경쟁 반응을 계산한다.
+
+```
+Binder + Li(solv)n⁺  ⇌  Binder·Li⁺ + n·solv
+ΔE_exchange = [E(Binder·Li⁺) + n·E(solv)] − [E(Binder) + E(Li(solv)n⁺)]
+```
+
+| 항목 | 동작 |
+|---|---|
+| 결합 site | MEP 최소점 + 헤테로원자(카보닐·에테르·하이드록실 O, 나이트릴·아민 N, S, F) 부위를 정밀 3곳(표준 1곳)까지 자동 탐색. site 마다 Li⁺ 착물을 DFT 재최적화하고 CP 보정 결합 에너지와 Boltzmann 분포를 낸다 |
+| 참조 클러스터 | Li(solv)n⁺(기본 n=4)를 배위 원자가 Li 를 향하도록 다면체로 놓고 DFT 최적화 → SMD 단일점. 용매 분자·고립 Li⁺ 도 같은 프로토콜. **용매·n·범함수·기저·SMD 별로 `data/li_reference.json` 에 캐시** — 후보마다 다시 계산하지 않음 |
+| 혼합 용매 | 성분마다 참조를 만들고, 용매화가 가장 강한 성분(EC/DMC 면 EC)을 기준으로 판정 |
+| 판정 (잠정) | ΔE_exchange < −40 kJ/mol → **Li⁺ trapping 위험** · −40~+60 → 용매와 경쟁 · > +60 → 용매 우세(이동성 유지) |
+| Score | «이온 상호작용» 축의 주 지표를 ΔE_exchange 로 전환(창 −40~+60), 고립 결합은 보조. 프로토콜 카드에 `li_model` 기록 |
+
+결과: `descriptors.li_interaction`(site 표·참조·판정), `li_exchange_kj`(가장 강한 site), `li_exchange_boltzmann_kj`.
+한계: 전자에너지 + SMD 기준으로 열보정(ΔG)은 없고(41원자 유한차분 Hessian 비용), 배위수는 고정, 배위수 앙상블·명시적 용매 microstate 는 미구현.
+`GET /api/li-references` 로 캐시된 참조 목록을 본다.
+
 ## 계산 모니터링 (Raw Log · Structured Log · PASS/REVIEW/FAIL)
 
 「DFT 계산 모니터링 및 Raw Log 설계 가이드」를 따라 **원본 로그는 그대로 보존**하고,

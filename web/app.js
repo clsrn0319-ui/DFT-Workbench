@@ -317,6 +317,9 @@ async function submit() {
         nonequilibriumSolvation: $("noneq-solv").value === "" ? null : $("noneq-solv").value === "true",
         boltzmannEnsemble: $("boltzmann").value === "" ? null : $("boltzmann").value === "true",
         conformerSensitivity: $("conf-sens").value === "" ? null : $("conf-sens").value === "true",
+        liModel: $("li-model").value || null,
+        liCoordination: $("li-coord").value ? parseInt($("li-coord").value) : null,
+        liMaxSites: $("li-sites").value ? parseInt($("li-sites").value) : null,
         optimizeInSolvent: $("opt-solvent").value === "true",
         bdeRelaxFragments: $("bde-relax").value === "" ? null : $("bde-relax").value === "true",
         bdeThermalCorrection: $("bde-thermal").value === "" ? null : $("bde-thermal").value === "true",
@@ -584,6 +587,9 @@ const DESC_LABELS = {
   oxidation_potential_gibbs_v: ["산화 전위 (ΔG 기반)", "V"],
   reduction_potential_gibbs_v: ["환원 전위 (ΔG 기반)", "V"],
   conformer_spread_v: ["conformer 간 전위 편차 σ (최대)", "V"],
+  li_exchange_kj: ["Li⁺ 용매 경쟁 ΔE_exchange (가장 강한 site)", "kJ/mol"],
+  li_exchange_boltzmann_kj: ["Li⁺ 용매 경쟁 ΔE_exchange (site Boltzmann 평균)", "kJ/mol"],
+  li_exchange_solvent: ["용매 경쟁 기준 용매", ""],
   reduction_potential_conf_std_v: ["환원 전위 conformer 편차 σ", "V"],
   oxidation_potential_conf_std_v: ["산화 전위 conformer 편차 σ", "V"],
 };
@@ -1339,9 +1345,14 @@ function showResult(job) {
         전위 conformer 민감도 (P0-5)</h3>
       ${htmlConfSens(d.conformer_sensitivity, ref)}`;
   }
+  if (d.li_interaction) {
+    html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">
+        Li⁺ 상호작용 — site 별 결합 · 용매 경쟁 (P0-6)</h3>
+      ${htmlLiInteraction(d.li_interaction)}`;
+  }
 
   const shown = new Set(["potential_reference", "conformer_populations",
-                         "conformer_sensitivity",
+                         "conformer_sensitivity", "li_interaction",
                          "mep_points", "surface_adsorption", "bde_all",
                          "bde_weakest_bond"]);
   const ordered = [...PINNED, ...KV_GROUPS.flatMap(g => g[1]), ...Object.keys(d)];
@@ -3310,7 +3321,10 @@ async function scrSubmit() {
                multiplicity: Math.max(1, +($("scr-mult")?.value || 1)),
                optimizeGeometry: wizTri("scr-opt"),
                optimizeInSolvent: $("scr-opt-solv") ? $("scr-opt-solv").checked : false,
-               thermochemistry: wizTri("scr-thermo")},
+               thermochemistry: wizTri("scr-thermo"),
+               liModel: $("scr-li-model")?.value || null,
+               liCoordination: $("scr-li-coord")?.value ? parseInt($("scr-li-coord").value) : null,
+               liMaxSites: $("scr-li-sites")?.value ? parseInt($("scr-li-sites").value) : null},
     },
   };
   const btn = $("scr-submit");
@@ -3965,6 +3979,9 @@ function wizApplyPreset(name, {silent = false} = {}) {
   // 세부 옵션은 서버 기본값을 따르도록 되돌린다
   if ($("scr-basis")) $("scr-basis").value = "";
   if ($("scr-basis-anion")) $("scr-basis-anion").value = name === "빠름" ? "" : "ma-def2-tzvp";
+  if ($("scr-li-model")) $("scr-li-model").value = "";
+  if ($("scr-li-coord")) $("scr-li-coord").value = "";
+  if ($("scr-li-sites")) $("scr-li-sites").value = "";
   set("scr-qrrho", true);
   const el = $("scr-opt"), th = $("scr-thermo");
   if (el) el.indeterminate = true;      // «프리셋 기본» 상태
@@ -4030,6 +4047,7 @@ async function wizRenderSummary() {
     ${row("프리셋", preset)}${row("범함수", $("scr-func")?.value)}
     ${row("단일점 기저", $("scr-basis")?.value || "정확도별 기본")}
     ${row("음이온 기저", $("scr-basis-anion")?.value || "중성과 동일")}
+    ${row("Li⁺ 모델", wizLiModelLabel())}
     ${row("구조 최적화", wizTri("scr-opt") === null ? "정확도별 기본"
       : (wizTri("scr-opt") ? "예" : "아니오"))}
     ${row("열보정", wizTri("scr-thermo") === null ? "정확도별 기본"
@@ -4121,6 +4139,7 @@ async function wizRenderReview() {
     ["범함수", esc($("scr-func")?.value || "")],
     ["단일점 기저", esc($("scr-basis")?.value || "")],
     ["음이온 기저", esc($("scr-basis-anion")?.value || "중성과 동일 — diffuse 미적용")],
+    ["Li⁺ 상호작용", esc(wizLiModelLabel())],
     ["구조 최적화", wizTri("scr-opt") === null ? "정확도 프리셋 기본값"
       : (wizTri("scr-opt") ? "수행" : "생략")],
     ["열역학", wizTri("scr-thermo") === null ? "정확도 프리셋 기본값 (표준↑ 수행)"
@@ -4186,7 +4205,8 @@ function wireWizard() {
 
   // 고급값을 손대면 Custom 배지를 붙인다 (14.6.1)
   ["scr-func", "scr-basis", "scr-basis-anion", "scr-opt", "scr-opt-solv",
-   "scr-thermo", "scr-qrrho", "scr-charge", "scr-mult"].forEach(id =>
+   "scr-thermo", "scr-qrrho", "scr-charge", "scr-mult",
+   "scr-li-model", "scr-li-coord", "scr-li-sites"].forEach(id =>
     $(id)?.addEventListener("change", () => { WIZ_CUSTOM = true; wizRenderSummary(); }));
 
   ["scr-structure", "scr-margin", "scr-temp", "scr-ref", "scr-st1", "scr-st2",
@@ -4552,4 +4572,46 @@ async function monLogSearch() {
         title="${esc(h.text)}">L${h.line}</button>`).join(" ");
   box.querySelectorAll("[data-mon-goto]").forEach(b => b.onclick = () => monLogGoto(parseInt(b.dataset.monGoto)));
   if (d.hits.length) monLogGoto(d.hits[0].line);
+}
+
+
+/* ══════════════ Li⁺ 상호작용 — 용매 경쟁 (v2.0 P0-6) ══════════════ */
+function wizLiModelLabel() {
+  const m = $("scr-li-model")?.value || "";
+  const n = $("scr-li-coord")?.value || "4";
+  const s = $("scr-li-sites")?.value || "";
+  if (m === "bare") return "고립 Li⁺ 결합만" + (s ? ` · site ${s}` : "");
+  if (m === "competition") return `용매 경쟁 Li(solv)${n}⁺` + (s ? ` · site ${s}` : "");
+  return "프리셋 기본 — 정밀: 용매 경쟁(site 3), 표준·빠름: 고립 Li⁺";
+}
+
+function htmlLiInteraction(li) {
+  if (!li || !Array.isArray(li.sites) || !li.sites.length) return "";
+  const refs = li.references || [];
+  const hasEx = li.exchange_min_kj != null;
+  const vkey = li.verdict?.key;
+  const badge = {trapping: "verdict-no", competitive: "verdict-mid", solvent: "verdict-ok"}[vkey] || "queued";
+  const exCols = refs.map(r => `<th class="num">ΔE_exchange vs Li(${esc(r.abbr)})${r.n}⁺ (kJ/mol)</th>`).join("");
+  const rows = li.sites.map(s => `<tr${s.label === li.strongest_site ? ' style="font-weight:600"' : ""}>
+      <td>${esc(s.label)}${s.label === li.exchange_min_site ? ' <span class="badge verdict-no" style="border:1px solid currentColor">최강 trap</span>' : ""}</td>
+      <td class="num">${(+s.binding_kj).toFixed(1)}</td>
+      <td class="num">${s.population_pct}%</td>
+      ${refs.map(r => `<td class="num">${s.exchange_kj && s.exchange_kj[r.abbr] != null ? (+s.exchange_kj[r.abbr]).toFixed(1) : "—"}</td>`).join("")}
+    </tr>`).join("");
+  let html = `<div class="scroll-x"><table class="table" style="min-width:${420 + 120 * refs.length}px">
+      <tr><th>site</th><th class="num">고립 Li⁺ 결합 (kJ/mol, CP)</th><th class="num">분포</th>${exCols}</tr>
+      ${rows}</table></div>`;
+  if (hasEx) {
+    html += `<p class="small" style="margin:6px 0 0"><span class="badge ${badge}">${esc(li.verdict?.label || "")}
+        · ΔE_exchange ${(+li.exchange_min_kj).toFixed(0)} kJ/mol (${esc(li.exchange_min_site || "")}, vs ${esc(li.primary_solvent || "")})</span>
+      <span class="muted"> Boltzmann 평균 ${(+li.exchange_boltzmann_kj).toFixed(0)} kJ/mol</span></p>
+      <p class="muted small" style="margin:4px 0 0">${esc(li.verdict?.note || "")}</p>
+      <p class="muted small" style="margin:4px 0 0">참조 클러스터: ${refs.map(r =>
+        `Li(${esc(r.abbr)})${r.n}⁺ — 용매화 ${(+r.solvation_kj_per_molecule).toFixed(0)} kJ/mol·분자${
+          r.optimized ? " · DFT 최적화" : " · 초기 구조"}${r.cached ? " · 캐시" : ` · 신규 ${r.wall_s}s`}`).join(" / ")}.
+        기준 용매는 용매화가 가장 강한 성분. 임계값 trapping < ${li.thresholds_kj?.trapping} · 용매 우세 > ${li.thresholds_kj?.solvent_dominant} kJ/mol (잠정).</p>`;
+  } else {
+    html += `<p class="muted small" style="margin:6px 0 0">${esc(li.note || "")}</p>`;
+  }
+  return html;
 }

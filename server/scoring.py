@@ -41,7 +41,10 @@ ANCHORS = {
     "adhesion": {"zero": 0.0, "full": -120.0},        # 표면 흡착 E (kJ/mol)
     "electrochem": {"zero": -0.5, "full": 1.5},       # ESW 최소 여유 (V)
     "affinity": {"lo": -12.0, "hi": -3.0, "span": 10.0},    # 용매화 E (kcal/mol)
-    "ion": {"lo": -250.0, "hi": -120.0, "span": 120.0},     # Li⁺ 결합 (kJ/mol)
+    "ion": {"lo": -250.0, "hi": -120.0, "span": 120.0},     # 고립 Li⁺ 결합 (kJ/mol)
+    # 용매 경쟁 ΔE_exchange (kJ/mol, v2.0 P0-6) — 음수는 trapping, 큰 양수는 무관심.
+    # 잠정 창: 용매와 대등(−40~+60)이 100점
+    "ion_exchange": {"lo": -40.0, "hi": 60.0, "span": 100.0},
     "chemstab": {"zero": 250.0, "full": 350.0},       # 최약 BDE 298K (kJ/mol)
 }
 _env_anchors = os.environ.get("RHOBENCH_SCORE_ANCHORS")
@@ -124,14 +127,26 @@ def axis_scores(desc: dict, worst_margin_v, electrodes: list[str]) -> dict:
         "note": None if solv is not None else "용매화 에너지 없음 (용매 설정 필요)",
     }
 
-    # ④ 이온 상호작용 — Li⁺ 결합 에너지, target window (과한 결합은 이동성 저하)
+    # ④ 이온 상호작용 — 용매 경쟁 ΔE_exchange 가 있으면 그것이 주 지표 (v2.0 P0-6),
+    # 없으면 고립 Li⁺ 결합 에너지 (탈용매화 비용 미반영 — 보조). 둘 다 target window.
+    ex = desc.get("li_exchange_kj")
     li = desc.get("li_binding_kj")
-    a = ANCHORS["ion"]
-    out["ion"] = {
-        "value": li, "unit": "kJ/mol",
-        "score": _window(li, a["lo"], a["hi"], a["span"]) if li is not None else None,
-        "note": None if li is not None else "Li⁺ 결합 데이터 없음 (물성 지문 계산 필요)",
-    }
+    if ex is not None:
+        a = ANCHORS["ion_exchange"]
+        out["ion"] = {
+            "value": ex, "unit": "kJ/mol", "basis": "solvent_competition",
+            "score": _window(ex, a["lo"], a["hi"], a["span"]),
+            "note": f"용매 경쟁 ΔE_exchange (Li({desc.get('li_exchange_solvent') or '용매'})n⁺ 대비)"
+                    + (f" · 고립 결합 {li:+.0f} kJ/mol 은 보조" if li is not None else ""),
+        }
+    else:
+        a = ANCHORS["ion"]
+        out["ion"] = {
+            "value": li, "unit": "kJ/mol", "basis": "bare_li" if li is not None else None,
+            "score": _window(li, a["lo"], a["hi"], a["span"]) if li is not None else None,
+            "note": ("고립 Li⁺ 결합 기준 — 탈용매화 비용 미반영 (정밀 단계의 용매 경쟁으로 확정)"
+                     if li is not None else "Li⁺ 결합 데이터 없음 (물성 지문 계산 필요)"),
+        }
 
     # ⑤ 화학적 안정성 — 최약 결합 BDE (298 K 우선)
     # 키가 None 값으로 존재해도 폴백해야 한다 (esw.first_present 참조) —

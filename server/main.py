@@ -56,6 +56,10 @@ class ExpertSettings(BaseModel):
     boltzmannEnsemble: Optional[bool] = None
     # 전위 conformer 민감도 (v2.0 P0-5) — None: 프리셋(표준 3·정밀 5), True: 최소 3, False: 끔
     conformerSensitivity: Optional[bool] = None
+    # Li⁺ 상호작용 모델 (v2.0 P0-6) — bare: 고립 Li⁺ 결합, competition: Li(solv)n⁺ 용매 경쟁
+    liModel: Optional[str] = Field(None, pattern="^(bare|competition)$")
+    liCoordination: Optional[int] = Field(None, ge=1, le=6)
+    liMaxSites: Optional[int] = Field(None, ge=1, le=6)
     optimizeInSolvent: bool = False
     bdeRelaxFragments: Optional[bool] = None
     bdeThermalCorrection: Optional[bool] = None
@@ -1194,6 +1198,16 @@ def get_job_monitor(job_id: str, _: bool = Depends(require_login)):
         "trajectory_exists": monitor.trajectory_path(job_id).exists(),
         "heartbeat_warn_s": monitor.HEARTBEAT_WARN_S,
     }
+
+
+@app.get("/api/li-references")
+def li_references(_: bool = Depends(require_login)):
+    """Li⁺ 용매 경쟁 참조 클러스터 캐시 — 어떤 용매·n·프로토콜이 이미 계산돼 있는가."""
+    from . import licomp
+    return {"references": licomp.list_references(),
+            "thresholds_kj": {"trapping": licomp.TRAP_KJ,
+                              "solvent_dominant": licomp.SOLVENT_DOMINANT_KJ},
+            "default_coordination": licomp.DEFAULT_COORDINATION}
 
 
 @app.get("/api/jobs/{job_id}/trajectory")

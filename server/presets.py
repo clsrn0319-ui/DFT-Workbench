@@ -139,24 +139,28 @@ WATER_SMD_FOR_MIX = [1.3328, 1.3323, 0.82, 0.35, 103.6, 78.355, 0.0, 0.0]
 #  - basis_opt / basis_sp: 최적화·진동수 / 최종 단일점 basis
 #  - conf_sens: 전위 conformer 민감도 — 상위 몇 개 conformer 에서 IP/EA 를 다시 낼지
 #               (v2.0 P0-5. 0 이면 지배 conformer 한 값만)
+#  - li_model / li_max_sites: Li⁺ 상호작용 모델 (v2.0 P0-6) — bare: 고립 Li⁺ 결합,
+#               competition: Li(solv)n⁺ 용매 경쟁 ΔE_exchange. site 는 MEP 최소점 +
+#               헤테로원자 부위를 몇 곳까지 볼지
 ACCURACY = {
     "빠름": {"n_conf": 5, "n_dft_rank": 1, "do_opt": False, "do_thermo": False,
-             "ensemble": False, "conf_sens": 0,
+             "ensemble": False, "conf_sens": 0, "li_model": "bare", "li_max_sites": 1,
              "basis_opt": "def2-svp", "basis_sp": "def2-svp",
              "basis_anion": None,
              "desc": "conformer 5 · MMFF 구조 + DFT 단일점(def2-SVP) · 음이온 diffuse 없음 — 사전 스크리닝"},
     "표준": {"n_conf": 15, "n_dft_rank": 3, "do_opt": True, "do_thermo": True,
-             "ensemble": False, "conf_sens": 3,
+             "ensemble": False, "conf_sens": 3, "li_model": "bare", "li_max_sites": 1,
              "basis_opt": "def2-svp", "basis_sp": "def2-tzvp",
              "basis_anion": "ma-def2-tzvp",
              "desc": "conformer 15 · DFT 재순위 3 · 최적화(def2-SVP) + 진동수·qRRHO 열보정 "
                      "+ 단일점(def2-TZVP) · 음이온 ma-def2-TZVP · 전위 conformer 민감도 3"},
     "정밀": {"n_conf": 30, "n_dft_rank": 5, "do_opt": True, "do_thermo": True,
-             "ensemble": True, "conf_sens": 5,
+             "ensemble": True, "conf_sens": 5, "li_model": "competition", "li_max_sites": 3,
              "basis_opt": "def2-tzvp", "basis_sp": "def2-tzvp",
              "basis_anion": "def2-tzvpd",
              "desc": "conformer 30 · DFT 재순위 5 · Boltzmann 앙상블 가중 · 최적화·진동수(qRRHO)·"
-                     "단일점 def2-TZVP · 음이온 def2-TZVPD · 전위 conformer 민감도 5"},
+                     "단일점 def2-TZVP · 음이온 def2-TZVPD · 전위 conformer 민감도 5 · "
+                     "Li⁺ 용매 경쟁(site 3)"},
 }
 
 # 범함수별 진동수 스케일 인자 (문헌 대표값 — 조화근사 과대평가 보정, basis 의존성 있음)
@@ -221,6 +225,9 @@ DEFAULT_SETTINGS = {
         "nonequilibriumSolvation": None,  # None → 용매 있는 수직 전위에 자동 적용
         "boltzmannEnsemble": None,        # None → 정확도 프리셋 값 (정밀에서 활성)
         "conformerSensitivity": None,     # None → 정확도 프리셋 값 (표준 3 · 정밀 5 · 빠름 없음)
+        "liModel": None,                  # None → 프리셋 (정밀: competition, 그 외 bare)
+        "liCoordination": None,           # None → 4 (Li(solv)n⁺ 의 n)
+        "liMaxSites": None,               # None → 프리셋 (정밀 3, 그 외 1)
         "freqScale": None,                # None → 범함수별 문헌 스케일 인자
         "scfTol": 1e-8,
     },

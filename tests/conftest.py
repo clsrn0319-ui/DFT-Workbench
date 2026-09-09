@@ -6,10 +6,12 @@
 
 import pytest
 
-from server import store
+from server import licomp, store
 
 
 @pytest.fixture(autouse=True)
 def _isolated_logs_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "LOGS_DIR", tmp_path / "logs")
+    # Li⁺ 참조 클러스터 캐시도 실제 data/ 가 아닌 임시 파일에
+    monkeypatch.setattr(licomp, "_CACHE_OVERRIDE", tmp_path / "li_reference.json")
     yield

@@ -265,6 +265,9 @@ def card(settings: dict, params: dict | None = None,
     # 민감도가 없는 기존 결과의 해시는 그대로 유지한다.
     if (p.get("conf_sens") or 0) >= 2:
         body["conformer_sensitivity"] = int(p["conf_sens"])
+    # Li⁺ 모델(P0-6)도 프로토콜의 일부 — 경쟁 모델일 때만 키를 넣어 기존 해시를 지킨다
+    if p.get("li_model") == "competition":
+        body["li_model"] = f"solvent_competition(n={p.get('li_coordination') or 4})"
     digest = hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
     return {**body, "protocol_hash": digest,

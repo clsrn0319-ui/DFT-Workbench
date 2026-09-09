@@ -30,6 +30,7 @@ from pyscf.solvent import smd
 from . import binder as binder_mod
 from . import confsens
 from . import descriptors as desc_mod
+from . import licomp
 from . import monitor as monitor_mod
 from . import presets
 from . import protocol as protocol_mod
@@ -115,7 +116,14 @@ def _resolve_params(settings):
         conf_sens = 0
     # 민감도를 낼 conformer 는 DFT 재순위 후보 안에서 고르므로 재순위 수가 그만큼은 돼야 한다
     n_dft_rank = max(acc["n_dft_rank"], conf_sens) if conf_sens else acc["n_dft_rank"]
+    # Li⁺ 상호작용 모델 (v2.0 P0-6) — bare: 고립 Li⁺ 결합, competition: 용매 경쟁
+    li_model = exp.get("liModel") or acc.get("li_model", "bare")
+    if li_model not in licomp.MODELS:
+        raise ValueError(f"알 수 없는 Li⁺ 모델: {li_model}")
     return {
+        "li_model": li_model,
+        "li_coordination": int(exp.get("liCoordination") or licomp.DEFAULT_COORDINATION),
+        "li_max_sites": int(exp.get("liMaxSites") or acc.get("li_max_sites", 1)),
         "n_conf": exp.get("nConformers") or acc["n_conf"],
         "n_dft_rank": n_dft_rank,
         "conf_sens": conf_sens,
@@ -433,6 +441,10 @@ def _provenance(params, settings, solvent_key):
         "n_conformers_dft_ranked": params["n_dft_rank"],
         "boltzmann_ensemble": params["ensemble"],
         "n_conformers_redox_sensitivity": params.get("conf_sens", 0),
+        "li_model": params.get("li_model"),
+        "li_coordination": (params.get("li_coordination")
+                            if params.get("li_model") == "competition" else None),
+        "li_max_sites": params.get("li_max_sites"),
         "thermochemistry": params["do_thermo"],
         "freq_scale_factor": params["freq_scale"],
         "nonequilibrium_solvation": params["noneq"],
@@ -687,6 +699,155 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
             "anion_atoms": an_atoms,
         })
     return out
+
+
+def _compute_li_reference(comp, n, params, solvent_key, log):
+    """Li(solv)n⁺ 참조 클러스터 + 용매 분자 + 고립 Li⁺ 의 에너지 (같은 프로토콜).
+
+    후보마다 다시 하지 않도록 licomp 가 캐시한다. 클러스터는 MMFF 가 Li⁺ 를 다루지
+    못해 기하학적으로 놓은 뒤 DFT 최적화에 맡긴다 (do_opt 일 때).
+    """
+    atoms, _frags = licomp.build_li_cluster(comp["smiles"], n)
+    st = licomp.cluster_stats(atoms)
+    label = f"Li({comp['abbr']}){n}⁺"
+    log(f"{label} 초기 구조 — {st['n_atoms']}원자, Li–배위 원자 {st['li_min']} Å")
+    opt_solv = solvent_key if params["opt_in_solvent"] else None
+    optimized = False
+    if params["do_opt"]:
+        atoms = _optimize_state(atoms, params, 1, 1, log, label=f" ({label} 참조)",
+                                solvent_key=opt_solv)
+        optimized = True
+    mol_c = _build_mol(atoms, params["basis_sp"], 1, 1)
+    e_cluster = _run_scf(_make_mf(mol_c, params["xc"], params["disp"], solvent_key,
+                                  params["scf_tol"]), f"{label} 참조", log)
+    s_cands, _ = smiles_to_conformers(comp["smiles"], n_conformers=5, top_k=1)
+    s_atoms = s_cands[0][0]
+    if params["do_opt"]:
+        s_atoms = _optimize_state(s_atoms, params, 0, 1, log, label=f" ({comp['abbr']} 용매 분자)",
+                                  solvent_key=opt_solv)
+    e_solvent = _run_scf(_make_mf(_build_mol(s_atoms, params["basis_sp"], 0, 1), params["xc"],
+                                  params["disp"], solvent_key, params["scf_tol"]),
+                         f"{comp['abbr']} 용매 분자", log)
+    e_li = _li_ion_energy(params, solvent_key, log)
+    return {"e_cluster": float(e_cluster), "e_solvent": float(e_solvent), "e_li": float(e_li),
+            "optimized": optimized, "n_atoms": len(atoms),
+            "cluster_geometry": licomp.cluster_stats(atoms),
+            "cluster_xyz": atoms_to_xyz_block(atoms, f"{label} reference"),
+            "solvent_xyz": atoms_to_xyz_block(s_atoms, f"{comp['abbr']} solvent"),
+            "protocol": {"functional": params["functional"], "basis_opt": params["basis_opt"],
+                         "basis_sp": params["basis_sp"], "smd": solvent_key,
+                         "do_opt": params["do_opt"], "thermal": False}}
+
+
+def _li_ion_energy(params, solvent_key, log) -> float:
+    """고립 Li⁺ 의 에너지 (같은 기저·범함수·SMD) — 참조 용매화 진단용 상수.
+
+    단일 원자의 SMD DFT 는 격자 생성이 유난히 느려(수십 초) 프로토콜별로 한 번만
+    계산해 캐시한다. ΔE_exchange 자체에는 들어가지 않고 «용매화 세기» 표시에만 쓴다.
+    """
+    key = "li_ion:" + json.dumps({"functional": params["functional"], "basis_sp": params["basis_sp"],
+                                  "disp": params["disp"], "smd": solvent_key}, sort_keys=True)
+
+    def compute():
+        log("고립 Li⁺ 기준 에너지 계산 (프로토콜별 1회, 캐시)")
+        return float(_run_scf(
+            _make_mf(_build_mol([("Li", 0.0, 0.0, 0.0)], params["basis_sp"], 1, 1),
+                     params["xc"], params["disp"], solvent_key, params["scf_tol"]),
+            "Li⁺ (고립)", log))
+
+    return float(licomp.get_constant(key, compute))
+
+
+def _li_interaction(atoms, mol, e_total, smiles, params, settings, solvent_key, temperature,
+                    mep, log, stage, site_search=True):
+    """Li⁺ 상호작용 (v2.0 P0-6) — site 별 결합 에너지(CP 보정) + 용매 경쟁 ΔE_exchange.
+
+    반환: {"descriptors": {...}, "structures": {...}, "notes": [...]}
+    """
+    desc, structs, notes = {}, {}, []
+    n_sites = int(params.get("li_max_sites", 1)) if site_search else 1
+    mep_site = desc_mod.li_cation_site(mol, mep)
+    sites = licomp.li_sites(atoms, smiles if site_search else None,
+                            mep_site=mep_site, max_sites=n_sites)
+    n_host = len(atoms)
+    opt_solv = solvent_key if params["opt_in_solvent"] else None
+    relax = bool(params["do_opt"])
+    results = []
+    for site in sites:
+        tag = f" [{site['label']}]" if len(sites) > 1 else ""
+        stage(f"Li⁺ 결합 에너지{tag}", 66)
+        li_atoms = list(atoms) + [("Li", *site["pos"])]
+        try:
+            if relax:
+                # 착물 재최적화 — 예전에는 Li⁺ 를 놓기만 하고 구조를 풀지 않았다
+                li_atoms = _optimize_state(li_atoms, params, params["charge"] + 1, 1, log,
+                                           label=f" (Li⁺ 착물{tag})", solvent_key=opt_solv)
+            mol_li = _build_mol(li_atoms, params["basis_sp"], params["charge"] + 1, 1)
+            e_li_complex = _run_scf(
+                _make_mf(mol_li, params["xc"], params["disp"], solvent_key, params["scf_tol"]),
+                f"Li⁺ 착물{tag}", log)
+            e_host_cp = _counterpoise_energy(
+                li_atoms, (0, n_host), params["basis_sp"], params["charge"],
+                params["multiplicity"], params["xc"], params["disp"], solvent_key,
+                params["scf_tol"], f"Li⁺ 착물 호스트(CP){tag}", log)
+            e_li_cp = _counterpoise_energy(
+                li_atoms, (n_host, n_host + 1), params["basis_sp"], 1, 1,
+                params["xc"], params["disp"], solvent_key, params["scf_tol"],
+                f"Li⁺ 이온(CP){tag}", log)
+        except CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — site 하나의 실패가 나머지를 막지 않는다
+            log(f"Li⁺ site {site['label']} 계산 실패 — 건너뜀: {exc}")
+            continue
+        results.append({"label": site["label"], "kind": site.get("kind"), "atom": site.get("atom"),
+                        "e_complex": float(e_li_complex),
+                        "binding_kj": round((e_li_complex - e_host_cp - e_li_cp) * HARTREE2KJ, 1),
+                        "relaxed": relax, "atoms": li_atoms})
+    if not results:
+        notes.append("Li⁺ 착물 계산이 모두 실패해 이온 상호작용 지표가 없습니다")
+        return {"descriptors": desc, "structures": structs, "notes": notes}
+
+    strongest = min(results, key=lambda r: r["binding_kj"])
+    desc["li_binding_kj"] = strongest["binding_kj"]
+    structs["li_complex"] = atoms_to_xyz_block(strongest["atoms"], f"Li+ 착물 ({strongest['label']})")
+    for k, r in enumerate(results):
+        if r is not strongest and len(results) > 1:
+            structs[f"li_complex_{k + 1}"] = atoms_to_xyz_block(r["atoms"], f"Li+ 착물 ({r['label']})")
+
+    # 용매 경쟁 — 참조 Li(solv)n⁺ 는 용매·n·프로토콜별로 캐시
+    model = params.get("li_model", "bare")
+    n = int(params.get("li_coordination") or licomp.DEFAULT_COORDINATION)
+    refs = []
+    if model == "competition":
+        comps = licomp.solvent_components(settings)
+        if not comps:
+            notes.append("Li⁺ 용매 경쟁은 용매가 있어야 계산합니다 — 진공 설정이라 고립 Li⁺ 결합만 보고")
+        for comp in comps:
+            stage(f"Li⁺ 용매 경쟁 참조 — Li({comp['abbr']}){n}⁺", 68)
+            try:
+                ref = licomp.get_reference(
+                    comp, n, params, solvent_key,
+                    compute=lambda c=comp: _compute_li_reference(c, n, params, solvent_key, log))
+            except CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log(f"Li({comp['abbr']}){n}⁺ 참조 계산 실패 — 건너뜀: {exc}")
+                continue
+            log(f"참조 Li({comp['abbr']}){n}⁺ — "
+                + ("캐시 재사용" if ref.get("cached") else f"신규 계산 {ref.get('wall_s')}s")
+                + f" · 용매화 {ref['solvation_kj_per_molecule']:+.1f} kJ/mol·분자")
+            refs.append(ref)
+
+    summary = licomp.summarize(results, refs, e_total, temperature, model, n)
+    desc["li_interaction"] = summary
+    if summary.get("exchange_min_kj") is not None:
+        desc["li_exchange_kj"] = summary["exchange_min_kj"]
+        desc["li_exchange_boltzmann_kj"] = summary["exchange_boltzmann_kj"]
+        desc["li_exchange_solvent"] = summary["primary_solvent"]
+    notes.append("Li⁺: " + summary["note"])
+    notes.append("Li⁺ 착물은 " + ("DFT 재최적화 후 단일점" if relax else "초기 배치 그대로 단일점")
+                 + " — 결합 에너지는 BSSE counterpoise 보정 (변형 에너지 미포함)")
+    return {"descriptors": desc, "structures": structs, "notes": notes}
 
 
 def run_job(job, update, is_cancelled=lambda: False):
@@ -1256,28 +1417,14 @@ def run_job(job, update, is_cancelled=lambda: False):
                 descriptors.update(desc_mod.reactivity_indices(
                     descriptors["ip_vertical_ev"], descriptors["ea_vertical_ev"]))
 
-            # Li⁺ 결합 에너지 — MEP 최소점(전자 풍부 부위)에 Li⁺ 배치
+            # Li⁺ 상호작용 — site 별 결합 에너지 + 용매 경쟁 ΔE_exchange (v2.0 P0-6)
             if mep and closed_shell:
-                stage("Li⁺ 결합 에너지", 66)
-                site = desc_mod.li_cation_site(mol, mep)
-                li_atoms = list(atoms) + [("Li", *site)]
-                mol_li = _build_mol(li_atoms, params["basis_sp"], params["charge"] + 1, 1)
-                e_li_complex = _run_scf(
-                    _make_mf(mol_li, params["xc"], params["disp"], solvent_key,
-                             params["scf_tol"]), "Li⁺ 착물", log)
-                n_host = len(atoms)
-                e_host_cp = _counterpoise_energy(
-                    li_atoms, (0, n_host), params["basis_sp"], params["charge"],
-                    params["multiplicity"], params["xc"], params["disp"], solvent_key,
-                    params["scf_tol"], "Li⁺ 착물 호스트(CP)", log)
-                e_li_cp = _counterpoise_energy(
-                    li_atoms, (n_host, n_host + 1), params["basis_sp"], 1, 1,
-                    params["xc"], params["disp"], solvent_key, params["scf_tol"],
-                    "Li⁺ 이온(CP)", log)
-                descriptors["li_binding_kj"] = round(
-                    (e_li_complex - e_host_cp - e_li_cp) * HARTREE2KJ, 1)
-                fingerprint_structures["li_complex"] = atoms_to_xyz_block(
-                    li_atoms, "Li+ 착물")
+                li_out = _li_interaction(
+                    atoms, mol, e_total, smiles, params, settings, solvent_key, temperature,
+                    mep, log, stage, site_search=not explicit and not user_atoms)
+                descriptors.update(li_out["descriptors"])
+                fingerprint_structures.update(li_out["structures"])
+                notes.extend(li_out["notes"])
 
             # 자기 이량체 (바인더–바인더 수소결합/응집) 에너지
             if closed_shell:

@@ -1009,6 +1009,20 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
             <option value="true">적용 (최소 3개)</option>
             <option value="false">끔 (지배 conformer 한 값)</option>
           </select></div>
+        <div class="field"><span class="field-label">Li⁺ 상호작용 모델</span>
+          <select class="input" id="li-model"
+            title="bare: 고립 Li⁺ 결합 에너지(탈용매화 비용 미반영). competition: Li(solv)n⁺ 용매 경쟁 ΔE_exchange (v2.0 P0-6) — 참조 클러스터는 용매·프로토콜별로 한 번만 계산해 캐시">
+            <option value="">(정확도 프리셋 — 정밀에서 용매 경쟁)</option>
+            <option value="competition">용매 경쟁 — Binder + Li(solv)n⁺ ⇌ Binder·Li⁺ + n solv</option>
+            <option value="bare">고립 Li⁺ 결합만</option>
+          </select></div>
+        <div class="field"><span class="field-label">Li⁺ 배위수 n · site 수</span>
+          <div class="ratio-row">
+            <input class="input" type="number" id="li-coord" min="1" max="6" step="1" placeholder="n = 4"
+              title="참조 클러스터 Li(solv)n⁺ 의 용매 분자 수 (기본 4)">
+            <input class="input" type="number" id="li-sites" min="1" max="6" step="1" placeholder="site (프리셋)"
+              title="Li⁺ 를 놓아 볼 바인더 site 수 — MEP 최소점 + 헤테로원자 부위 (표준 1 · 정밀 3)">
+          </div></div>
       </div>
     </details>
     <div class="form-error" id="form-error"></div>
@@ -1387,6 +1401,20 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
           </div>
           <p class="muted small" style="margin:0">음이온·전자친화도·환원 전위는 diffuse 함수에 민감합니다.
             음이온 기저를 따로 두면 중성 기준 에너지도 <b>같은 기저에서 다시 계산</b>해 비교 가능성을 지킵니다.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:12px 0 4px">
+            <label class="small">Li⁺ 모델 <select class="input" id="scr-li-model">
+              <option value="">프리셋 기본 (정밀: 용매 경쟁)</option>
+              <option value="competition">용매 경쟁 ΔE_exchange</option>
+              <option value="bare">고립 Li⁺ 결합만</option></select></label>
+            <label class="small">배위수 n <input class="input" type="number" id="scr-li-coord" min="1" max="6"
+              placeholder="4" style="width:70px;padding:4px 8px"></label>
+            <label class="small">site 수 <input class="input" type="number" id="scr-li-sites" min="1" max="6"
+              placeholder="프리셋" style="width:80px;padding:4px 8px"></label>
+          </div>
+          <p class="muted small" style="margin:0">Li⁺ 용매 경쟁(P0-6): Binder + Li(solv)n⁺ ⇌ Binder·Li⁺ + n·solv 의
+            ΔE_exchange 로 trapping 을 판정합니다. 고립 Li⁺ 결합은 탈용매화 비용을 무시해 trapping 을 과대평가합니다.
+            참조 클러스터는 용매·n·프로토콜별로 한 번만 계산해 캐시하고, 5대 Score 가 켜진 마지막 단계에서만 돕니다.
+            전자에너지+SMD 기준(열보정 미포함)이며 배위수는 고정입니다.</p>
         </details>
 
         <details class="wiz-acc"><summary>D. 전하 · 스핀</summary>
@@ -1436,8 +1464,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
               상위 conformer 별 전위 민감도(σ, 표준 3·정밀 5, 5 kcal/mol 창)는 구현되어 판정·신뢰도에
               반영됩니다. 이온 구조는 각 중성 conformer 에서 재최적화한 것이며, 이온 상태 자체의
               conformer 탐색은 아직 하지 않습니다.</li>
-            <li><b>H. Li⁺ 상호작용</b> — 용매 경쟁 반응(ΔG_exchange)·배위수 앙상블. 현재는 고립 Li⁺
-              결합 에너지만 산출되며, 이는 탈용매화 비용을 무시해 trapping 을 과대평가합니다.</li>
+            <li><b>H. Li⁺ 상호작용</b> — 용매 경쟁 ΔE_exchange(전자에너지+SMD)·site 자동 탐색은 구현되어
+              위 «C. DFT 방법»에서 설정합니다. 배위수 앙상블·명시적 용매 microstate·열보정(ΔG_exchange)은
+              아직 없습니다.</li>
           </ul>
         </details>
       </section>
