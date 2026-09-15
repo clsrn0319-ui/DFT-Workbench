@@ -803,6 +803,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-mech #rbv-mech{display:block}
 #rb-real.mode-screen #rbv-screen{display:block}
 #rb-real.mode-monitor #rbv-monitor{display:block}
+#rb-real.mode-manual #rbv-manual{display:block}
 .mon-log{margin:6px 0 0;padding:10px 12px;background:var(--grid);border-radius:8px;font-family:ui-monospace,Cascadia Code,Consolas,monospace;font-size:11.5px;line-height:1.45;white-space:pre;overflow:auto;max-height:520px;color:var(--text-2)}
 .mon-log .ln{display:inline-block;width:62px;color:var(--muted);text-align:right;margin-right:10px;user-select:none}
 .mon-log .l-err{color:var(--danger);font-weight:700}.mon-log .l-warn{color:var(--pin)}.mon-log .l-ok{color:var(--ok,#0ca30c)}
@@ -1610,8 +1611,13 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       한 번에 300줄만 가져오며, 경고·오류·수렴 줄은 색으로 강조됩니다. 구조화 이벤트의 «원본에서 보기»는 이 창의 해당 줄로 이동합니다.</p>
   </div>
 </div>
+
+<!-- ───────── 사용 설명서 (본문은 web/manual_content.js, 화면은 web/help.js 가 그린다) ───────── -->
+<div id="rbv-manual" class="rbv"></div>
 </section>
 <script src="/static/app.js"></script>
+<script src="/static/manual_content.js"></script>
+<script src="/static/help.js"></script>
 <script>
 (function () {
   var real = document.getElementById("rb-real");
@@ -1635,6 +1641,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     // 현 단계에서 쓰지 않아 메뉴에서 제외 — 화면·백엔드는 남아 있어 여기만
     // 되살리면 다시 나타난다.
     {group: "참고", items: [
+      {label: "사용 설명서", mode: "manual"},
       {label: "물성 사전", proxy: "물성 사전"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
   ];
@@ -1656,7 +1663,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.scrollTop = 0;
     setActive(label);
     real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
-      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen", "mode-monitor");
+      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen", "mode-monitor", "mode-manual");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1669,8 +1676,11 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "mech" && window.rbRenderMech) try { window.rbRenderMech(); } catch (e) {}
     if (mode === "screen" && window.rbRenderScreen) try { window.rbRenderScreen(); } catch (e) {}
     if (mode === "monitor" && window.rbRenderMonitor) try { window.rbRenderMonitor(); } catch (e) {}
+    if (mode === "manual" && window.rbRenderManual) try { window.rbRenderManual(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
+  // 사용 설명서(help.js)의 «바로 가기»·배너가 다른 페이지를 열 때 쓴다
+  window.rbOpenMode = openReal;
   window.rbOpenResults = function () { openReal("results", "DFT 계산 결과"); };
   window.rbOpenMonitor = function (jobId) {
     openReal("monitor", "계산 모니터");

@@ -1,0 +1,7 @@
+{
+  "name": "rhobench-manual-docx",
+  "private": true,
+  "description": "web/manual_content.js → docs/07_DFT-Workbench_사용설명서.docx",
+  "scripts": { "build": "node build_docx.js" },
+  "dependencies": { "docx": "^9.0.0" }
+}

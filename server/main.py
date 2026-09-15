@@ -1045,10 +1045,15 @@ def _snapshot_html(jobs: list[dict]) -> str:
     서버가 필요한 동작은 안내 문구와 함께 잠긴다.
     """
     page = (WEB_DIR / "index.html").read_text(encoding="utf-8")
-    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     marker = '<script src="/static/app.js"></script>'
     if marker not in page:
         raise HTTPException(500, "index.html에서 app.js 로드 지점을 찾지 못했습니다.")
+    # app.js 뒤에 오는 정적 스크립트(사용 설명서 본문·도움말)도 파일 하나에 같이 담는다
+    for name in SNAPSHOT_EXTRA_JS:
+        tag = f'<script src="/static/{name}"></script>'
+        if tag in page:
+            page = page.replace(tag, _inline_script((WEB_DIR / name).read_text(encoding="utf-8")))
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 
     snapshot = {
         "exported_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -1059,9 +1064,29 @@ def _snapshot_html(jobs: list[dict]) -> str:
     }
     shim = ("<script>\nwindow.__RB_SNAPSHOT__ = " + _js_literal(snapshot) + ";\n"
             + SNAPSHOT_SHIM_JS + "\n</script>")
-    # app.js 안의 </script> 는 HTML 파서가 스크립트를 끊지 않도록 감싼다
-    inline = "<script>\n" + app_js.replace("</script", "<\\/script") + "\n</script>"
-    return page.replace(marker, shim + "\n" + inline)
+    return page.replace(marker, shim + "\n" + _inline_script(app_js))
+
+
+SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js")
+
+
+def _inline_script(src: str) -> str:
+    """스크립트 본문을 <script> 로 감싼다 — 안의 </script> 는 HTML 파서가 끊지 않도록 이스케이프."""
+    return "<script>\n" + src.replace("</script", "<\\/script") + "\n</script>"
+
+
+MANUAL_DOCX = Path(__file__).resolve().parent.parent / "docs" / "07_DFT-Workbench_사용설명서.docx"
+
+
+@app.get("/api/manual/docx")
+def manual_docx(_: bool = Depends(require_login)):
+    """사용 설명서 Word 파일 — «사용 설명서» 페이지의 내려받기 버튼."""
+    if not MANUAL_DOCX.exists():
+        raise HTTPException(404, "설명서 Word 파일이 없습니다. scripts/manual/build_docx.js 로 만드세요.")
+    return FileResponse(
+        MANUAL_DOCX,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=MANUAL_DOCX.name)
 
 
 @app.get("/api/export")
