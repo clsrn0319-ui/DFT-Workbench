@@ -298,3 +298,32 @@ def test_run_job_rejects_impossible_charge_spin():
     run_job(job, update=state.update)
     assert state["status"] == "FAILED" and "다중도" in state["error"]
     assert state["errorKind"] == "FAILED" and state["validation"]["grade"] == "FAILED"
+
+
+def test_snapshot_html_includes_monitor_data(tmp_path, monkeypatch):
+    """공유용 HTML 사본에 계산 모니터(대시보드·작업 상세·원본 로그 꼬리)가 함께 담긴다."""
+    import json as _json
+    import re
+    from server import main as main_mod, store
+    job = {
+        "id": "JOB-SNAP-1", "status": "PUBLISHED", "createdAt": 1.0, "finishedAt": 2.0, "logs": [],
+        "material": {"id": None, "name": "물", "smiles": "O"},
+        "settings": {"expert": {}, "envType": "진공·기체"},
+        "validation": {"grade": "PASS", "items": []},
+        "monitor": {"sections": [{"name": "SCF", "offset": 0, "t": 1.0}], "anomalies": [], "attempts": []},
+        "result": {"descriptors": {"homo_ev": -7.5}, "conditions": {"method": "x"}},
+    }
+    monkeypatch.setattr(store, "_jobs", {job["id"]: job})
+    monkeypatch.setattr(store, "_loaded", True)
+    store.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    store.raw_log_path(job["id"]).write_text("".join(f"line {i}\n" for i in range(1, 601)), encoding="utf-8")
+    html = main_mod._snapshot_html([job])
+    payload = _json.loads(re.search(r"window\.__RB_SNAPSHOT__ = (.*?);\n", html, re.S).group(1))
+    assert [v["id"] for v in payload["monitor"]["jobs"]] == ["JOB-SNAP-1"]
+    assert payload["monitor"]["counts"]["PASS"] == 1
+    mv = payload["monitors"]["JOB-SNAP-1"]
+    assert mv["validation"]["grade"] == "PASS" and mv["trajectory_exists"] is False
+    lg = payload["logs"]["JOB-SNAP-1"]
+    assert lg["exists"] and lg["lines"] == 600 and lg["start"] == 201 and lg["text"].endswith("line 600\n")
+    for marker in ("/api/monitor", "D.monitors", "D.logs", "rbv-monitor"):
+        assert marker in html
