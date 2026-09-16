@@ -22,10 +22,12 @@ step() { echo; echo "${BOLD}[$1/6] $2${OFF}"; }
 die()  { echo; echo "${RED}실패: $1${OFF}" >&2; exit 1; }
 
 WITH_NGINX=1
+WITH_GPU=0
 BRANCH=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-nginx) WITH_NGINX=0 ;;
+    --gpu) WITH_GPU=1 ;;          # NVIDIA GPU 서버: gpu4pyscf 설치 + RHOBENCH_GPU=1
     --branch) BRANCH="$2"; shift ;;
     *) die "알 수 없는 옵션: $1" ;;
   esac
@@ -56,6 +58,18 @@ step 2 "가상환경·계산 패키지 (처음이면 5~10분)"
 ./scripts/setup.sh >/tmp/rhobench-setup.log 2>&1 || { tail -20 /tmp/rhobench-setup.log; die "setup.sh 실패 — /tmp/rhobench-setup.log"; }
 .venv/bin/python -c "import pyscf, rdkit; print('  PySCF', pyscf.__version__, '· RDKit', rdkit.__version__)"
 
+if [ "$WITH_GPU" = "1" ]; then
+  # GPU 백엔드 — CUDA 12 드라이버가 있는 서버에서만. 없으면 서버는 CPU 로 그대로 돈다.
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "  ${RED}nvidia-smi 가 없습니다 — NVIDIA 드라이버(CUDA 12)를 먼저 설치하세요. GPU 없이 계속합니다.${OFF}"
+    WITH_GPU=0
+  else
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | sed 's/^/  GPU: /'
+    .venv/bin/pip install -q gpu4pyscf-cuda12x >/tmp/rhobench-gpu.log 2>&1 || { tail -20 /tmp/rhobench-gpu.log; die "gpu4pyscf 설치 실패 — /tmp/rhobench-gpu.log"; }
+    RHOBENCH_GPU=1 .venv/bin/python -c "from server import gpu; p = gpu.probe(); print('  GPU4PySCF', p.get('gpu4pyscf'), '·', p.get('device')) if p['available'] else (print('  GPU 사용 불가:', p['reason']), exit(1))"       || die "GPU 검사 실패 — 드라이버·CUDA 버전 확인"
+  fi
+fi
+
 # ── 3. 환경 파일 ─────────────────────────────────────────────────
 step 3 "/etc/rhobench.env"
 if [ -f /etc/rhobench.env ]; then
@@ -74,6 +88,7 @@ else
     echo "RHOBENCH_BATCH_PARALLEL=1"
     echo "RHOBENCH_MAX_BATCH=500"
     echo "RHOBENCH_BATCH_FAIL_RATIO=0.3"
+    echo "RHOBENCH_GPU=$WITH_GPU"
   } | sudo tee /etc/rhobench.env >/dev/null
   echo "  만들었습니다 (권한 600)"
 fi

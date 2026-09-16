@@ -5,7 +5,7 @@
 // 블록 종류: p · h2(id 필수, "s<장>-<순번>") · h3 · ul · ol · tip · warn · code · table(headers/rows/widths) · qa(q/a)
 window.RB_MANUAL = {
  "title": "DFT-Workbench 사용 설명서",
- "version": "3.3",
+ "version": "3.4",
  "date": "2026-09-16",
  "subtitle": "설치부터 계산·판정·공유까지, 처음 쓰는 사람을 위한 안내",
  "tagline": "배터리 바인더·전해액 후보 분자를 DFT 계산으로 걸러내는 프로그램",
@@ -1987,6 +1987,10 @@ window.RB_MANUAL = {
       [
        "Materials Project 조회",
        "`MP_API_KEY`"
+      ],
+      [
+       "GPU 계산 (NVIDIA 서버)",
+       "`RHOBENCH_GPU=1` (기본 0). CUDA 12 + gpu4pyscf 가 있을 때만 GPU 로 계산하고, 없으면 자동으로 CPU. 클라우드는 `ncp_setup.sh --gpu`"
       ]
      ],
      "widths": [

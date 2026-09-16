@@ -31,6 +31,7 @@ from . import binder as binder_mod
 from . import checkpoint as checkpoint_mod
 from . import confsens
 from . import descriptors as desc_mod
+from . import gpu as gpu_mod
 from . import licomp
 from . import monitor as monitor_mod
 from . import presets
@@ -321,6 +322,15 @@ def _atomic_charges(mf, mol):
 
 
 def _run_scf(mf, label, log, dm0=None):
+    """SCF 실행 — GPU 스위치(RHOBENCH_GPU)가 켜져 있으면 GPU 객체로 돌리고 결과를 CPU 객체에
+    되돌려 놓는다. 이후의 전하 분석·MEP·TDDFT 는 CPU 객체를 그대로 쓴다."""
+    work = gpu_mod.to_gpu(mf, log)
+    energy = _run_scf_on(work, label, log, dm0)
+    gpu_mod.sync_back(mf, work)
+    return energy
+
+
+def _run_scf_on(mf, label, log, dm0=None):
     """SCF 실행. 미수렴 시 damping·level shift·2차 수렴(SOSCF)으로 단계적 복구를 시도한다.
 
     자동 복구는 «기록이 핵심»이다 (모니터링 가이드 §6.1) — 어떤 attempt 에서 무엇을
@@ -423,6 +433,8 @@ def _provenance(params, settings, solvent_key):
         optimizer = "pyberny"
     return {
         "engine": f"PySCF {pyscf.__version__}",
+        "backend": gpu_mod.backend(),          # cpu | gpu (RHOBENCH_GPU)
+        "gpu": gpu_mod.info(),
         "rdkit": rdkit.__version__,
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -478,15 +490,16 @@ def _optimize_geometry(mf, log, label="", max_steps=100):
     cb = mon.opt_callback if mon else None
     if mon:
         mon.begin_opt(label.strip() or "구조 최적화", max_steps=max_steps)
+    work = gpu_mod.to_gpu(mf, log)   # 기울기 계산을 GPU 로 (스위치가 꺼져 있으면 mf 그대로)
     try:
         try:
             from pyscf.geomopt.geometric_solver import kernel as geo_kernel
             log(f"구조 최적화 시작{label} (geomeTRIC)")
-            converged, mol_opt = geo_kernel(mf, callback=cb, maxsteps=max_steps)
+            converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps)
         except ImportError:
             from pyscf.geomopt.berny_solver import kernel as berny_kernel
             log(f"구조 최적화 시작{label} (pyberny)")
-            converged, mol_opt = berny_kernel(mf, callback=cb, maxsteps=max_steps)
+            converged, mol_opt = berny_kernel(work, callback=cb, maxsteps=max_steps)
     except RuntimeError as exc:
         # 스텝 안의 SCF 가 수렴하지 않으면 최적화기가 여기서 멈춘다 — 프로세스 오류가
         # 아니라 계산 미수렴이다. 문구를 사람이 읽을 수 있게 바꾸고 기록을 남긴다.
@@ -534,7 +547,7 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
     e_elec = _run_scf(mf, f"열보정{label}", log)
     if _MON:
         _MON.event("HESSIAN_BEGIN", label=f"열보정{label}", natm=mol.natm)
-    hess = mf.Hessian().kernel()
+    hess = gpu_mod.to_numpy(gpu_mod.to_gpu(mf, log).Hessian().kernel())
     freq_info = pyscf_thermo.harmonic_analysis(mol, hess)
     freqs = freq_info["freq_wavenumber"]
     if np.iscomplexobj(freqs):
@@ -869,6 +882,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             raise CancelledError()
         update({"stage": name, "progress": progress})
         log(f"[{name}]")
+        log(gpu_mod.describe(log))
         _RAW.note(name)
         if _MON is not None:
             _MON.stage(name)
@@ -1712,7 +1726,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                 "atmosphere": settings["atmosphere"],
                 "reference_electrode": settings.get("referenceElectrode"),
                 "method": f"{params['functional']}/{params['basis_sp']}",
-                "engine": "PySCF (density fitting)",
+                "engine": f"PySCF (density fitting · {gpu_mod.backend().upper()})",
             },
             "structure_xyz": atoms_to_xyz_block(
                 atoms, f"{job['material'].get('name', '')} {params['functional']}/{params['basis_sp']}"),

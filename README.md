@@ -304,6 +304,25 @@ cd scripts/manual && npm install && node build_docx.js   # → docs/07_DFT-Workb
   프로그램 기본 흐름(conformer 탐색)은 에너지가 더 낮은 꼬인 사슬을 고르므로 논문의 평면 모델보다 PTFE·PVDF
   갭이 0.8~1.0 eV 넓게 나온다 — 절대값 비교는 같은 구조로 해야 한다.
 
+## GPU 계산 스위치 (GPU4PySCF)
+
+NVIDIA GPU 서버에서는 PySCF 의 GPU 백엔드 GPU4PySCF 로 SCF·구조 최적화 기울기·Hessian 을 돌릴 수 있다.
+**기본은 꺼져 있어** 지금 PC 에서는 아무것도 달라지지 않는다.
+
+```bash
+RHOBENCH_GPU=1 ./scripts/start.sh --background     # GPU 켜기 (CUDA 12 + gpu4pyscf 가 있을 때만 효과)
+./scripts/ncp_setup.sh --gpu                        # 클라우드 GPU 서버: 드라이버 확인 → gpu4pyscf 설치 → RHOBENCH_GPU=1
+```
+
+- `server/gpu.py` 가 한 번만 검사한다: 스위치가 꺼졌거나 `gpu4pyscf`·`cupy`·CUDA 장치가 없으면 작업 로그에
+  이유 한 줄을 남기고 **CPU 로 그대로 계산**한다. 잘못 켜도 계산이 멈추지 않는다.
+- 엔진은 무거운 구간만 GPU 객체로 돌리고(`_run_scf`·`_optimize_geometry`·Hessian) 궤도·에너지를 CPU 객체에
+  되돌려 놓으므로 전하 분석·MEP·TDDFT 같은 후처리 코드는 바뀌지 않는다. 비평형(동결) 용매장 계산은 GPU 대응이
+  없어 CPU 에 남긴다.
+- 어떤 경로로 계산했는지는 결과의 provenance(`backend: cpu | gpu`, 장치·버전)와 조건 카드의 «engine» 에 남는다.
+- 실제 GPU 검증(값 일치·속도)은 GPU 서버가 생기면 «벤치마크» 세트로 한다 — `tests/test_gpu.py` 는 스위치·폴백·
+  결과 되돌리기 논리만 검사한다.
+
 ## 클라우드 서버 운영 (네이버 클라우드 등)
 
 같은 프로그램을 리눅스 서버에 **systemd 서비스**로 올려 어디서나 접속하고, GitHub 의 새

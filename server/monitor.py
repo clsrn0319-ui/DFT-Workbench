@@ -297,7 +297,8 @@ class JobMonitor:
         try:
             step = int(envs.get("cycle", -1)) + 1
             e = _num(envs.get("energy"))
-            grad = np.asarray(envs.get("gradients"))
+            g_raw = envs.get("gradients")
+            grad = np.asarray(g_raw.get() if hasattr(g_raw, "get") and not isinstance(g_raw, dict) else g_raw)  # cupy → numpy
             gnorm = float(np.linalg.norm(grad)) if grad.size else None
             gmax = float(np.abs(grad).max()) if grad.size else None
             mol = envs.get("mol")
