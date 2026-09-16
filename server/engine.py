@@ -1190,6 +1190,7 @@ def run_job(job, update, is_cancelled=lambda: False):
         except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
             density_cloud = None
             log(f"전자밀도 구름 생성 생략: {exc}")
+        orbital_clouds = desc_mod.orbital_clouds(mf, mol)   # HOMO/LUMO 3D 표면(점 구름)
         if restored:
             descriptors = dict(ckpt.get("descriptors") or {})
             notes = list(ckpt.get("notes") or [])
@@ -1281,6 +1282,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                     density_cloud = desc_mod.density_cloud(mf, mol)
                 except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
                     density_cloud = None
+                orbital_clouds = desc_mod.orbital_clouds(mf, mol)
                 notes.append(
                     f"허수 진동수가 검출되어 해당 모드로 변위 후 {n_fix}회 재최적화했습니다 "
                     "(안장점 → 극소점 교정)")
@@ -1715,6 +1717,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                            for f in fragments] if fragments else None),
             "fingerprint_structures": fingerprint_structures or None,
             "density_cloud": density_cloud,
+            "orbital_clouds": orbital_clouds,
             "conditions": {
                 "environment": settings["envType"],
                 "explicit_molecules": explicit_label or "없음",

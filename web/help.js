@@ -71,8 +71,21 @@
     { id: "mon-raw", sel: "#rbv-monitor h3", text: "PySCF 원본 로그", section: "s10-2", pos: "after" },
     // 벤치마크
     { id: "bench-title", sel: "#rbv-bench > h1", section: "s7-9", pos: "after" },
+    // 대시보드 · 템플릿 · 설정 · 튜토리얼 · 계산 통합 토글 · 결과 워크스페이스
+    { id: "dash-title", sel: "#rbv-dash > h1", section: "s4-4", pos: "after" },
+    { id: "tpl-title", sel: "#rbv-tpl > h1", section: "s4-4", pos: "after" },
+    { id: "settings-title", sel: "#rbv-settings > h1", section: "s4-4", pos: "after" },
+    { id: "settings-backend", sel: "#rbv-settings .card-head h2", text: "계산 백엔드", section: "sA-3", pos: "after" },
+    { id: "tut-title", sel: "#rbv-tut > h1", section: "ch3", pos: "after" },
+    { id: "calc-modebar", sel: "#rbv-calc .calc-modebar > .seg", section: "ch6", pos: "after" },
+    { id: "scr-modebar", sel: "#rbv-screen .calc-modebar > .seg", section: "ch9", pos: "after" },
+    { id: "ws-viewer", sel: "#rbv-results .ws-ph", text: "Molecule Viewer", section: "s7-1", pos: "after" },
+    { id: "ws-input", sel: "#rbv-results .ws-ph", text: "계산 설정", section: "s6-2", pos: "after" },
+    { id: "ws-progress", sel: "#rbv-results .ws-ph", text: "계산 진행 상황", section: "s10-2", pos: "after" },
+    { id: "ws-summary", sel: "#rbv-results .ws-ph", text: "결과 요약", section: "s7-1", pos: "after" },
+    { id: "cmp-scatter", sel: "#rbv-compare h3", text: "산점도", section: "s8-3", pos: "after" },
   ];
-  var MODE_CHAPTER = { calc: "ch6", results: "ch7", lookup: "ch5", compare: "ch8", screen: "ch9", monitor: "ch10", manual: "ch4", bench: "ch7" };
+  var MODE_CHAPTER = { calc: "ch6", results: "ch7", lookup: "ch5", compare: "ch8", screen: "ch9", monitor: "ch10", manual: "ch4", bench: "ch7", dash: "ch4", tpl: "ch4", settings: "ch4", tut: "ch3" };
   var HOST_SEL = "h1, h2, h3, label, summary, legend, .field-label, .option-title";
 
   /* ---------- 설명서 색인 ---------- */

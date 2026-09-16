@@ -118,6 +118,67 @@ def tddft_lambda_max(mf, nstates=8):
     }
 
 
+def orbital_cloud(mf, mol, which="homo", max_points=2500, spacing=0.3, threshold=0.02, seed=0):
+    """분자 궤도 ψ(r)를 격자에서 계산해 |ψ|² 가중 표본점(위상 부호 포함)으로 반환한다 — 결과 화면의
+    HOMO/LUMO 3D 표현용. 좌표 단위 Å, value 는 ψ 값(부호가 lobe 색).
+
+    등가면(marching cubes) 대신 확률 구름 표현을 쓰는 이유는 density_cloud 와 같다 — 저장 용량이
+    작고(점 2,500개) 뷰어가 이미 점 구름을 그리기 때문이다. 열린 껍질(UKS)은 α 궤도를 쓴다.
+    """
+    coeff, occ, energy = mf.mo_coeff, mf.mo_occ, mf.mo_energy
+    if getattr(coeff, "ndim", 2) == 3:          # UKS: (alpha, beta)
+        coeff, occ, energy = coeff[0], occ[0], energy[0]
+    coeff, occ, energy = np.asarray(coeff), np.asarray(occ), np.asarray(energy)
+    occ_idx = np.where(occ > 0)[0]
+    if not len(occ_idx):
+        return None
+    homo = int(occ_idx.max())
+    idx = homo if which == "homo" else homo + 1
+    if idx >= coeff.shape[1]:
+        return None
+    c = coeff[:, idx]
+    coords = mol.atom_coords(unit="Angstrom")
+    lo, hi = coords.min(0) - 2.4, coords.max(0) + 2.4
+    axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    n_grid = int(np.prod([len(a) for a in axes]))
+    if n_grid > 300000:
+        spacing *= (n_grid / 300000.0) ** (1 / 3)
+        axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+    parts = []
+    for start in range(0, len(grid), 20000):
+        chunk = grid[start:start + 20000] / 0.52917721092
+        parts.append(mol.eval_gto("GTOval", chunk) @ c)
+    psi = np.concatenate(parts)
+    mask = np.abs(psi) > threshold
+    if not mask.any():
+        return None
+    pts, val = grid[mask], psi[mask]
+    w = val ** 2
+    rng = np.random.default_rng(seed)
+    n = min(max_points, len(pts))
+    sel = rng.choice(len(pts), size=n, replace=False, p=w / w.sum())
+    return {
+        "points": [[round(float(x), 2) for x in p] for p in pts[sel]],
+        "value": [round(float(v), 4) for v in val[sel]],
+        "abs_max": round(float(np.abs(val).max()), 4),
+        "index": idx, "which": which,
+        "energy_ev": round(float(energy[idx]) * 27.211386, 3),
+        "spacing": round(float(spacing), 3),
+    }
+
+
+def orbital_clouds(mf, mol):
+    """HOMO·LUMO 두 궤도의 점 구름. 실패한 궤도는 None."""
+    out = {}
+    for which in ("homo", "lumo"):
+        try:
+            out[which] = orbital_cloud(mf, mol, which)
+        except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
+            out[which] = None
+    return out
+
+
 def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=0):
     """전자 밀도 ρ(r)를 격자에서 계산해 밀도 가중 표본점(전자구름)으로 반환한다.
 

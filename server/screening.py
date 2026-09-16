@@ -558,6 +558,7 @@ def _maybe_slim(job: dict):
     if not res or res.get("slimmed") or res.get("density_cloud") is None:
         return
     res["density_cloud"] = None
+    res["orbital_clouds"] = None
     res["slimmed"] = True
     res.setdefault("notes", []).append(
         "배치 스크리닝 용량 절약 — 전자밀도 구름을 저장하지 않았습니다 "

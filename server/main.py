@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
 from . import lookup as lookup_mod
-from . import benchmark, checkpoint, monitor
+from . import benchmark, checkpoint, gpu, monitor, templates
 from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
@@ -953,10 +953,51 @@ SNAPSHOT_SHIM_JS = r"""
     if (method !== "GET") return reply(DENY, false);
     if (url.indexOf("/api/me") === 0) return reply({limits: D.limits, active_sessions: 0});
     if (url.indexOf("/api/presets") === 0) return reply(D.presets);
+    if (url.indexOf("/api/templates") === 0) return reply({templates: D.templates || []});
+    if (url.indexOf("/api/settings") === 0) return reply({backend: {backend: "cpu", requested: false, reason: "결과 보기 전용 사본"}, workers: 0,
+      limits: D.limits, engine: {pyscf: "—", python: "—"}, code: "snapshot " + D.exported_at, data_dir: "—", potential_conventions: ["Li/Li⁺ 1.44 V"]});
     var one = url.match(/^\/api\/jobs\/([^/?]+)$/);
     if (one) {
       var hit = D.jobs.filter(function (j) { return j.id === decodeURIComponent(one[1]); })[0];
       return hit ? reply(hit) : reply({detail: "작업을 찾을 수 없습니다."}, false);
+    }
+    // ── 계산 모니터: 대시보드·작업 상세·원본 로그(마지막 줄들)를 사본 데이터로 ──
+    if (url.indexOf("/api/monitor") === 0) {
+      var m = D.monitor || {jobs: [], counts: {}, campaigns: [], total: 0, heartbeat_warn_s: 300};
+      var camp = (url.match(/[?&]campaign=([^&]+)/) || [])[1];
+      var rows = m.jobs;
+      if (camp) { camp = decodeURIComponent(camp); rows = rows.filter(function (v) { return v.campaign && v.campaign.id === camp; }); }
+      return reply(Object.assign({}, m, {jobs: rows, total: rows.length, now: Date.now() / 1000}));
+    }
+    var mon = url.match(/^\/api\/jobs\/([^/?]+)\/monitor/);
+    if (mon) {
+      var mv = (D.monitors || {})[decodeURIComponent(mon[1])];
+      return mv ? reply(mv) : reply({detail: "이 작업의 모니터 기록은 사본에 없습니다."}, false);
+    }
+    var lg = url.match(/^\/api\/jobs\/([^/?]+)\/log(?:\?(.*))?$/);
+    if (lg) {
+      var L = (D.logs || {})[decodeURIComponent(lg[1])];
+      if (!L || !L.exists) return reply(L || {exists: false, note: "원본 로그는 사본에 담기지 않았습니다."});
+      var params = {};
+      (lg[2] || "").split("&").forEach(function (kv) {
+        if (!kv) return; var pr = kv.split("="); params[decodeURIComponent(pr[0])] = decodeURIComponent((pr[1] || "").replace(/\+/g, " "));
+      });
+      var lines = L.text.split("\n"); if (lines.length && lines[lines.length - 1] === "") lines.pop();
+      var kept = "사본에는 원본 로그의 마지막 " + lines.length + "줄(L" + L.start + "–L" + L.end + ")만 담겨 있습니다.";
+      if (params.search) {
+        var q = params.search.toLowerCase(), hits = [];
+        lines.forEach(function (t, i) { if (hits.length < 200 && t.toLowerCase().indexOf(q) >= 0) hits.push({line: L.start + i, text: t.slice(0, 300)}); });
+        return reply({exists: true, query: params.search, hits: hits, truncated: false, note: kept});
+      }
+      var start = params.start != null && params.offset == null ? parseInt(params.start, 10) : null;
+      if (start != null && !isNaN(start)) {
+        var count = parseInt(params.count || "300", 10);
+        var s0 = Math.min(Math.max(start, L.start), L.end), i0 = s0 - L.start;
+        var chunk = lines.slice(i0, i0 + count);
+        return reply(Object.assign({}, L, {start: s0, end: s0 + chunk.length - 1, text: chunk.join("\n") + "\n", truncated: true, note: kept}));
+      }
+      var tail = parseInt(params.tail || "300", 10), t = tail > 0 ? lines.slice(-tail) : lines;
+      return reply(Object.assign({}, L, {start: L.start + (lines.length - t.length), end: L.end, text: t.join("\n") + "\n", note: kept}));
     }
     if (url.indexOf("/api/jobs") === 0) return reply({jobs: D.jobs});
     return reply(DENY, false);
@@ -998,6 +1039,8 @@ SNAPSHOT_SHIM_JS = r"""
       "계산했는지 보여 주기 위해 그대로 두었습니다.");
     prependNote("rbv-lookup", "이 페이지에서는 물질 조회를 할 수 없습니다 " +
       "(인터넷 조회와 RDKit이 필요합니다).");
+    prependNote("rbv-monitor", "결과 보기 전용 — 계산 과정 기록(검증 보고서·SCF/OPT 이력·이상 징후·" +
+      "원본 로그 마지막 400줄)을 그대로 보실 수 있습니다. 실시간 갱신은 없습니다.");
 
     ["submit-btn", "lookup-btn", "add-explicit"].forEach(function (id) {
       var b = document.getElementById(id);
@@ -1061,13 +1104,53 @@ def _snapshot_html(jobs: list[dict]) -> str:
         "presets": get_presets(_=True),
         "limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS},
         "csv": "\ufeff" + _csv_text(jobs),
+        "templates": templates.list_templates(),
+        **_snapshot_monitor_data(jobs),
     }
     shim = ("<script>\nwindow.__RB_SNAPSHOT__ = " + _js_literal(snapshot) + ";\n"
             + SNAPSHOT_SHIM_JS + "\n</script>")
     return page.replace(marker, shim + "\n" + _inline_script(app_js))
 
 
-SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js")
+SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js", "workspace.js", "pages.js")
+SNAPSHOT_LOG_TAIL = 400   # 사본에 담는 원본 로그 줄 수 (작업당)
+
+
+def _snapshot_monitor_data(jobs: list[dict]) -> dict:
+    """공유용 HTML 에 «계산 모니터»가 보이도록 대시보드·작업별 모니터 상세·원본 로그 꼬리를 모은다.
+
+    실시간 갱신은 없지만 검증 보고서·SCF/OPT 이력·이상 징후·자동 복구 기록은 그대로 보인다.
+    로그는 작업당 마지막 SNAPSHOT_LOG_TAIL 줄만 담아 파일 크기를 억제한다.
+    """
+    ids = {j["id"] for j in jobs}
+    try:
+        dash = monitor_dashboard(campaign=None, limit=1000, _=True)
+        dash["jobs"] = [v for v in dash["jobs"] if v.get("id") in ids]
+        counts = {"running": 0, "queued": 0, "PASS": 0, "REVIEW": 0, "FAIL": 0,
+                  "CRASHED": 0, "CANCELLED": 0, "FAILED": 0, "ungraded": 0, "stale": 0}
+        for j in jobs:
+            g = ((j.get("validation") or (j.get("result") or {}).get("validation") or {}).get("grade"))
+            counts[g if g in counts else "ungraded"] += 1
+        dash["counts"] = counts
+        dash["total"] = len(dash["jobs"])
+    except Exception:  # noqa: BLE001 — 모니터가 없어도 결과 사본은 만들어져야 한다
+        dash = {"jobs": [], "counts": {}, "campaigns": [], "total": 0,
+                "heartbeat_warn_s": monitor.HEARTBEAT_WARN_S, "now": time.time()}
+    monitors, logs = {}, {}
+    for j in jobs:
+        try:
+            mv = get_job_monitor(j["id"], _=True)
+            mv["trajectory_exists"] = False       # 사본에서는 내려받기 링크가 동작하지 않는다
+            monitors[j["id"]] = mv
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            lg = get_job_log(j["id"], tail=SNAPSHOT_LOG_TAIL, _=True)
+            if isinstance(lg, dict):
+                logs[j["id"]] = lg
+        except Exception:  # noqa: BLE001
+            pass
+    return {"monitor": dash, "monitors": monitors, "logs": logs}
 
 
 def _inline_script(src: str) -> str:
@@ -1112,6 +1195,82 @@ def benchmark_report(set_id: str, _: bool = Depends(require_login)):
     if benchmark.get_set(set_id) is None:
         raise HTTPException(404, f"알 수 없는 벤치마크 세트: {set_id}")
     return benchmark.report(set_id)
+
+
+# ── 템플릿 (기획서 2.2 Templates) ────────────────────────────────────
+class TemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    desc: str = Field("", max_length=200)
+    settings: dict = {}
+    electrodes: list[str] = []
+    margin_v: Optional[float] = None
+    top_n: Optional[int] = None
+
+
+@app.get("/api/templates")
+def list_templates(_: bool = Depends(require_login)):
+    return {"templates": templates.list_templates()}
+
+
+@app.post("/api/templates")
+def create_template(req: TemplateRequest, _: bool = Depends(require_login)):
+    try:
+        tpl = templates.save(req.name, req.settings, req.desc, req.electrodes, req.margin_v, req.top_n)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"template": tpl, "templates": templates.list_templates()}
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: str, _: bool = Depends(require_login)):
+    try:
+        ok = templates.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not ok:
+        raise HTTPException(404, "템플릿을 찾을 수 없습니다.")
+    return {"templates": templates.list_templates()}
+
+
+# ── 설정 (엔진·자원 — 읽기 전용, 값 변경은 환경변수·관리자) ───────────────
+def _code_version() -> str:
+    """현재 코드의 커밋 — .git 을 직접 읽는다 (git 실행 없이)."""
+    root = Path(__file__).resolve().parent.parent
+    try:
+        head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref = root / ".git" / head[5:]
+            if ref.exists():
+                return ref.read_text(encoding="utf-8").strip()[:7] + " · " + head[5:].split("/")[-1]
+            packed = root / ".git" / "packed-refs"
+            if packed.exists():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + head[5:]):
+                        return line.split()[0][:7] + " · " + head[5:].split("/")[-1]
+            return head[5:].split("/")[-1]
+        return head[:7]
+    except OSError:
+        return "unknown"
+
+
+@app.get("/api/settings")
+def get_settings(_: bool = Depends(require_login)):
+    """설정 화면 — 계산 백엔드(GPU 스위치 상태)·자원 한도·코드 버전. 바꾸는 방법은 화면에 안내."""
+    import platform
+    import pyscf
+    return {
+        "backend": gpu.info(),
+        "workers": int(os.environ.get("RHOBENCH_WORKERS", "1")),
+        "limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS,
+                   "batch_parallel": int(os.environ.get("RHOBENCH_BATCH_PARALLEL", "1")),
+                   "max_batch": int(os.environ.get("RHOBENCH_MAX_BATCH", "500"))},
+        "engine": {"pyscf": pyscf.__version__, "python": platform.python_version(),
+                   "platform": platform.platform()},
+        "code": _code_version(),
+        "data_dir": str(store.DATA_DIR),
+        "env_file": "/etc/rhobench.env" if Path("/etc/rhobench.env").exists() else None,
+        "potential_conventions": ["Li/Li⁺ 1.44 V", "Li/Li⁺ 1.40 V", "SHE"],
+    }
 
 
 MANUAL_DOCX = Path(__file__).resolve().parent.parent / "docs" / "07_DFT-Workbench_사용설명서.docx"

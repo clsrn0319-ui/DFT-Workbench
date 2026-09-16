@@ -805,6 +805,51 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-monitor #rbv-monitor{display:block}
 #rb-real.mode-manual #rbv-manual{display:block}
 #rb-real.mode-bench #rbv-bench{display:block}
+#rb-real.mode-dash #rbv-dash{display:block}
+#rb-real.mode-tpl #rbv-tpl{display:block}
+#rb-real.mode-settings #rbv-settings{display:block}
+#rb-real.mode-tut #rbv-tut{display:block}
+/* ── 결과 워크스페이스 (기획서 2.1 C·D·E) ── */
+#rb-real .ws-work{display:grid;grid-template-columns:minmax(0,5fr) minmax(230px,2.2fr) minmax(280px,3fr);gap:14px;align-items:start}
+#rb-real .ws-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+#rb-real .ws-panel{border:1px solid var(--grid);border-radius:12px;background:var(--surface);overflow:hidden;min-width:0}
+#rb-real .ws-ph{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--grid);font-weight:700;font-size:13px}
+#rb-real .ws-ph .sp{margin-left:auto;display:flex;gap:6px;align-items:center;font-weight:400}
+#rb-real .ws-pb{padding:12px;display:flex;flex-direction:column;gap:10px}
+#rb-real .ws-tools{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--grid);align-items:center;flex-wrap:wrap}
+#rb-real .ws-tool{border:1px solid transparent;background:none;border-radius:7px;padding:4px 8px;font-size:11px;color:var(--text-2);display:flex;flex-direction:column;align-items:center;min-width:46px;cursor:pointer}
+#rb-real .ws-tool i{font-style:normal;font-size:14px}
+#rb-real .ws-tool.on,#rb-real .ws-tool:hover{background:color-mix(in srgb,var(--accent) 10%,transparent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);color:var(--accent)}
+#rb-real .ws-atom{position:relative;margin:8px 12px 0;border:1px solid var(--accent);border-radius:10px;padding:10px 12px;font-size:12px;background:color-mix(in srgb,var(--accent) 5%,var(--surface))}
+#rb-real .ws-atom h4{margin:0 0 6px;font-size:12.5px;color:var(--accent)}
+#rb-real .ws-atom table{width:100%;border-collapse:collapse}#rb-real .ws-atom td{padding:2px 0;color:var(--text-2)}#rb-real .ws-atom td:last-child{text-align:right;color:var(--text-1);font-family:ui-monospace,Consolas,monospace}
+#rb-real .ws-quick{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--grid);overflow-x:auto}
+#rb-real .ws-q{flex:0 0 auto;width:86px;border:1px solid var(--border);background:var(--surface);border-radius:9px;padding:5px;display:flex;flex-direction:column;align-items:center;gap:4px;color:var(--text-2);font-size:11.5px;cursor:pointer}
+#rb-real .ws-q.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);font-weight:700}
+#rb-real .ws-thumb{width:74px;height:48px;border-radius:6px;background:radial-gradient(ellipse at 50% 40%,#1a2733 0%,#0f1720 75%);position:relative;overflow:hidden}
+#rb-real .ws-kv{width:100%;border-collapse:collapse;font-size:12.5px}#rb-real .ws-kv th{text-align:left;color:var(--muted);font-weight:500;padding:3px 8px 3px 0;white-space:nowrap;vertical-align:top}#rb-real .ws-kv td{padding:3px 0}
+#rb-real .ws-done{display:flex;align-items:center;gap:10px;font-size:13px}#rb-real .ws-done .ok{width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok);display:grid;place-items:center;font-weight:800}
+#rb-real .ws-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}#rb-real .ws-steps li{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2)}#rb-real .ws-steps li i{width:17px;height:17px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:11px;border:1px solid var(--border);color:var(--muted);flex:none}#rb-real .ws-steps li.done i{background:color-mix(in srgb,var(--ok) 15%,transparent);border-color:var(--ok);color:var(--ok)}#rb-real .ws-steps li .t{margin-left:auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted)}
+#rb-real .ws-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#rb-real .ws-rc{border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-width:0;position:relative}
+#rb-real .ws-rc .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}#rb-real .ws-rc .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:2px}#rb-real .ws-rc .v .u{font-size:12px;font-weight:400;color:var(--text-2);margin-left:3px}#rb-real .ws-rc .s{font-size:11px;color:var(--muted);margin-top:3px}
+#rb-real .ws-rc.orb{display:grid;grid-template-columns:1fr 84px;gap:8px;align-items:center;cursor:pointer}#rb-real .ws-rc.orb:hover{border-color:var(--accent)}#rb-real .ws-rc.orb .ws-thumb{width:84px;height:62px;border-radius:8px}
+#rb-real .ws-rc.homo{border-left:3px solid #e0663e}#rb-real .ws-rc.lumo{border-left:3px solid #2a78d6}
+#rb-real .ws-conv{display:grid;grid-template-columns:1fr 120px;gap:8px;align-items:start}#rb-real .ws-convdone{border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);background:color-mix(in srgb,var(--ok) 8%,transparent);border-radius:9px;padding:8px;font-size:11.5px;color:var(--text-2)}#rb-real .ws-convdone b{display:block;color:var(--ok);font-size:12.5px;margin-bottom:4px}
+#rb-real .ws-qc{display:flex;flex-direction:column;gap:4px;font-size:12.5px;border-top:1px solid var(--grid);padding-top:8px}#rb-real .ws-qc div{display:flex;gap:8px;align-items:center;color:var(--text-2)}#rb-real .ws-qc i{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}#rb-real .ws-qc i.w{background:var(--pin)}#rb-real .ws-qc i.b{background:var(--danger)}#rb-real .ws-qc i.g{background:var(--muted)}
+#rb-real .ws-drawer{border:1px solid var(--grid);border-radius:10px;overflow:hidden;margin-top:14px}#rb-real .ws-drawer .dh{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--grid);background:var(--grid);flex-wrap:wrap}#rb-real .ws-drawer .dh button{border:none;background:none;padding:5px 10px;color:var(--text-2);font-size:12px;border-radius:7px;cursor:pointer}#rb-real .ws-drawer .dh button.on{background:var(--surface);color:var(--accent);font-weight:700}#rb-real .ws-drawer pre{margin:0;padding:10px 14px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;line-height:1.5;color:var(--text-2);max-height:220px;overflow:auto;white-space:pre-wrap}
+#rb-real .rtabs{display:flex;gap:2px;border-bottom:1px solid var(--grid);overflow-x:auto}#rb-real .rtabs button{border:none;background:none;padding:6px 10px;color:var(--text-2);font-size:12px;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;cursor:pointer}#rb-real .rtabs button.on{color:var(--accent);border-color:var(--accent);font-weight:700}
+@media (max-width:1200px){#rb-real .ws-work{grid-template-columns:1fr 1fr}#rb-real .ws-work>.ws-panel:first-child{grid-column:1/-1}}
+@media (max-width:820px){#rb-real .ws-work{grid-template-columns:1fr}}
+/* ── 계산 통합 토글 · 템플릿 · 설정 · 튜토리얼 · 토스트 ── */
+#rb-real .calc-modebar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+#rb-real .tpl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+#rb-real .tpl-card{border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--surface)}#rb-real .tpl-card.builtin{border-color:color-mix(in srgb,var(--accent) 35%,transparent)}#rb-real .tpl-name{font-weight:700;margin-bottom:4px}
+#rb-real .set-switch{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap}#rb-real .set-switch .tg{width:44px;height:24px;border-radius:99px;background:var(--grid);position:relative;border:1px solid var(--border);display:inline-block}#rb-real .set-switch .tg i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--surface);border:1px solid var(--border)}#rb-real .set-switch .tg.on{background:color-mix(in srgb,var(--accent) 30%,transparent);border-color:var(--accent)}#rb-real .set-switch .tg.on i{left:22px;background:var(--accent);border-color:var(--accent)}
+#rb-real pre.set-code{background:var(--grid);border-radius:8px;padding:10px 12px;font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-x:auto;margin:6px 0}
+#rb-real ol.tut{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}#rb-real ol.tut li{display:flex;gap:12px;align-items:flex-start}#rb-real ol.tut li i{width:26px;height:26px;border-radius:50%;border:1px solid var(--border);display:grid;place-items:center;font-style:normal;font-weight:700;color:var(--text-2);flex:none}#rb-real ol.tut li.done i{background:color-mix(in srgb,var(--ok) 15%,transparent);border-color:var(--ok);color:var(--ok)}
+#rb-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--text-1);color:var(--page);padding:8px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:all .2s;z-index:950}#rb-toast.on{opacity:1;transform:translateX(-50%)}
+
 .mon-log{margin:6px 0 0;padding:10px 12px;background:var(--grid);border-radius:8px;font-family:ui-monospace,Cascadia Code,Consolas,monospace;font-size:11.5px;line-height:1.45;white-space:pre;overflow:auto;max-height:520px;color:var(--text-2)}
 .mon-log .ln{display:inline-block;width:62px;color:var(--muted);text-align:right;margin-right:10px;user-select:none}
 .mon-log .l-err{color:var(--danger);font-weight:700}.mon-log .l-warn{color:var(--pin)}.mon-log .l-ok{color:var(--ok,#0ca30c)}
@@ -1618,11 +1663,19 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
 <!-- ───────── 벤치마크 (문헌 참조값 비교 — web/bench.js 가 그린다) ───────── -->
 <div id="rbv-bench" class="rbv"></div>
+
+<!-- ───────── 대시보드 · 템플릿 · 설정 · 튜토리얼 (web/pages.js 가 그린다) ───────── -->
+<div id="rbv-dash" class="rbv"></div>
+<div id="rbv-tpl" class="rbv"></div>
+<div id="rbv-settings" class="rbv"></div>
+<div id="rbv-tut" class="rbv"></div>
 </section>
 <script src="/static/app.js"></script>
 <script src="/static/manual_content.js"></script>
 <script src="/static/help.js"></script>
 <script src="/static/bench.js"></script>
+<script src="/static/workspace.js"></script>
+<script src="/static/pages.js"></script>
 <script>
 (function () {
   var real = document.getElementById("rb-real");
@@ -1631,14 +1684,17 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
   // 사이드바 구성: 모의 데이터 열람 페이지는 제외, 관리·참고 페이지는 프록시로 유지
   var NAV = [
+    {group: "시작", items: [
+      {label: "대시보드", mode: "dash"}]},
     {group: "분자 데이터", items: [
       {label: "화학물질 조회", mode: "lookup"},
       {label: "물질 보관함", proxy: "물질 보관함"},
       {label: "용매 라이브러리", proxy: "용매 라이브러리"}]},
     {group: "계산", items: [
-      {label: "DFT 계산", mode: "calc"},
-      {label: "배치 스크리닝", mode: "screen"},
-      {label: "계산 모니터", mode: "monitor"}]},
+      // «계산» 하나로 통합 — 화면 위 토글로 분자 하나(calc) / 배치 스크리닝(screen) 전환
+      {label: "계산", mode: "calc"},
+      {label: "계산 모니터", mode: "monitor"},
+      {label: "템플릿", mode: "tpl"}]},
     {group: "결과", items: [
       {label: "DFT 계산 결과", mode: "results"},
       {label: "물질 비교", mode: "compare"},
@@ -1648,7 +1704,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     // 되살리면 다시 나타난다.
     {group: "참고", items: [
       {label: "사용 설명서", mode: "manual"},
+      {label: "튜토리얼", mode: "tut"},
       {label: "물성 사전", proxy: "물성 사전"},
+      {label: "설정", mode: "settings"},
       {label: "시각화 · 계정", proxy: "시각화 · 계정"}]}
   ];
 
@@ -1658,6 +1716,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
   }
   function setActive(label) {
     if (!myNav) return;
+    if (label === "DFT 계산" || label === "배치 스크리닝") label = "계산";   // 통합 메뉴
     myNav.querySelectorAll(".nav-item").forEach(function (b) {
       b.classList.toggle("active", b.textContent.trim() === label);
     });
@@ -1669,7 +1728,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     real.scrollTop = 0;
     setActive(label);
     real.classList.remove("mode-lookup", "mode-compare", "mode-binder",
-      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen", "mode-monitor", "mode-manual", "mode-bench");
+      "mode-binderrank", "mode-chain", "mode-mech", "mode-screen", "mode-monitor", "mode-manual", "mode-bench",
+      "mode-dash", "mode-tpl", "mode-settings", "mode-tut");
     real.classList.add("mode-" + mode);
     if (mode === "calc" && window.rbReloadMaterials) {
       try { window.rbReloadMaterials(); } catch (e) {}
@@ -1684,6 +1744,10 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     if (mode === "monitor" && window.rbRenderMonitor) try { window.rbRenderMonitor(); } catch (e) {}
     if (mode === "manual" && window.rbRenderManual) try { window.rbRenderManual(); } catch (e) {}
     if (mode === "bench" && window.rbRenderBench) try { window.rbRenderBench(); } catch (e) {}
+    if (mode === "dash" && window.rbRenderDash) try { window.rbRenderDash(); } catch (e) {}
+    if (mode === "tpl" && window.rbRenderTemplates) try { window.rbRenderTemplates(); } catch (e) {}
+    if (mode === "settings" && window.rbRenderSettings) try { window.rbRenderSettings(); } catch (e) {}
+    if (mode === "tut" && window.rbRenderTutorial) try { window.rbRenderTutorial(); } catch (e) {}
   }
   function closeReal() { real.classList.remove("open"); }
   // 사용 설명서(help.js)의 «바로 가기»·배너가 다른 페이지를 열 때 쓴다
@@ -1795,7 +1859,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       clearInterval(bootTimer);
     } else {
       opened = true;
-      openReal("calc", "DFT 계산");
+      openReal("dash", "대시보드");   // 첫 화면 = 대시보드 (기획서 2.2)
       clearInterval(bootTimer);
     }
   }, 300);
