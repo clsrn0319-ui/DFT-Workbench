@@ -323,6 +323,27 @@ RHOBENCH_GPU=1 ./scripts/start.sh --background     # GPU 켜기 (CUDA 12 + gpu4p
 - 실제 GPU 검증(값 일치·속도)은 GPU 서버가 생기면 «벤치마크» 세트로 한다 — `tests/test_gpu.py` 는 스위치·폴백·
   결과 되돌리기 논리만 검사한다.
 
+## 배포 정책 — 관리자 한 명이 고치고, 모두는 main 을 받는다
+
+프로그램 수정은 **관리자 계정 하나**만 한다. 다른 사용자는 GitHub 의 배포 브랜치 `main` 을 받아 계산·결과 공유를
+하되 코드를 올릴 수 없고(협업자 미등록), 자기 PC 에서 손댄 것은 업데이트 때 배포 버전으로 되돌아간다.
+
+- **배포 브랜치**: `main`. 관리자는 작업 브랜치에서 개발·테스트한 뒤 `main` 으로 fast-forward 해 push 한다
+  (`git push origin HEAD:main`). `RHOBENCH_RELEASE_BRANCH` 로 다른 브랜치를 지정할 수 있다.
+- **사용자 PC 업데이트**: `./scripts/update.sh` — `origin/main` 을 받아 `git reset --hard` 로 맞춘다. 로컬 수정·
+  로컬 커밋·다른 브랜치는 목록을 보여 준 뒤 되돌린다(`--keep-local` 이면 되돌리지 않고 중단). 결과·설정(`data/`)은
+  건드리지 않는다. 계산이 끝날 때까지 기다렸다가 재시작하고, 새 서버가 응답하지 않으면 롤백한다.
+- **비공개 저장소**: 사용자 PC 는 처음 한 번 읽기 전용 토큰으로 로그인해 둔다.
+
+```bash
+git config --global credential.helper store      # 한 번 입력한 토큰을 기억
+git clone https://github.com/clsrn0319-ui/DFT-Workbench   # Username: GitHub 아이디 · Password: 읽기 전용 토큰
+```
+
+관리자는 GitHub → Settings → Developer settings → **Fine-grained personal access tokens** 에서 저장소를
+`DFT-Workbench` 하나로, 권한을 **Contents: Read-only** 로 한 토큰을 만들어 사용자에게 전달한다(만료일 설정 권장).
+`main` 에는 Branch protection(관리자 외 push 금지, force-push 금지)을 켜 둔다.
+
 ## 클라우드 서버 운영 (네이버 클라우드 등)
 
 같은 프로그램을 리눅스 서버에 **systemd 서비스**로 올려 어디서나 접속하고, GitHub 의 새

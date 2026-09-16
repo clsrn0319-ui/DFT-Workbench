@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# 프로그램 업데이트 — GitHub 의 새 커밋을 받아 계산이 없는 때를 골라 서버를 재시작한다.
+# 프로그램 업데이트 — GitHub 의 배포 브랜치(main)를 받아 계산이 없는 때를 골라 서버를 재시작한다.
 # 네이버 클라우드(systemd)와 WSL(수동 실행) 양쪽에서 같은 명령으로 쓴다.
 #
 #   ./scripts/update.sh                # 새 커밋 확인 → 받기 → 계산이 끝날 때까지 대기 → 재시작
-#   ./scripts/update.sh --now          # 기다리지 않고 바로 재시작 (진행 중 작업은 실패 처리·캠페인은 자동 재시도)
+#   ./scripts/update.sh --now          # 기다리지 않고 바로 재시작 (진행 중 작업은 체크포인트에서 재개)
 #   ./scripts/update.sh --check        # 무엇이 바뀌는지만 보고 끝
 #   ./scripts/update.sh --test         # 재시작 전에 가벼운 테스트(약 15초)를 돌린다
-#   ./scripts/update.sh --ref main     # 특정 브랜치/커밋으로
+#   ./scripts/update.sh --ref <브랜치>  # 배포 브랜치 대신 특정 브랜치/커밋으로 (관리자 시험용)
 #   ./scripts/update.sh --no-restart   # 코드만 받고 재시작은 하지 않는다
+#   ./scripts/update.sh --keep-local   # 이 PC 의 로컬 수정이 있으면 되돌리지 않고 중단
+#
+# 관리자 한 명만 프로그램을 고친다는 원칙:
+#   - 프로그램은 GitHub 의 배포 브랜치(main, RHOBENCH_RELEASE_BRANCH 로 변경 가능)에서만 받는다.
+#   - 이 PC 에서 코드를 손댔거나 다른 브랜치로 옮겨 놓았어도, 업데이트 때 관리자가 배포한 버전으로
+#     되돌린다(git reset --hard). 되돌린 파일 목록은 화면에 남긴다. 결과·설정(data/)은 건드리지 않는다.
+#   - 저장소가 비공개면 처음 한 번 읽기 전용 토큰으로 로그인해 둔다 (docs/08 참고).
 #
 # 재시작 뒤 60초 안에 HTTP 응답이 없으면 이전 커밋으로 되돌리고 다시 띄운다(롤백).
 
@@ -16,20 +23,19 @@ cd "$(dirname "$0")/.."
 DIR=$(pwd)
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YEL=$'\033[33m'; OFF=$'\033[0m'
 die() { echo; echo "${RED}실패: $1${OFF}" >&2; exit 1; }
-PORT="${RHOBENCH_PORT:-8000}"
-[ -f /etc/rhobench.env ] && PORT=$(grep -E '^RHOBENCH_PORT=' /etc/rhobench.env | cut -d= -f2 | tr -d ' ' || true)
-PORT="${PORT:-8000}"
-DATA_DIR="${RHOBENCH_DATA_DIR:-$DIR/data}"
-[ -f /etc/rhobench.env ] && grep -qE '^RHOBENCH_DATA_DIR=' /etc/rhobench.env \
-  && DATA_DIR=$(grep -E '^RHOBENCH_DATA_DIR=' /etc/rhobench.env | cut -d= -f2 | tr -d ' ')
+envval() { [ -f /etc/rhobench.env ] && grep -E "^$1=" /etc/rhobench.env | tail -1 | cut -d= -f2- | tr -d ' ' || true; }
+PORT="${RHOBENCH_PORT:-$(envval RHOBENCH_PORT)}"; PORT="${PORT:-8000}"
+DATA_DIR="${RHOBENCH_DATA_DIR:-$(envval RHOBENCH_DATA_DIR)}"; DATA_DIR="${DATA_DIR:-$DIR/data}"
+RELEASE_BRANCH="${RHOBENCH_RELEASE_BRANCH:-$(envval RHOBENCH_RELEASE_BRANCH)}"; RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
 
-WAIT=1; CHECK=0; TEST=0; RESTART=1; REF=""
+WAIT=1; CHECK=0; TEST=0; RESTART=1; REF=""; KEEP_LOCAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --now) WAIT=0 ;;
     --check) CHECK=1 ;;
     --test) TEST=1 ;;
     --no-restart) RESTART=0 ;;
+    --keep-local) KEEP_LOCAL=1 ;;
     --ref) REF="$2"; shift ;;
     *) die "알 수 없는 옵션: $1" ;;
   esac
@@ -74,46 +80,64 @@ restart_server() {
     mkdir -p "$DATA_DIR"
     setsid nohup .venv/bin/python -m uvicorn server.main:app --host 0.0.0.0 --port "$PORT" \
       >> "$DATA_DIR/server.log" 2>&1 < /dev/null &
+    echo $! > "$DATA_DIR/server.pid"
   fi
   for i in $(seq 1 60); do sleep 1; c=$(health); [ "$c" = "200" ] && return 0; done
   return 1
 }
 
 # ── 1. 새 커밋 확인 ────────────────────────────────────────────────
-echo "${BOLD}[1/5] 새 커밋 확인${OFF}"
-git fetch --quiet origin || die "git fetch 실패 — 인터넷·GitHub 접근 확인"
+echo "${BOLD}[1/5] 새 커밋 확인${OFF}  ${DIM}(배포 브랜치: $RELEASE_BRANCH)${OFF}"
+git fetch --quiet origin || die "git fetch 실패 — 인터넷·GitHub 접근(비공개 저장소면 읽기 전용 토큰) 확인"
 CUR=$(git rev-parse HEAD)
-TARGET="${REF:-@{u}}"
-[ -n "$REF" ] && { git rev-parse --verify --quiet "$REF" >/dev/null || git rev-parse --verify --quiet "origin/$REF" >/dev/null || die "없는 브랜치/커밋: $REF"; }
-[ -n "$REF" ] && ! git rev-parse --verify --quiet "$REF" >/dev/null && TARGET="origin/$REF"
-NEW=$(git rev-parse "$TARGET" 2>/dev/null) || die "추적 브랜치가 없습니다 — --ref <브랜치> 로 지정"
-if [ "$CUR" = "$NEW" ]; then
+if [ -n "$REF" ]; then
+  if git rev-parse --verify --quiet "origin/$REF" >/dev/null; then TARGET="origin/$REF"
+  elif git rev-parse --verify --quiet "$REF" >/dev/null; then TARGET="$REF"
+  else die "없는 브랜치/커밋: $REF"; fi
+  BRANCH_TO_TRACK="$REF"
+else
+  git rev-parse --verify --quiet "origin/$RELEASE_BRANCH" >/dev/null \
+    || die "GitHub 에 배포 브랜치 '$RELEASE_BRANCH' 가 없습니다 — RHOBENCH_RELEASE_BRANCH 확인"
+  TARGET="origin/$RELEASE_BRANCH"
+  BRANCH_TO_TRACK="$RELEASE_BRANCH"
+fi
+NEW=$(git rev-parse "$TARGET")
+
+# 이 PC 에서 손댄 흔적 — 관리자가 배포한 버전으로 되돌릴 대상
+LOCAL_MODS=$(git status --porcelain --untracked-files=no)
+LOCAL_COMMITS=$(git rev-list --count "$TARGET..HEAD" 2>/dev/null || echo 0)
+CUR_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+
+if [ "$CUR" = "$NEW" ] && [ -z "$LOCAL_MODS" ]; then
   echo "  이미 최신입니다: $(git log --format='%h %s' -1)"
   [ "$CHECK" = "1" ] && exit 0
   [ "$RESTART" = "1" ] || exit 0
   echo "  ${DIM}(코드 변경 없음 — 재시작만 진행)${OFF}"
 else
-  echo "  현재  $(git log --format='%h %s' -1 "$CUR")"
-  echo "  대상  $(git log --format='%h %s' -1 "$NEW")"
-  echo "  ${DIM}바뀌는 커밋:${OFF}"
-  git log --format='    %h %s' "$CUR..$NEW" | head -20
-  git diff --stat "$CUR" "$NEW" | tail -1 | sed 's/^/  /'
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "  ${YEL}주의: 로컬 변경이 있습니다 (git status). 충돌하면 pull 이 멈춥니다.${OFF}"
+  echo "  현재  $(git log --format='%h %s' -1 "$CUR")$( [ "$CUR_BRANCH" != "$BRANCH_TO_TRACK" ] && echo "  ${DIM}[$CUR_BRANCH]${OFF}")"
+  echo "  대상  $(git log --format='%h %s' -1 "$NEW")  ${DIM}[$BRANCH_TO_TRACK]${OFF}"
+  if [ "$CUR" != "$NEW" ]; then
+    echo "  ${DIM}바뀌는 커밋:${OFF}"
+    git log --format='    %h %s' "$CUR..$NEW" | head -20
+    git diff --stat "$CUR" "$NEW" | tail -1 | sed 's/^/  /'
+  fi
+  if [ -n "$LOCAL_MODS" ] || [ "${LOCAL_COMMITS:-0}" != "0" ]; then
+    echo "  ${YEL}이 PC 에서 수정된 흔적이 있습니다 — 프로그램 수정은 관리자만 하므로 배포 버전으로 되돌립니다:${OFF}"
+    [ -n "$LOCAL_MODS" ] && echo "$LOCAL_MODS" | sed 's/^/    /'
+    [ "${LOCAL_COMMITS:-0}" != "0" ] && echo "    (로컬 커밋 ${LOCAL_COMMITS}개)"
+    [ "$KEEP_LOCAL" = "1" ] && die "--keep-local: 로컬 수정을 유지하려고 중단했습니다. 정리 후 다시 실행하세요"
   fi
 fi
 [ "$CHECK" = "1" ] && exit 0
 
-# ── 2. 받기 ────────────────────────────────────────────────────────
+# ── 2. 받기 (배포 버전으로 맞춤) ───────────────────────────────────
 echo "${BOLD}[2/5] 코드 받기${OFF}"
-if [ "$CUR" != "$NEW" ]; then
-  if [ -n "$REF" ]; then
-    git checkout --quiet "$REF" 2>/dev/null || git checkout --quiet -b "$REF" "origin/$REF" || die "checkout 실패"
-    git pull --ff-only --quiet origin "$REF" 2>/dev/null || true
-  else
-    git pull --ff-only --quiet || die "pull 실패 — 로컬 변경을 정리(git stash)한 뒤 다시"
-  fi
-  echo "  $(git log --format='%h %s' -1)"
+if [ "$CUR" != "$NEW" ] || [ -n "$LOCAL_MODS" ]; then
+  git checkout --quiet -B "$BRANCH_TO_TRACK" "$TARGET" 2>/dev/null \
+    || git reset --hard --quiet "$TARGET" || die "배포 버전으로 맞추지 못했습니다 (git reset)"
+  git reset --hard --quiet "$TARGET" || die "git reset 실패"
+  git branch --quiet --set-upstream-to="$TARGET" "$BRANCH_TO_TRACK" 2>/dev/null || true
+  echo "  $(git log --format='%h %s' -1)  ${DIM}[$(git rev-parse --abbrev-ref HEAD)]${OFF}"
   if git diff --name-only "$CUR" HEAD | grep -q '^requirements.txt$'; then
     echo "  requirements.txt 가 바뀌어 패키지를 다시 설치합니다 (수 분)"
     .venv/bin/python -m pip install -q -r requirements.txt || die "pip install 실패"
@@ -146,7 +170,7 @@ if [ "$WAIT" = "1" ]; then
   done
   echo "  활성 작업 없음 — 재시작합니다"
 else
-  st=$(active_jobs); echo "  ${YEL}--now: 활성 작업 ${st%% *}개가 있어도 바로 재시작합니다${OFF}"
+  st=$(active_jobs); echo "  ${YEL}--now: 활성 작업 ${st%% *}개가 있어도 바로 재시작합니다 (체크포인트에서 재개)${OFF}"
 fi
 
 # ── 5. 재시작 + 확인 (실패 시 롤백) ──────────────────────────────

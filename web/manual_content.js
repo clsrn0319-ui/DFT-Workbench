@@ -5,7 +5,7 @@
 // 블록 종류: p · h2(id 필수, "s<장>-<순번>") · h3 · ul · ol · tip · warn · code · table(headers/rows/widths) · qa(q/a)
 window.RB_MANUAL = {
  "title": "DFT-Workbench 사용 설명서",
- "version": "3.4",
+ "version": "3.5",
  "date": "2026-09-16",
  "subtitle": "설치부터 계산·판정·공유까지, 처음 쓰는 사람을 위한 안내",
  "tagline": "배터리 바인더·전해액 후보 분자를 DFT 계산으로 걸러내는 프로그램",
@@ -183,6 +183,10 @@ window.RB_MANUAL = {
     {
      "t": "p",
      "text": "`setup.sh`는 가상환경을 만들고 PySCF·RDKit 등을 설치한 뒤 설치 확인까지 합니다. 5~10분 걸립니다. 중간에 실패하면 원인을 알려 주며, 다시 실행하면 끝난 단계는 건너뜁니다."
+    },
+    {
+     "t": "tip",
+     "text": "저장소가 비공개이면 `git clone` 때 GitHub 아이디와 관리자가 준 **읽기 전용 토큰**을 입력합니다. 그 전에 `git config --global credential.helper store`를 한 번 실행해 두면 다음부터 묻지 않습니다."
     },
     {
      "t": "tip",
@@ -1949,7 +1953,8 @@ window.RB_MANUAL = {
      "t": "ul",
      "items": [
       "`./scripts/start.sh --stop`(또는 `RhoBench-stop.bat`)으로 끕니다. 계산 중이던 작업은 다음 실행 때 «재개 대기»로 자동 재시작되며, 끝난 단계는 `data/checkpoints/`의 체크포인트에서 건너뜁니다. 설정이 바뀌면 처음부터 계산합니다.",
-      "코드를 업데이트한 뒤에는 재시작이 필요합니다. `./scripts/update.sh`는 새 코드를 받고 계산이 끝날 때까지 기다렸다가 재시작하며, 응답이 없으면 이전 버전으로 되돌립니다."
+      "코드를 업데이트한 뒤에는 재시작이 필요합니다. `./scripts/update.sh`는 새 코드를 받고 계산이 끝날 때까지 기다렸다가 재시작하며, 응답이 없으면 이전 버전으로 되돌립니다.",
+      "프로그램 수정은 **관리자 한 명**만 합니다. 관리자는 작업 브랜치에서 테스트한 뒤 GitHub의 배포 브랜치 `main`에 올리고(`git push origin HEAD:main`), 각 PC에서는 `./scripts/update.sh`로 받습니다. 사용자 PC에서 코드를 손댔더라도 업데이트 때 목록을 보여 준 뒤 배포 버전으로 되돌리며, 결과·설정(`data/`)은 그대로 둡니다."
      ]
     },
     {
