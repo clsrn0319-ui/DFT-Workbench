@@ -69,8 +69,10 @@
     { id: "mon-jobs", sel: "#rbv-monitor .card-head h2", text: "작업", section: "s10-1", pos: "after" },
     { id: "mon-detail", sel: "#mon-detail-title", section: "s10-2", pos: "after" },
     { id: "mon-raw", sel: "#rbv-monitor h3", text: "PySCF 원본 로그", section: "s10-2", pos: "after" },
+    // 벤치마크
+    { id: "bench-title", sel: "#rbv-bench > h1", section: "s7-9", pos: "after" },
   ];
-  var MODE_CHAPTER = { calc: "ch6", results: "ch7", lookup: "ch5", compare: "ch8", screen: "ch9", monitor: "ch10", manual: "ch4" };
+  var MODE_CHAPTER = { calc: "ch6", results: "ch7", lookup: "ch5", compare: "ch8", screen: "ch9", monitor: "ch10", manual: "ch4", bench: "ch7" };
   var HOST_SEL = "h1, h2, h3, label, summary, legend, .field-label, .option-title";
 
   /* ---------- 설명서 색인 ---------- */

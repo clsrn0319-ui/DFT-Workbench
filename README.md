@@ -285,6 +285,25 @@ cd scripts/manual && npm install && node build_docx.js   # → docs/07_DFT-Workb
 `tests/test_manual.py`가 원본의 장·절 id 규칙, `?` 버튼이 가리키는 절의 존재, Word 파일 버전 일치,
 공유용 HTML 스냅샷에 설명서가 들어가는지를 검사한다.
 
+## 벤치마크 (문헌 참조값 재현)
+
+기획서 v2.1 «벤치마크/Calibration»의 1단계. 논문이 공개한 **같은 좌표·같은 계산식**으로 이 프로그램이
+참조값을 재현하는지 «벤치마크» 메뉴에서 확인한다. 세트는 `server/benchmarks/<id>.json` 한 파일이다
+(출처·프로토콜·항목별 좌표·참조값·재현 기록·판정 허용값).
+
+| 세트 | 내용 | 결과 (2026-09-16 재현) |
+|---|---|---|
+| `kim2025_binders` | Kim et al., *Nat. Commun.* 16, 11174 (2025) Fig. 2c — PTFE·PVDF·Parafilm 3 반복단위, Supplementary Data의 VASP(PBE-D2) 좌표 고정, B3LYP5/6-311+G** 단일점 HOMO·LUMO | PTFE·PVDF 0.01 eV 이내, Parafilm 0.08 eV 이내 — PASS |
+
+- «실행»은 항목마다 업로드-3D-구조 경로의 작업을 만든다(`benchmark.submit_set`): 좌표 고정, conformer 탐색·
+  최적화·열보정 없음, 프로토콜의 범함수·기저로 단일점. 작업에는 `benchmark={set, entry}` 꼬리표가 붙는다.
+- 보고서(`benchmark.report`)는 항목별 최신(끝난 것 우선) 작업의 HOMO·LUMO·gap을 참조값과 비교해
+  Δ·판정(|Δ| ≤ 0.10 eV PASS · ≤ 0.30 REVIEW · 그 밖 FAIL)·MAE·전체 판정을 낸다. API: `GET /api/benchmarks`,
+  `POST /api/benchmarks/{set}/run`, `GET /api/benchmarks/{set}/report`.
+- GAMESS의 B3LYP는 VWN5 상관함수라 범함수 `B3LYP5 (VWN5)`와 기저 `6-311+g**`를 프리셋에 추가했다.
+  프로그램 기본 흐름(conformer 탐색)은 에너지가 더 낮은 꼬인 사슬을 고르므로 논문의 평면 모델보다 PTFE·PVDF
+  갭이 0.8~1.0 eV 넓게 나온다 — 절대값 비교는 같은 구조로 해야 한다.
+
 ## 클라우드 서버 운영 (네이버 클라우드 등)
 
 같은 프로그램을 리눅스 서버에 **systemd 서비스**로 올려 어디서나 접속하고, GitHub 의 새

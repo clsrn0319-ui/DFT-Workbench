@@ -480,6 +480,7 @@ function jobRowHtml(job) {
       ${job.validation ? `<div class="small"><span class="badge ${MON_GRADE_BADGE[job.validation.grade] || "queued"}">검증 ${esc(job.validation.grade)}</span> <span class="muted">${esc(job.validation.summary || "")}</span></div>` : ""}
       ${job.checkpoint?.done?.length && ["QUEUED", "RUNNING", "FAILED"].includes(job.status)
         ? `<div class="small"><span class="badge review" style="border:1px solid currentColor" title="서버가 꺼져도 끝난 단계는 다시 계산하지 않습니다">체크포인트 ${job.checkpoint.done.length}단계</span> <span class="muted">${esc((job.checkpoint.labels || job.checkpoint.done).join(" · "))}${job.interrupted ? " · 재개 대기" : ""}</span></div>` : ""}
+      ${job.benchmark ? `<div class="small"><span class="chip soft" title="문헌 참조값과 비교하는 벤치마크 작업 — «벤치마크» 페이지에서 판정을 봅니다">벤치마크 · ${esc(job.benchmark.set)} · ${esc(job.benchmark.entry)}</span></div>` : ""}
       ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
       <details><summary class="small muted">로그 (${job.logs.length})</summary>
         <ul class="log-list mono">${job.logs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
@@ -826,6 +827,13 @@ function fillFilter(id, values, allLabel) {
   for (const v of values) sel.add(new Option(v.length > 42 ? v.slice(0, 40) + "…" : v, v));
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
+
+// 다른 페이지(벤치마크 등)에서 특정 작업의 결과 상세를 바로 연다
+window.rbShowResultJob = function (jobId) {
+  if (window.rbOpenResults) window.rbOpenResults();
+  const job = JOBS_CACHE.find(x => x.id === jobId);
+  if (job) { SELECTED_RESULT = job.id; showResult(job); window.rbRenderResults(); }
+};
 
 window.rbRenderResults = function () {
   const jobs = publishedJobs();

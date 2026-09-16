@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
 from . import lookup as lookup_mod
-from . import checkpoint, monitor
+from . import benchmark, checkpoint, monitor
 from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
@@ -1067,12 +1067,51 @@ def _snapshot_html(jobs: list[dict]) -> str:
     return page.replace(marker, shim + "\n" + _inline_script(app_js))
 
 
-SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js")
+SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js")
 
 
 def _inline_script(src: str) -> str:
     """스크립트 본문을 <script> 로 감싼다 — 안의 </script> 는 HTML 파서가 끊지 않도록 이스케이프."""
     return "<script>\n" + src.replace("</script", "<\\/script") + "\n</script>"
+
+
+# ── 벤치마크 세트 (문헌 참조값 비교) ──────────────────────────────────
+@app.get("/api/benchmarks")
+def list_benchmarks(_: bool = Depends(require_login)):
+    """벤치마크 세트 목록과 항목별 보고서(참조값·최신 계산값·차이·판정)."""
+    return {"sets": [{**s_, "report": benchmark.report(s_["id"])} for s_ in benchmark.list_sets()]}
+
+
+class BenchmarkRunRequest(BaseModel):
+    entries: list[str] = []   # 비우면 세트 전체
+
+
+@app.post("/api/benchmarks/{set_id}/run")
+def run_benchmark(set_id: str, req: BenchmarkRunRequest, _: bool = Depends(require_login)):
+    """세트의 항목마다 좌표 고정 단일점 작업을 만들어 큐에 넣는다."""
+    doc = benchmark.get_set(set_id)
+    if doc is None:
+        raise HTTPException(404, f"알 수 없는 벤치마크 세트: {set_id}")
+    wanted = [e for e in doc["entries"] if not req.entries or e["id"] in req.entries]
+    if not wanted:
+        raise HTTPException(400, "실행할 항목이 없습니다.")
+    n_active = store.count_active()
+    if n_active + len(wanted) > MAX_ACTIVE_JOBS:
+        raise HTTPException(
+            400, f"서버에서 동시에 실행 가능한 작업은 {MAX_ACTIVE_JOBS}개입니다 "
+                 f"(현재 {n_active}개 진행 중, 요청 {len(wanted)}개). 완료를 기다리거나 항목을 나눠 실행하세요.")
+    try:
+        jobs = benchmark.submit_set(set_id, [e["id"] for e in wanted])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"jobs": jobs, "report": benchmark.report(set_id)}
+
+
+@app.get("/api/benchmarks/{set_id}/report")
+def benchmark_report(set_id: str, _: bool = Depends(require_login)):
+    if benchmark.get_set(set_id) is None:
+        raise HTTPException(404, f"알 수 없는 벤치마크 세트: {set_id}")
+    return benchmark.report(set_id)
 
 
 MANUAL_DOCX = Path(__file__).resolve().parent.parent / "docs" / "07_DFT-Workbench_사용설명서.docx"
