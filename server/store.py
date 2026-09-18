@@ -122,10 +122,40 @@ def raw_log_path(job_id: str):
 
 
 def job_files(job_id: str) -> list:
-    """작업에 딸린 파일 전부 — 원본 로그·구조화 이벤트·최적화 궤적."""
+    """작업에 딸린 파일 전부 — 원본 로그·구조화 이벤트·최적화 궤적·등가면 격자."""
     s = safe_id(job_id)
     return [LOGS_DIR / f"{s}.log", LOGS_DIR / f"{s}.events.jsonl",
-            LOGS_DIR / f"{s}.trajectory.xyz"]
+            LOGS_DIR / f"{s}.trajectory.xyz", grid_path(job_id)]
+
+
+def grid_path(job_id: str):
+    """궤도·전자밀도 격자(float16 base64) 파일 — 결과당 수백 KB 라 jobs.json 밖에 둔다."""
+    return DATA_DIR / "grids" / f"{safe_id(job_id)}.json"
+
+
+def save_grids(job_id: str, grids: dict) -> None:
+    path = grid_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(grids, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_grids(job_id: str):
+    path = grid_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def delete_grids(job_id: str) -> None:
+    try:
+        grid_path(job_id).unlink()
+    except OSError:
+        pass
 
 
 def delete_job(job_id: str) -> bool:

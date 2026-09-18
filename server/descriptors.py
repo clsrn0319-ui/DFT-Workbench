@@ -3,6 +3,8 @@
 모두 PySCF 실계산이며, 근사 수준은 각 함수 docstring과 결과 노트에 명시한다.
 """
 
+import base64
+
 import numpy as np
 from pyscf import gto
 
@@ -115,7 +117,77 @@ def tddft_lambda_max(mf, nstates=8):
         "uvvis_lambda_max_nm": round(1239.841984 / ev, 1),
         "uvvis_osc_strength": round(float(f[bright]), 4),
         "uvvis_excitation_ev": round(ev, 3),
+        "uvvis_states": tddft_states(td, e, f),
     }
+
+
+def tddft_states(td, e, f):
+    """여기상태 목록 — 오비탈 비교 화면 «전이 분석» 표용.
+
+    각 상태의 ΔE(eV)·파장(nm)·진동자 세기와 주 기여 궤도쌍(HOMO−i → LUMO+a, 가중치 %)을 남긴다.
+    가중치는 X 진폭 제곱 기준(닫힌 껍질: Σ|X|² = ½ 정규화 → ×2).
+    """
+    out = []
+    try:
+        occ = np.asarray(td._scf.mo_occ)
+        if occ.ndim == 2:
+            occ = occ[0]
+        nocc = int(np.sum(occ > 0))
+    except Exception:  # noqa: BLE001
+        nocc = None
+    for k in range(len(e)):
+        ev = float(e[k]) * HARTREE2EV
+        row = {"state": k + 1, "energy_ev": round(ev, 3),
+               "wavelength_nm": round(1239.841984 / ev, 1) if ev > 0 else None,
+               "osc_strength": round(float(f[k]), 4), "transition": None, "weight_pct": None}
+        try:
+            x = td.xy[k][0]
+            if isinstance(x, (tuple, list)):          # UKS: (α, β) — α 진폭만
+                x = x[0]
+            x = np.asarray(x)
+            i, a = np.unravel_index(int(np.argmax(np.abs(x))), x.shape)
+            no = x.shape[0] if nocc is None else nocc
+            hi, la = no - 1 - int(i), int(a)
+            row["transition"] = (("HOMO" if hi == 0 else f"HOMO−{hi}") + " → " + ("LUMO" if la == 0 else f"LUMO+{la}"))
+            norm = float(np.sum(x ** 2)) or 1.0
+            row["weight_pct"] = round(float(x[i, a] ** 2) / norm * 100.0, 1)
+        except Exception:  # noqa: BLE001 — 진폭 해석 실패 시 에너지만
+            pass
+        out.append(row)
+    return out
+
+
+GRID_MAX_POINTS = 80000     # 저장 격자 상한 — float16 으로 약 160 KB, 등가면 삼각형 수도 이 안에서 결정된다
+
+
+def _grid_axes(coords, spacing, margin=2.4, max_points=GRID_MAX_POINTS):
+    """분자 주변 상자를 덮는 규칙 격자 축 — 점 수가 상한을 넘으면 간격을 키운다."""
+    lo, hi = coords.min(0) - margin, coords.max(0) + margin
+    axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    n_grid = int(np.prod([len(a) for a in axes]))
+    if n_grid > max_points:
+        spacing *= (n_grid / float(max_points)) ** (1 / 3)
+        axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    return axes, float(spacing)
+
+
+def encode_grid(axes, values):
+    """격자 값(C 순서, shape = len(axes[0])×…)을 float16 base64 로 — 뷰어의 marching tetrahedra 입력.
+
+    origin·spacing 단위 Å, 값은 ψ(a.u.^-3/2) 또는 ρ(e/bohr³). dtype 'f16' little-endian.
+    """
+    arr = np.asarray(values, dtype=np.float32).reshape([len(a) for a in axes])
+    return {"origin": [round(float(a[0]), 4) for a in axes],
+            "spacing": [round(float(a[1] - a[0]), 5) if len(a) > 1 else 0.0 for a in axes],
+            "shape": [int(len(a)) for a in axes], "dtype": "f16",
+            "abs_max": round(float(np.abs(arr).max()), 5),
+            "data": base64.b64encode(arr.astype("<f2").tobytes()).decode("ascii")}
+
+
+def decode_grid(g):
+    """encode_grid 의 역 — 테스트·검증용."""
+    raw = base64.b64decode(g["data"])
+    return np.frombuffer(raw, dtype="<f2").astype(np.float32).reshape(g["shape"])
 
 
 def orbital_cloud(mf, mol, which="homo", max_points=2500, spacing=0.3, threshold=0.02, seed=0):
@@ -125,25 +197,17 @@ def orbital_cloud(mf, mol, which="homo", max_points=2500, spacing=0.3, threshold
     등가면(marching cubes) 대신 확률 구름 표현을 쓰는 이유는 density_cloud 와 같다 — 저장 용량이
     작고(점 2,500개) 뷰어가 이미 점 구름을 그리기 때문이다. 열린 껍질(UKS)은 α 궤도를 쓴다.
     """
-    coeff, occ, energy = mf.mo_coeff, mf.mo_occ, mf.mo_energy
-    if getattr(coeff, "ndim", 2) == 3:          # UKS: (alpha, beta)
-        coeff, occ, energy = coeff[0], occ[0], energy[0]
-    coeff, occ, energy = np.asarray(coeff), np.asarray(occ), np.asarray(energy)
+    coeff, occ, energy = _alpha_mos(mf)
     occ_idx = np.where(occ > 0)[0]
     if not len(occ_idx):
         return None
     homo = int(occ_idx.max())
-    idx = homo if which == "homo" else homo + 1
-    if idx >= coeff.shape[1]:
+    idx = homo + ORBITAL_OFFSETS[which]
+    if idx < 0 or idx >= coeff.shape[1]:
         return None
     c = coeff[:, idx]
     coords = mol.atom_coords(unit="Angstrom")
-    lo, hi = coords.min(0) - 2.4, coords.max(0) + 2.4
-    axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
-    n_grid = int(np.prod([len(a) for a in axes]))
-    if n_grid > 300000:
-        spacing *= (n_grid / 300000.0) ** (1 / 3)
-        axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    axes, spacing = _grid_axes(coords, spacing)
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
     parts = []
     for start in range(0, len(grid), 20000):
@@ -162,21 +226,82 @@ def orbital_cloud(mf, mol, which="homo", max_points=2500, spacing=0.3, threshold
         "points": [[round(float(x), 2) for x in p] for p in pts[sel]],
         "value": [round(float(v), 4) for v in val[sel]],
         "abs_max": round(float(np.abs(val).max()), 4),
-        "index": idx, "which": which,
+        "index": idx, "which": which, "label": ORBITAL_LABELS[which],
         "energy_ev": round(float(energy[idx]) * 27.211386, 3),
+        "occ": round(float(occ[idx]), 3),
         "spacing": round(float(spacing), 3),
+        "contributions": orbital_contributions(mf, mol, idx),
+        # 등가면용 전체 격자 — 엔진이 떼어내 data/grids/<job>.json 에 따로 저장한다
+        "grid": encode_grid(axes, psi),
     }
 
 
+# 궤도 키 → HOMO 기준 오프셋 · 표시 이름 (결과 화면 Geometry 탭 · 오비탈 비교 화면)
+ORBITAL_OFFSETS = {"homo-1": -1, "homo": 0, "lumo": 1, "lumo+1": 2}
+ORBITAL_LABELS = {"homo-1": "HOMO−1", "homo": "HOMO", "lumo": "LUMO", "lumo+1": "LUMO+1"}
+
+
+def _alpha_mos(mf):
+    """(coeff, occ, energy) — 열린 껍질(UKS)은 α 궤도."""
+    coeff, occ, energy = mf.mo_coeff, mf.mo_occ, mf.mo_energy
+    if getattr(coeff, "ndim", 2) == 3:          # UKS: (alpha, beta)
+        coeff, occ, energy = coeff[0], occ[0], energy[0]
+    return np.asarray(coeff), np.asarray(occ), np.asarray(energy)
+
+
+def orbital_contributions(mf, mol, idx, top=5):
+    """궤도 idx 의 원자별 기여도(%) — Löwdin population (S^½ C)_μ² 을 원자별로 합산.
+
+    기획서(오비탈 비교 3.3)가 요구하는 «기여도의 population 정의 명시»에 맞춰 method 를 함께 남긴다.
+    """
+    try:
+        coeff, _, _ = _alpha_mos(mf)
+        c = coeff[:, idx]
+        S = np.asarray(mf.get_ovlp())
+        w, v = np.linalg.eigh(S)
+        s_half = (v * np.sqrt(np.clip(w, 1e-12, None))) @ v.T
+        pop = (s_half @ c) ** 2
+        pop = pop / max(float(pop.sum()), 1e-12) * 100.0
+        slices = mol.aoslice_by_atom()
+        per_atom = []
+        for ia in range(mol.natm):
+            p0, p1 = int(slices[ia][2]), int(slices[ia][3])
+            per_atom.append((f"{mol.atom_symbol(ia)}{ia + 1}", float(pop[p0:p1].sum())))
+        per_atom.sort(key=lambda t: -t[1])
+        return {"method": "Löwdin", "atoms": [{"atom": a, "pct": round(p, 1)} for a, p in per_atom[:top]]}
+    except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
+        return None
+
+
 def orbital_clouds(mf, mol):
-    """HOMO·LUMO 두 궤도의 점 구름. 실패한 궤도는 None."""
+    """HOMO−1 · HOMO · LUMO · LUMO+1 네 궤도의 점 구름. 없거나 실패한 궤도는 None."""
     out = {}
-    for which in ("homo", "lumo"):
+    for which in ORBITAL_OFFSETS:
         try:
             out[which] = orbital_cloud(mf, mol, which)
         except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
             out[which] = None
     return out
+
+
+def orbital_levels(mf, mol=None, n_below=5, n_above=5):
+    """에너지 준위도용 궤도 목록 — HOMO−n_below … LUMO+n_above (index · 이름 · eV · 점유수)."""
+    try:
+        coeff, occ, energy = _alpha_mos(mf)
+        occ_idx = np.where(occ > 0)[0]
+        if not len(occ_idx):
+            return None
+        homo = int(occ_idx.max())
+        levels = []
+        for idx in range(max(0, homo - n_below), min(len(energy), homo + 1 + n_above)):
+            off = idx - homo
+            label = ("HOMO" if off == 0 else f"HOMO−{-off}") if off <= 0 else ("LUMO" if off == 1 else f"LUMO+{off - 1}")
+            levels.append({"index": idx, "label": label, "energy_ev": round(float(energy[idx]) * 27.211386, 3),
+                           "occ": round(float(occ[idx]), 3)})
+        spin = "alpha" if getattr(mf.mo_coeff, "ndim", 2) == 3 else "restricted"
+        return {"homo_index": homo, "spin": spin, "levels": levels}
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=0):
@@ -189,12 +314,7 @@ def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=
     if dm.ndim == 3:
         dm = dm[0] + dm[1]
     coords = mol.atom_coords(unit="Angstrom")
-    lo, hi = coords.min(0) - 2.4, coords.max(0) + 2.4
-    axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
-    n_grid = int(np.prod([len(a) for a in axes]))
-    if n_grid > 400000:  # 대형 분자는 격자를 성기게
-        spacing *= (n_grid / 400000.0) ** (1 / 3)
-        axes = [np.arange(lo[i], hi[i] + spacing, spacing) for i in range(3)]
+    axes, spacing = _grid_axes(coords, spacing)
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
 
     rho_parts = []
@@ -217,7 +337,19 @@ def density_cloud(mf, mol, max_points=3000, spacing=0.25, threshold=0.004, seed=
         "rho": [round(float(v), 4) for v in sel_rho],
         "rho_max": round(float(w.max()), 4),
         "spacing": round(float(spacing), 3),
+        "grid": encode_grid(axes, rho),
     }
+
+
+def split_grids(orbital_clouds, density_cloud):
+    """점 구름 dict 에서 격자를 떼어낸다 — jobs.json 을 키우지 않도록 별도 파일로 보낼 몫."""
+    grids = {}
+    for k, v in (orbital_clouds or {}).items():
+        if isinstance(v, dict) and v.get("grid"):
+            grids[k] = v.pop("grid")
+    if isinstance(density_cloud, dict) and density_cloud.get("grid"):
+        grids["density"] = density_cloud.pop("grid")
+    return grids
 
 
 def breakable_bonds(smiles: str, max_bonds: int = 5):

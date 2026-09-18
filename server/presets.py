@@ -124,7 +124,7 @@ MATERIALS = [
 MATERIALS_BY_ID = {m["id"]: m for m in MATERIALS}
 
 ENV_TYPES = [
-    {"id": "사용자 정의", "desc": "용매(용매 라이브러리 연동)·온도·기준 전극 직접 선택"},
+    {"id": "사용자 정의", "desc": "용매(분자 라이브러리 · 혼합 비율)·온도·기준 전극 직접 선택"},
     {"id": "진공·기체", "desc": "vacuum · isolated molecule · 분자 자체 전자구조"},
 ]
 

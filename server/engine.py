@@ -32,6 +32,7 @@ from . import checkpoint as checkpoint_mod
 from . import confsens
 from . import descriptors as desc_mod
 from . import gpu as gpu_mod
+from . import library as library_mod
 from . import licomp
 from . import monitor as monitor_mod
 from . import presets
@@ -65,31 +66,37 @@ class CancelledError(Exception):
 
 
 def _solvent_key(settings):
-    if settings["envType"] == "진공·기체":
+    """설정의 용매 → PySCF SMD 용매 키. 라이브러리 용매·혼합 용매는 유효 SMD 벡터를 등록한다.
+
+    solventId(프리셋 sol-… · 라이브러리 MOL-… · 저장 혼합 MIX-…) 또는 customMixedSolvent
+    ({name, basis(부피비·몰비·질량비), components:[{id|abbr, ratio}]}) — 해석은 library.resolve_solvent.
+    """
+    res = library_mod.resolve_solvent(settings)
+    if res is None:
         return None
-    custom = settings.get("customMixedSolvent")
-    if custom:
-        # 용매 라이브러리의 사용자 혼합 용매: 성분 SMD 파라미터의 부피 가중 평균으로 등록
-        by_abbr = {s["abbr"]: s for s in presets.SOLVENTS if s["kind"] == "single"}
-        total = sum(c["ratio"] for c in custom["components"])
-        vec = [0.0] * 8
-        for c in custom["components"]:
-            sol = by_abbr.get(c["abbr"])
-            if sol is None:
-                raise ValueError(f"혼합 성분 {c['abbr']}의 SMD 파라미터가 없습니다")
-            params = sol["smd"] if sol.get("smd") else presets.WATER_SMD_FOR_MIX
-            w = c["ratio"] / total
-            vec = [v + w * p for v, p in zip(vec, params)]
-        key = "smd:mix-" + "-".join(
-            f"{c['abbr']}{c['ratio']:g}" for c in custom["components"]).lower()
-        smd.solvent_db[key] = vec
-        return key
-    if not settings.get("solventId"):
+    if res.get("vector") is not None:
+        smd.solvent_db[res["key"]] = list(res["vector"])
+    return res["key"]
+
+
+def _solvent_label(settings, solvent_key):
+    """결과 조건표의 용매 표기 (혼합이면 이름·비율 기준)."""
+    if not solvent_key:
+        return "vacuum"
+    try:
+        res = library_mod.resolve_solvent(settings)
+    except ValueError:
+        res = None
+    return res["label"] if res else f"SMD({solvent_key})"
+
+
+def _solvent_mixture(settings):
+    """혼합 용매면 성분·비율 기준·부피분율·유효 ε (재현성 기록), 아니면 None."""
+    try:
+        res = library_mod.resolve_solvent(settings)
+    except ValueError:
         return None
-    sol = presets.SOLVENTS_BY_ID.get(settings["solventId"])
-    if sol is None:
-        raise ValueError(f"알 수 없는 용매 id: {settings['solventId']}")
-    return sol.get("builtin_key") or sol["modelKey"]
+    return res["mixture"] if res else None
 
 
 def _no_reference(settings):
@@ -583,6 +590,17 @@ def _thermo_correction(atoms, params, charge, multiplicity, temperature, log, la
         log(f"  qRRHO 보정{label} — 저진동수 {q['n_low_freq']}개(<{q['cutoff_cm']:.0f} cm⁻¹), "
             f"ΔG {q['delta_g_kcal']:+.2f} kcal/mol")
     return result
+
+
+def _thermo_public(th):
+    """결과에 남길 열보정 요약 — 진동수 목록(cm⁻¹, 소수 1자리)과 스칼라만 (normal mode 제외)."""
+    if not th:
+        return None
+    out = {k: th.get(k) for k in ("zpe_hartree", "g_corr_hartree", "h_corr_hartree",
+                                  "entropy_hartree_per_k", "n_imaginary", "lowest_freq_cm", "qrrho")}
+    freqs = th.get("freqs_cm")
+    out["freqs_cm"] = [round(float(x), 1) for x in np.sort(np.asarray(freqs))] if freqs is not None else None
+    return out
 
 
 def _atomic_thermo():
@@ -1190,7 +1208,9 @@ def run_job(job, update, is_cancelled=lambda: False):
         except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
             density_cloud = None
             log(f"전자밀도 구름 생성 생략: {exc}")
-        orbital_clouds = desc_mod.orbital_clouds(mf, mol)   # HOMO/LUMO 3D 표면(점 구름)
+        orbital_clouds = desc_mod.orbital_clouds(mf, mol)   # HOMO−1/HOMO/LUMO/LUMO+1 3D 표면(점 구름)
+        orbital_levels = desc_mod.orbital_levels(mf, mol)   # 에너지 준위도
+        grids = desc_mod.split_grids(orbital_clouds, density_cloud)   # 등가면 격자 (별도 파일)
         if restored:
             descriptors = dict(ckpt.get("descriptors") or {})
             notes = list(ckpt.get("notes") or [])
@@ -1283,6 +1303,8 @@ def run_job(job, update, is_cancelled=lambda: False):
                 except Exception:  # noqa: BLE001 — 시각화용 부가 데이터
                     density_cloud = None
                 orbital_clouds = desc_mod.orbital_clouds(mf, mol)
+                orbital_levels = desc_mod.orbital_levels(mf, mol)
+                grids = desc_mod.split_grids(orbital_clouds, density_cloud)
                 notes.append(
                     f"허수 진동수가 검출되어 해당 모드로 변위 후 {n_fix}회 재최적화했습니다 "
                     "(안장점 → 극소점 교정)")
@@ -1709,8 +1731,16 @@ def run_job(job, update, is_cancelled=lambda: False):
         log(f"검증: {validation['summary']}")
 
         elapsed = time.time() - t_start
+        if grids:
+            try:
+                store.save_grids(job["id"], grids)
+            except Exception as exc:  # noqa: BLE001 — 격자는 시각화용 부가 데이터
+                log(f"등가면 격자 저장 생략: {exc}")
+                grids = {}
         result = {
             "descriptors": descriptors,
+            # 등가면 격자가 저장된 키 (homo-1 · homo · lumo · lumo+1 · density) — /api/jobs/{id}/grids
+            "grids_available": sorted(grids) if grids else None,
             "validation": validation,
             "binder_report": binder_report,
             "fragments": ([{"label": f["label"], "start": f["start"], "end": f["end"]}
@@ -1718,13 +1748,14 @@ def run_job(job, update, is_cancelled=lambda: False):
             "fingerprint_structures": fingerprint_structures or None,
             "density_cloud": density_cloud,
             "orbital_clouds": orbital_clouds,
+            "orbital_levels": orbital_levels,
+            # 진동수 목록·열보정 스칼라 — 결과 화면 Frequencies / Thermodynamics 탭
+            "thermo": _thermo_public(thermo_neutral),
             "conditions": {
                 "environment": settings["envType"],
                 "explicit_molecules": explicit_label or "없음",
-                "solvent_model": (
-                    f"SMD(혼합: {settings['customMixedSolvent']['name']})"
-                    if settings.get("customMixedSolvent") else
-                    f"SMD({solvent_key})" if solvent_key else "vacuum"),
+                "solvent_model": _solvent_label(settings, solvent_key),
+                "solvent_mixture": _solvent_mixture(settings),
                 "temperature_k": temperature,
                 "atmosphere": settings["atmosphere"],
                 "reference_electrode": settings.get("referenceElectrode"),

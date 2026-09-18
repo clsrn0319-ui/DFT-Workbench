@@ -57,27 +57,9 @@ KIND_PRIORITY = {"카보닐 O": 0, "에테르 O": 1, "하이드록실 O": 2, "�
 
 # ── 용매 성분 ────────────────────────────────────────────────────────
 def solvent_components(settings: dict) -> list[dict]:
-    """설정의 용매를 단일 성분 목록으로 — 혼합이면 성분마다 참조를 만든다."""
-    if settings.get("envType") == "진공·기체":
-        return []
-    singles = {s["abbr"]: s for s in presets.SOLVENTS if s["kind"] == "single"}
-    custom = settings.get("customMixedSolvent")
-    if custom:
-        out = []
-        for c in custom["components"]:
-            s = singles.get(c["abbr"])
-            if s:
-                out.append({"abbr": s["abbr"], "name": s["name"], "smiles": s["smiles"],
-                            "ratio": float(c["ratio"])})
-        return out
-    sol = presets.SOLVENTS_BY_ID.get(settings.get("solventId") or "")
-    if not sol:
-        return []
-    if sol["kind"] == "mixed":
-        return [{"abbr": c["abbr"], "name": singles[c["abbr"]]["name"],
-                 "smiles": singles[c["abbr"]]["smiles"], "ratio": float(c["ratio"])}
-                for c in sol["components"] if c["abbr"] in singles]
-    return [{"abbr": sol["abbr"], "name": sol["name"], "smiles": sol["smiles"], "ratio": 1.0}]
+    """설정의 용매를 단일 성분 목록으로 — 혼합이면 성분마다 참조를 만든다 (분자 라이브러리 기준)."""
+    from . import library
+    return library.solvent_components(settings)
 
 
 # ── 기하 ─────────────────────────────────────────────────────────────

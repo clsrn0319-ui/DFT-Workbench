@@ -559,6 +559,8 @@ def _maybe_slim(job: dict):
         return
     res["density_cloud"] = None
     res["orbital_clouds"] = None
+    res["grids_available"] = None
+    store.delete_grids(job["id"])
     res["slimmed"] = True
     res.setdefault("notes", []).append(
         "배치 스크리닝 용량 절약 — 전자밀도 구름을 저장하지 않았습니다 "

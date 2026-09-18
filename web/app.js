@@ -21,6 +21,8 @@ function loadLibraryMaterials() {
 }
 
 function buildMaterialGrid() {
+  // 분자 라이브러리(서버) 기반 소재 카드 — library.js. 없을 때만 아래 예전 방식(브라우저 보관함)
+  if (window.rbLibBuildMaterialGrid && !(window.RBLIB && window.RBLIB.failed)) return window.rbLibBuildMaterialGrid();
   const grid = $("material-grid");
   grid.innerHTML = "";
   const lib = loadLibraryMaterials();
@@ -74,6 +76,8 @@ function loadLibrarySolvents() {
 }
 
 function buildSolventOptions() {
+  // 분자 라이브러리 용매 · 혼합 프리셋 · 직접 구성(비율) — library.js
+  if (window.rbLibFillSolventSelect && !(window.RBLIB && window.RBLIB.failed)) return window.rbLibFillSolventSelect($("solvent"), {compose: true});
   const sel = $("solvent");
   const prev = sel.value;
   sel.innerHTML = "";
@@ -227,9 +231,12 @@ function addExplicitRow() {
   row.dataset.explicit = "1";
   row.style.marginBottom = "6px";
   const singles = PRESETS.solvents.filter(s => s.kind === "single");
+  // 분자 라이브러리의 용매·분자를 명시적 주변 분자로 (없으면 프리셋 용매)
+  const species = (window.rbLibExplicitSpecies && !(window.RBLIB && window.RBLIB.failed) && window.rbLibExplicitSpecies())
+    || singles.map(s => [s.smiles, `${s.abbr} — ${s.name}`]);
   row.innerHTML = `
     <select class="input" data-role="species">
-      ${singles.map(s => `<option value="${esc(s.smiles)}">${esc(s.abbr)} — ${esc(s.name)}</option>`).join("")}
+      ${species.map(([smi, label]) => `<option value="${esc(smi)}">${esc(label)}</option>`).join("")}
       <option value="__custom__">사용자 SMILES…</option>
     </select>
     <input class="input" data-role="custom" placeholder="SMILES 입력" style="display:none;width:180px">
@@ -283,7 +290,7 @@ async function submit() {
   const body = {
     compareFunctionals: cmpF,
     materialIds: chosen.filter(c => c.dictId).map(c => c.dictId),
-    customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name})),
+    customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name, libraryId: c.libraryId || null})),
     customSmiles: $("custom-smiles").value.trim() || null,
     customName: $("custom-name").value.trim() || null,
     customGeometry: (window.CALC_GEOM && $("custom-smiles").value.trim())
@@ -2812,7 +2819,9 @@ async function scrOpenWizard() {
     }));
   }
   const sSel = $("scr-solvent");
-  if (!sSel.options.length) {
+  if (!sSel.options.length && window.rbLibFillSolventSelect && !(window.RBLIB && window.RBLIB.failed)) {
+    window.rbLibFillSolventSelect(sSel, {compose: false});   // 분자 라이브러리 용매 · 혼합 프리셋
+  } else if (!sSel.options.length) {
     // 단건 계산과 동일하게 서버 프리셋 + 용매 라이브러리(사용자 혼합 용매 포함)
     sSel.add(new Option("(용매 없음 — 진공·기체)", ""));
     const serverIds = new Set(PRESETS.solvents.map(s => s.id));

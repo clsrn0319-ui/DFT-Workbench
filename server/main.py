@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
+from . import library
 from . import lookup as lookup_mod
 from . import benchmark, checkpoint, gpu, monitor, templates
 from . import presets, scoring, screening, store, structfile, worker
@@ -81,13 +82,15 @@ class ExplicitMolecule(BaseModel):
 
 
 class MixedSolventComponent(BaseModel):
-    abbr: str = Field(min_length=1, max_length=20)
+    id: Optional[str] = Field(None, max_length=40)      # 분자 라이브러리 용매 레코드 (MOL-…)
+    abbr: Optional[str] = Field(None, max_length=20)    # 예전 형식 (프리셋 약어)
     ratio: float = Field(gt=0)
 
 
 class MixedSolvent(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    components: list[MixedSolventComponent] = Field(min_length=2, max_length=5)
+    name: str = Field("", max_length=100)
+    basis: str = "부피비"                                # 부피비 · 몰비 · 질량비
+    components: list[MixedSolventComponent] = Field(min_length=1, max_length=6)
 
 
 class JobSettings(BaseModel):
@@ -107,6 +110,7 @@ class JobSettings(BaseModel):
 class CustomMaterial(BaseModel):
     smiles: str = Field(min_length=1, max_length=300)
     name: Optional[str] = None
+    libraryId: Optional[str] = Field(None, max_length=40)   # 분자 라이브러리 레코드 (계산 이력 연결)
 
 
 class CustomGeometry(BaseModel):
@@ -625,17 +629,7 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
         raise HTTPException(400, f"후보는 캠페인당 {screening.MAX_CANDIDATES}개까지입니다 "
                                  f"(요청 {len(req.candidates)}개).")
     settings = req.settings.model_dump()
-    if settings["envType"] == "진공·기체":
-        settings["solventId"] = None
-        settings["customMixedSolvent"] = None
-    if settings["solventId"] and settings["solventId"] not in presets.SOLVENTS_BY_ID:
-        raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
-    if settings.get("customMixedSolvent"):
-        known = {s["abbr"] for s in presets.SOLVENTS if s["kind"] == "single"}
-        for comp in settings["customMixedSolvent"]["components"]:
-            if comp["abbr"] not in known:
-                raise HTTPException(
-                    400, f"혼합 용매 성분 '{comp['abbr']}'의 SMD 파라미터가 없어 계산할 수 없습니다.")
+    _check_solvent(settings)
 
     # 후보를 서버에서 다시 검증한다 — 파싱 화면을 거치지 않은 API 호출 대비
     structure = settings.get("structure", "모노머")
@@ -793,6 +787,180 @@ def screening_export(cid: str, format: str = "csv",
                  f'attachment; filename="{cid}_screening.csv"'})
 
 
+def _check_solvent(settings: dict):
+    """용매 설정 검증 — 프리셋·라이브러리 용매·저장 혼합·직접 구성 혼합을 모두 받는다."""
+    if settings["envType"] == "진공·기체":
+        settings["solventId"] = None
+        settings["customMixedSolvent"] = None
+        return
+    cm = settings.get("customMixedSolvent")
+    if cm:
+        cm["components"] = [{k: v for k, v in c.items() if v is not None} for c in cm["components"]]
+    try:
+        library.resolve_solvent(settings)
+    except ValueError as exc:
+        raise HTTPException(400, f"용매 설정 오류: {exc}")
+
+
+# ── 분자 라이브러리 (분자 검색 및 선택 · 분자 라이브러리 화면) ────────────
+class LibraryParseRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    kind: str = "auto"
+
+
+class LibrarySearchRequest(BaseModel):
+    mode: str = "name"                 # name · exact · sub · sim
+    query: str = Field("", max_length=2000)
+    threshold: float = Field(0.35, ge=0.05, le=1.0)
+    stereo: bool = False
+    stripSalts: bool = True
+
+
+class LibrarySmd(BaseModel):
+    n: float
+    eps: float
+    alpha: float = 0.0
+    beta: float = 0.0
+    gamma: float = 0.0
+
+
+class LibraryMoleculeRequest(BaseModel):
+    smiles: Optional[str] = Field(None, max_length=2000)
+    inchi: Optional[str] = Field(None, max_length=2000)
+    name: Optional[str] = Field(None, max_length=60)
+    full: Optional[str] = Field(None, max_length=120)
+    cas: Optional[str] = Field(None, max_length=20)
+    category: str = "other"
+    roles: list[str] = ["solute"]
+    tags: list[str] = []
+    synonyms: list[str] = []
+    note: Optional[str] = Field(None, max_length=300)
+    density: Optional[float] = None
+    smd: Optional[LibrarySmd] = None
+    source: Optional[str] = Field(None, max_length=60)
+
+
+class LibraryPatchRequest(BaseModel):
+    fav: Optional[bool] = None
+    name: Optional[str] = Field(None, max_length=60)
+    full: Optional[str] = Field(None, max_length=120)
+    cas: Optional[str] = Field(None, max_length=20)
+    note: Optional[str] = Field(None, max_length=300)
+    tags: Optional[list[str]] = None
+    category: Optional[str] = None
+    roles: Optional[list[str]] = None
+    density: Optional[float] = None
+    smd: Optional[LibrarySmd] = None
+
+
+class LibraryImportRequest(BaseModel):
+    items: list[dict] = Field(default_factory=list, max_length=500)
+
+
+class LibraryMixtureRequest(BaseModel):
+    name: str = Field("", max_length=100)
+    basis: str = "부피비"
+    components: list[MixedSolventComponent] = Field(min_length=1, max_length=6)
+    note: Optional[str] = Field(None, max_length=200)
+
+
+@app.get("/api/library")
+def library_list(_: bool = Depends(require_login)):
+    return library.listing()
+
+
+@app.post("/api/library/parse")
+def library_parse(req: LibraryParseRequest, _: bool = Depends(require_login)):
+    return library.parse(req.text, req.kind)
+
+
+@app.post("/api/library/search")
+def library_search(req: LibrarySearchRequest, _: bool = Depends(require_login)):
+    try:
+        return library.search(req.mode, req.query, threshold=req.threshold, stereo=req.stereo,
+                              strip_salts=req.stripSalts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/library/molecules")
+def library_add(req: LibraryMoleculeRequest, _: bool = Depends(require_login)):
+    body = req.model_dump()
+    if body.get("smd"):
+        body["smd"] = dict(body["smd"])
+    try:
+        return {"molecule": library.add_molecule(body)}
+    except ValueError as exc:
+        raise HTTPException(409 if "이미 라이브러리" in str(exc) else 400, str(exc))
+
+
+@app.patch("/api/library/molecules/{mol_id}")
+def library_patch(mol_id: str, req: LibraryPatchRequest, _: bool = Depends(require_login)):
+    patch = {k: v for k, v in req.model_dump().items() if v is not None}
+    if "density" in req.model_fields_set and req.density is None:
+        patch["density"] = None
+    try:
+        return {"molecule": library.update_molecule(mol_id, patch)}
+    except KeyError:
+        raise HTTPException(404, "레코드를 찾을 수 없습니다.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/library/molecules/{mol_id}")
+def library_delete(mol_id: str, _: bool = Depends(require_login)):
+    try:
+        if not library.delete_molecule(mol_id):
+            raise HTTPException(404, "레코드를 찾을 수 없습니다.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/api/library/molecules/{mol_id}/structure")
+def library_structure(mol_id: str, _: bool = Depends(require_login)):
+    try:
+        return library.structure(mol_id)
+    except KeyError:
+        raise HTTPException(404, "레코드를 찾을 수 없습니다.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/library/molecules/{mol_id}/export")
+def library_export(mol_id: str, fmt: str = "xyz", _: bool = Depends(require_login)):
+    try:
+        text, fname = library.export(mol_id, fmt)
+    except KeyError:
+        raise HTTPException(404, "레코드를 찾을 수 없습니다.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return Response(content=text, media_type="chemical/x-mdl-sdfile" if fmt in ("sdf", "mol") else "text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/library/import")
+def library_import(req: LibraryImportRequest, _: bool = Depends(require_login)):
+    return library.import_browser(req.items)
+
+
+@app.post("/api/library/mixtures")
+def library_mixture_add(req: LibraryMixtureRequest, _: bool = Depends(require_login)):
+    body = req.model_dump()
+    body["components"] = [{k: v for k, v in c.items() if v is not None} for c in body["components"]]
+    try:
+        return {"mixture": library.save_mixture(body)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/library/mixtures/{mix_id}")
+def library_mixture_delete(mix_id: str, _: bool = Depends(require_login)):
+    if not library.delete_mixture(mix_id):
+        raise HTTPException(404, "저장된 혼합 용매를 찾을 수 없습니다 (기본 프리셋은 지울 수 없습니다).")
+    return {"ok": True}
+
+
 class LookupRequest(BaseModel):
     query: str = Field(min_length=1, max_length=300)
 
@@ -805,17 +973,7 @@ def lookup_compound(req: LookupRequest, _: bool = Depends(require_login)):
 @app.post("/api/jobs")
 def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
     settings = req.settings.model_dump()
-    if settings["envType"] == "진공·기체":
-        settings["solventId"] = None
-        settings["customMixedSolvent"] = None
-    if settings["solventId"] and settings["solventId"] not in presets.SOLVENTS_BY_ID:
-        raise HTTPException(400, f"알 수 없는 용매: {settings['solventId']}")
-    if settings["customMixedSolvent"]:
-        known = {s["abbr"] for s in presets.SOLVENTS if s["kind"] == "single"}
-        for comp in settings["customMixedSolvent"]["components"]:
-            if comp["abbr"] not in known:
-                raise HTTPException(
-                    400, f"혼합 용매 성분 '{comp['abbr']}'의 SMD 파라미터가 없어 계산할 수 없습니다.")
+    _check_solvent(settings)
     if settings["accuracy"] not in presets.ACCURACY:
         raise HTTPException(400, f"알 수 없는 정확도 프리셋: {settings['accuracy']}")
     total_explicit = sum(m["count"] for m in settings["explicitMolecules"])
@@ -830,7 +988,8 @@ def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
         smiles = mat["smiles"].get(settings["structure"])
         if not smiles:
             raise HTTPException(400, f"{mat['name']}: '{settings['structure']}' 구조가 정의되지 않았습니다.")
-        targets.append({"id": mid, "name": mat["name"], "abbr": mat["abbr"], "smiles": smiles})
+        targets.append({"id": mid, "name": mat["name"], "abbr": mat["abbr"], "smiles": smiles,
+                        "libraryId": "MOL-" + mid.upper()})
     n_units = {"모노머": 1, "2량체": 2, "3량체": 3}.get(settings["structure"], 1)
 
     def resolve_custom(smiles, name):
@@ -843,8 +1002,8 @@ def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
 
     for cm in req.customMaterials:
         name = cm.name or cm.smiles
-        targets.append({"id": None, "name": name, "abbr": "보관함",
-                        "smiles": resolve_custom(cm.smiles, name)})
+        targets.append({"id": None, "name": name, "abbr": "라이브러리" if cm.libraryId else "보관함",
+                        "smiles": resolve_custom(cm.smiles, name), "libraryId": cm.libraryId})
     if req.customSmiles:
         name = req.customName or req.customSmiles
         target = {"id": None, "name": name, "abbr": "사용자",
@@ -954,6 +1113,7 @@ SNAPSHOT_SHIM_JS = r"""
     if (url.indexOf("/api/me") === 0) return reply({limits: D.limits, active_sessions: 0});
     if (url.indexOf("/api/presets") === 0) return reply(D.presets);
     if (url.indexOf("/api/templates") === 0) return reply({templates: D.templates || []});
+    if (url === "/api/library" || url.indexOf("/api/library?") === 0) return D.library ? reply(D.library) : reply({detail: "사본에 분자 라이브러리가 없습니다."}, false);
     if (url.indexOf("/api/settings") === 0) return reply({backend: {backend: "cpu", requested: false, reason: "결과 보기 전용 사본"}, workers: 0,
       limits: D.limits, engine: {pyscf: "—", python: "—"}, code: "snapshot " + D.exported_at, data_dir: "—", potential_conventions: ["Li/Li⁺ 1.44 V"]});
     var one = url.match(/^\/api\/jobs\/([^/?]+)$/);
@@ -968,6 +1128,11 @@ SNAPSHOT_SHIM_JS = r"""
       var rows = m.jobs;
       if (camp) { camp = decodeURIComponent(camp); rows = rows.filter(function (v) { return v.campaign && v.campaign.id === camp; }); }
       return reply(Object.assign({}, m, {jobs: rows, total: rows.length, now: Date.now() / 1000}));
+    }
+    var gr = url.match(/^\/api\/jobs\/([^/?]+)\/grids/);
+    if (gr) {
+      var gv = (D.grids || {})[decodeURIComponent(gr[1])];
+      return gv ? reply(gv) : reply({detail: "이 작업에는 등가면 격자가 없습니다."}, false);
     }
     var mon = url.match(/^\/api\/jobs\/([^/?]+)\/monitor/);
     if (mon) {
@@ -1105,6 +1270,7 @@ def _snapshot_html(jobs: list[dict]) -> str:
         "limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS},
         "csv": "\ufeff" + _csv_text(jobs),
         "templates": templates.list_templates(),
+        "library": _snapshot_library(jobs),
         **_snapshot_monitor_data(jobs),
     }
     shim = ("<script>\nwindow.__RB_SNAPSHOT__ = " + _js_literal(snapshot) + ";\n"
@@ -1112,7 +1278,7 @@ def _snapshot_html(jobs: list[dict]) -> str:
     return page.replace(marker, shim + "\n" + _inline_script(app_js))
 
 
-SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js", "workspace.js", "pages.js")
+SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js", "isosurface.js", "workspace.js", "library.js", "pages.js")
 SNAPSHOT_LOG_TAIL = 400   # 사본에 담는 원본 로그 줄 수 (작업당)
 
 
@@ -1150,7 +1316,21 @@ def _snapshot_monitor_data(jobs: list[dict]) -> dict:
                 logs[j["id"]] = lg
         except Exception:  # noqa: BLE001
             pass
-    return {"monitor": dash, "monitors": monitors, "logs": logs}
+    grids = {}
+    for j in jobs:
+        if (j.get("result") or {}).get("grids_available"):
+            g = store.load_grids(j["id"])
+            if g:
+                grids[j["id"]] = g
+    return {"monitor": dash, "monitors": monitors, "logs": logs, "grids": grids}
+
+
+def _snapshot_library(jobs: list[dict]) -> dict | None:
+    """공유용 HTML 에 분자 라이브러리(목록·2D 구조·계산 이력)를 담는다 — 조회 전용."""
+    try:
+        return library.listing(jobs)
+    except Exception:  # noqa: BLE001 — 라이브러리가 없어도 결과 사본은 만들어져야 한다
+        return None
 
 
 def _inline_script(src: str) -> str:
@@ -1434,6 +1614,16 @@ def li_references(_: bool = Depends(require_login)):
             "thresholds_kj": {"trapping": licomp.TRAP_KJ,
                               "solvent_dominant": licomp.SOLVENT_DOMINANT_KJ},
             "default_coordination": licomp.DEFAULT_COORDINATION}
+
+
+@app.get("/api/jobs/{job_id}/grids")
+def get_job_grids(job_id: str, _: bool = Depends(require_login)):
+    """등가면 격자 — 궤도(ψ)·전자밀도(ρ) float16 base64. 결과 화면이 marching tetrahedra 로 표면을 만든다."""
+    _job_or_404(job_id)
+    grids = store.load_grids(job_id)
+    if not grids:
+        raise HTTPException(404, "이 작업에는 등가면 격자가 없습니다 (이전 버전 계산 또는 배치 결과).")
+    return grids
 
 
 @app.get("/api/jobs/{job_id}/trajectory")

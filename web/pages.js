@@ -74,6 +74,7 @@
     const exp = s.expert || {};
     if (s.envType) { const r = document.querySelector(`input[name="env"][value="${CSS.escape(s.envType)}"]`); if (r) { r.checked = true; r.dispatchEvent(new Event("change", {bubbles: true})); n++; } }
     if (s.solventId !== undefined) { if (setSel("solvent", s.solventId || "")) n++; }
+    if (s.customMixedSolvent && window.rbLibSetCalcMixture) { window.rbLibSetCalcMixture(s.customMixedSolvent); n++; }
     if (s.temperature != null) { setVal("temperature", s.temperature); n++; }
     if (s.referenceElectrode) { if (setSel("ref-electrode", s.referenceElectrode)) n++; }
     if (s.structure && setSel("structure", s.structure)) n++;
@@ -149,9 +150,10 @@
     setTimeout(() => {
       const n = applySettingsToCalc(job.settings || {});
       const m = job.material || {};
-      if (m.id && window.rbSelectMaterialByName) { /* 프리셋 카드 */ }
-      if (!m.id && m.smiles) { setVal("custom-smiles", m.smiles); setVal("custom-name", m.name || ""); }
-      if (m.id && window.rbSelectMaterialByName) try { window.rbSelectMaterialByName(m.name); } catch (e) {}
+      const libId = m.libraryId || (m.id ? "MOL-" + String(m.id).toUpperCase() : null);
+      if (libId && window.rbLibSelectInCalc) { try { window.rbLibSelectInCalc([libId]); } catch (e) {} }
+      else if (m.id && window.rbSelectMaterialByName) try { window.rbSelectMaterialByName(m.name); } catch (e) {}
+      if (!libId && m.smiles) { setVal("custom-smiles", m.smiles); setVal("custom-name", m.name || ""); }
       rbToast(`«${m.name || m.smiles}» 조건 ${n}개 항목을 채웠습니다 — 확인 후 «계산 제출»`);
     }, 200);
   };
