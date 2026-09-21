@@ -1103,6 +1103,34 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
           <input class="input" type="number" id="multiplicity" value="1" min="1" max="4"></div>
         <div class="field"><span class="field-label">Conformer 수 (비우면 프리셋)</span>
           <input class="input" type="number" id="n-conformers" placeholder="자동"></div>
+        <div class="field"><span class="field-label">시작 구조</span>
+          <select class="input" id="start-structure"
+            title="문헌·후보끼리 같은 사슬 모양에서 출발하도록 주사슬 비틀림각을 정해 시작 구조를 만듭니다. 주사슬은 고리·할로젠·카보닐을 뺀 가장 긴 사슬로 자동으로 잡습니다.">
+            <option value="">자동 — conformer 탐색 후 가장 안정한 구조</option>
+            <option value="all-trans">all-trans — 주사슬 비틀림 모두 180°</option>
+            <option value="pattern">비틀림 패턴 지정</option>
+          </select></div>
+        <div class="field" id="torsion-pattern-wrap" style="grid-column:span 2" hidden><span class="field-label">비틀림 패턴 (주사슬 순서대로 되풀이)</span>
+          <div style="display:flex;gap:6px;min-width:0">
+            <select class="input" id="torsion-preset" style="flex:none;max-width:48%">
+              <option value="">직접 입력</option>
+              <option value="T G T G'">TGTG′ — PVDF α형</option>
+              <option value="T T T G T T T G'">T₃GT₃G′ — PVDF γ형</option>
+              <option value="165">나선 약 165° — PTFE형</option>
+            </select>
+            <input class="input" id="torsion-pattern" placeholder="T G T G'  ·  165  ·  180, 60" style="flex:1;min-width:0"
+              title="T = 180°, G = +60°, G′ = −60°, 숫자는 그 각도(°)"></div></div>
+        <div class="field" id="start-rep-wrap" hidden><span class="field-label">대표값 기준</span>
+          <select class="input" id="start-rep">
+            <option value="start">시작 구조의 값 (다른 conformer 는 민감도로만)</option>
+            <option value="lowest">가장 안정한 conformer 의 값</option>
+          </select></div>
+        <div class="field" id="fix-torsions-wrap" hidden><span class="field-label">최적화 중 주사슬 비틀림</span>
+          <select class="input" id="fix-torsions"
+            title="고정하면 DFT 최적화(중성·이온) 동안 주사슬 비틀림각을 시작 구조 값에 묶어 둡니다. geomeTRIC 최적화기가 있어야 하며, 없으면 고정 없이 최적화하고 로그에 남깁니다.">
+            <option value="false">풀어 둠 (자유 최적화)</option>
+            <option value="true">고정 (사슬 모양 유지)</option>
+          </select></div>
         <div class="field"><span class="field-label">DFT 구조 최적화</span>
           <select class="input" id="optimize">
             <option value="">(정확도 프리셋)</option>

@@ -472,6 +472,21 @@ function svgOrbitalLevels(lv, o = {}) {
   return s + "</svg>";
 }
 
+/* 시작 구조(전문가 설정) — 헤더에 한 줄: 모양 · 대표값 기준 · 최적화 후 벗어난 정도 */
+function startStructMeta(r) {
+  const st = r.geometry_info && r.geometry_info.start_structure;
+  if (!st) return "";
+  const shape = st.mode === "all-trans" ? "all-trans" : `비틀림 ${st.pattern || ""}`;
+  const parts = [`시작 구조 ${shape}`];
+  if (st.representative === "lowest") parts.push("대표값: 가장 안정한 conformer");
+  if (st.max_deviation_deg != null) parts.push(`최적화 후 최대 ${st.max_deviation_deg}° 벗어남`);
+  if (st.fix_torsions) parts.push("비틀림 고정");
+  const tip = `주사슬 ${(st.backbone_elements || []).join("")} · 목표 ${(st.torsions || []).map(t => Math.round(t.target) + "°").join(", ")}`
+    + (st.final_torsions ? ` → 최적화 후 ${st.final_torsions.map(v => Math.round(v) + "°").join(", ")}` : "")
+    + (st.rel_e_kcal != null ? ` · 가장 안정한 conformer 대비 ${st.rel_e_kcal} kcal/mol` : "");
+  return `<span>|</span><span title="${esc(tip)}">${esc(parts.join(" · "))}</span>`;
+}
+
 /* ── Orbital Information 표 (Geometry 탭 세 번째 열) ── */
 function orbInfoTable(r, key) {
   const oc = (r.orbital_clouds || {})[key], lv = orbLevelsOf(r);
@@ -504,7 +519,7 @@ function wsHeader(job, r) {
     <div class="ws-head-main"><h2>${esc(job.material.name)} <span class="f mono">${esc(formula)}</span>
         <span class="badge ${job.status === "PUBLISHED" ? "published" : "queued"}">${esc(st)}</span>
         ${grade ? `<span class="badge ${wsQcClass(job, r)}">검증 ${esc(grade)}</span>` : ""}${r.slimmed ? '<span class="badge queued">배치 결과 (슬림)</span>' : ""}</h2>
-      <div class="ws-meta"><b>${esc(r.conditions.method)}</b><span>|</span><span>${esc(r.conditions.solvent_model)}</span><span>|</span><span>전하 ${e.charge ?? 0} · 다중도 ${e.multiplicity ?? 1}</span><span>|</span><span>${esc(String(r.conditions.temperature_k))} K</span><span>|</span><span>${esc(fin)}</span><span>|</span><span class="mono">${esc(job.id)}</span>${r.wall_time_s != null ? `<span>|</span><span>wall ${r.wall_time_s}s</span>` : ""}</div></div>
+      <div class="ws-meta"><b>${esc(r.conditions.method)}</b><span>|</span><span>${esc(r.conditions.solvent_model)}</span><span>|</span><span>전하 ${e.charge ?? 0} · 다중도 ${e.multiplicity ?? 1}</span><span>|</span><span>${esc(String(r.conditions.temperature_k))} K</span>${startStructMeta(r)}<span>|</span><span>${esc(fin)}</span><span>|</span><span class="mono">${esc(job.id)}</span>${r.wall_time_s != null ? `<span>|</span><span>wall ${r.wall_time_s}s</span>` : ""}</div></div>
     <div class="ws-head-acts">
       <button class="btn" type="button" data-ws-tab-go="files" title="입력 설정 · 로그 · 재현성 정보">🗎 계산 정보</button>
       <details class="ws-dl"><summary class="btn primary">⬇ Download ▾</summary><div class="ws-dlm">

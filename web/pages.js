@@ -81,10 +81,12 @@
     if (s.accuracy && setSel("accuracy", s.accuracy)) n++;
     if (s.purpose && setSel("purpose", s.purpose)) n++;
     const map = {functional: "functional", basis: "basis", basisAnion: "basis-anion", charge: "charge", multiplicity: "multiplicity", nConformers: "n-conformers",
-                 liModel: "li-model", liCoordination: "li-coord", liMaxSites: "li-sites", logLevel: "log-level", scfMaxCycle: "scf-max-cycle", freqScale: "freq-scale"};
+                 liModel: "li-model", liCoordination: "li-coord", liMaxSites: "li-sites", logLevel: "log-level", scfMaxCycle: "scf-max-cycle", freqScale: "freq-scale",
+                 startStructure: "start-structure", torsionPattern: "torsion-pattern", representative: "start-rep"};
     for (const [k, id] of Object.entries(map)) { if (exp[k] == null) continue; const el = document.getElementById(id); if (!el) continue; if (el.tagName === "SELECT") { if (setSel(id, exp[k])) n++; } else { setVal(id, exp[k]); n++; } }
-    const tri = {optimizeGeometry: "optimize", thermochemistry: "thermo", redoxAdiabatic: "redox-mode", nonequilibriumSolvation: "noneq-solv", boltzmannEnsemble: "boltzmann", conformerSensitivity: "conf-sens", qrrho: "qrrho", optimizeInSolvent: "opt-solvent", bdeRelaxFragments: "bde-relax", bdeThermalCorrection: "bde-thermal"};
+    const tri = {optimizeGeometry: "optimize", thermochemistry: "thermo", redoxAdiabatic: "redox-mode", nonequilibriumSolvation: "noneq-solv", boltzmannEnsemble: "boltzmann", conformerSensitivity: "conf-sens", qrrho: "qrrho", optimizeInSolvent: "opt-solvent", bdeRelaxFragments: "bde-relax", bdeThermalCorrection: "bde-thermal", fixBackboneTorsions: "fix-torsions"};
     for (const [k, id] of Object.entries(tri)) { if (exp[k] == null) continue; const el = document.getElementById(id); if (!el || el.tagName !== "SELECT") continue; const v = exp[k] === true ? "true" : exp[k] === false ? "false" : String(exp[k]); if (setSel(id, v) || setSel(id, exp[k] ? "on" : "off") || setSel(id, exp[k] ? "1" : "0")) n++; }
+    if (window.rbSyncStartStructure) window.rbSyncStartStructure();
     return n;
   }
   function applyTemplate(id, target) {
@@ -107,7 +109,11 @@
     const env = document.querySelector('input[name="env"]:checked')?.value;
     const exp = {functional: g("functional") || undefined, basis: g("basis") || null, basisAnion: g("basis-anion") || null,
                  charge: num(g("charge")) ?? 0, multiplicity: num(g("multiplicity")) ?? 1, nConformers: num(g("n-conformers")),
-                 liModel: g("li-model") || null, liCoordination: num(g("li-coord")), liMaxSites: num(g("li-sites"))};
+                 liModel: g("li-model") || null, liCoordination: num(g("li-coord")), liMaxSites: num(g("li-sites")),
+                 startStructure: g("start-structure") || null,
+                 torsionPattern: g("start-structure") === "pattern" ? (g("torsion-pattern") || "").trim() || null : null,
+                 representative: g("start-structure") ? (g("start-rep") || "start") : null,
+                 fixBackboneTorsions: g("start-structure") ? g("fix-torsions") === "true" : null};
     Object.keys(exp).forEach(k => { if (exp[k] === undefined) delete exp[k]; });
     return {envType: env, solventId: env === "진공·기체" ? null : (g("solvent") || null), temperature: num(g("temperature")) ?? 298.15,
             referenceElectrode: g("ref-electrode") || null, structure: g("structure") || "모노머", accuracy: g("accuracy") || "표준",

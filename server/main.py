@@ -17,7 +17,7 @@ import secrets
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
@@ -78,6 +78,28 @@ class ExpertSettings(BaseModel):
     bdeRelaxFragments: Optional[bool] = None
     bdeThermalCorrection: Optional[bool] = None
     freqScale: Optional[float] = Field(None, gt=0.5, lt=1.5)
+    # 시작 구조 — auto: conformer 탐색 최저 구조 / all-trans / pattern: 주사슬 비틀림 패턴(torsionPattern)
+    startStructure: Optional[str] = Field(None, pattern="^(auto|all-trans|pattern)$")
+    torsionPattern: Optional[str] = Field(None, max_length=200)
+    # 대표값 기준 — start: 시작 구조의 값 / lowest: 가장 안정한 conformer 의 값 (나머지는 민감도)
+    representative: Optional[str] = Field(None, pattern="^(start|lowest)$")
+    fixBackboneTorsions: Optional[bool] = None   # 최적화 중 주사슬 비틀림 고정 (geomeTRIC 필요)
+
+    @model_validator(mode="after")
+    def _check_start_structure(self):
+        if self.startStructure == "pattern" and not (self.torsionPattern or "").strip():
+            raise ValueError("시작 구조 «비틀림 패턴»에는 패턴(예: T G T G')을 넣어야 합니다")
+        return self
+
+    @field_validator("torsionPattern")
+    @classmethod
+    def _check_torsion_pattern(cls, v):
+        if v is not None and v.strip():
+            try:
+                geometry.parse_torsion_pattern(v)
+            except geometry.GeometryError as exc:
+                raise ValueError(str(exc)) from exc
+        return v
     scfTol: float = 1e-8
     # SCF 최대 반복 (비우면 PySCF 기본 50). 모니터링 시나리오 «max_cycle 을 작게» 용도 포함
     scfMaxCycle: Optional[int] = Field(None, ge=1, le=1000)
@@ -178,6 +200,8 @@ def me(_: bool = Depends(require_login)):
 @app.get("/api/presets")
 def get_presets(_: bool = Depends(require_login)):
     return {
+        # 이 서버가 아는 기능 — 화면이 새 기능을 켜기 전에 확인한다 (화면 파일만 먼저 바뀐 경우 대비)
+        "features": ["startStructure", "trash"],
         "materials": presets.MATERIALS,
         "solvents": [{k: v for k, v in s.items() if k != "smd"} for s in presets.SOLVENTS],
         "envTypes": presets.ENV_TYPES,

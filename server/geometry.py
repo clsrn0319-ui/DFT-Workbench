@@ -4,9 +4,11 @@
 겹치지 않게 배치한 뒤 전체를 역장으로 이완시킨다.
 """
 
+import re
+
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdMolTransforms
 from rdkit.Geometry import Point3D
 
 
@@ -65,6 +67,145 @@ def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
     """최저 에너지 conformer 하나만 반환하는 편의 함수."""
     candidates, info = smiles_to_conformers(smiles, n_conformers, top_k=1, seed=seed)
     return candidates[0][0], info
+
+
+# ── 시작 구조 (all-trans · 비틀림 패턴) ────────────────────────────────────
+# 문헌·후보끼리 같은 사슬 모양에서 출발하도록, 주사슬 비틀림각을 정해 만든 구조.
+# T = 180° (trans), G = +60°, G' = −60° (gauche), 숫자는 그 각도(°). 패턴은 주사슬
+# 비틀림 순서대로 되풀이된다 — «T» = all-trans, «T G T G'» = PVDF α형, «165» = PTFE형 나선.
+TORSION_TOKENS = {"T": 180.0, "A": 180.0, "G": 60.0, "G+": 60.0, "G'": -60.0, "G-": -60.0}
+_TOKEN_RE = re.compile(r"G'|G[+-]|[TAG]|[-+]?\d+(?:\.\d+)?")
+
+
+def parse_torsion_pattern(text) -> list[float]:
+    """«T G T G'» · «TGTG'» · «180, 60» · «165» → 비틀림각 목록(°). 읽을 수 없으면 GeometryError."""
+    if isinstance(text, (list, tuple)):
+        vals = [float(v) for v in text]
+    else:
+        raw = str(text or "").upper().replace("′", "'").replace("’", "'")
+        parts = [p for p in re.split(r"[\s,;/]+", raw) if p]
+        vals = []
+        for part in parts:
+            toks = _TOKEN_RE.findall(part)
+            if "".join(toks) != part:
+                raise GeometryError(f"비틀림 패턴을 읽을 수 없습니다: {text!r} — T · G · G' 또는 각도(°)를 쓰세요")
+            vals += [TORSION_TOKENS[t] if t in TORSION_TOKENS else float(t) for t in toks]
+    if not vals or len(vals) > 64:
+        raise GeometryError("비틀림 패턴은 1~64개 값이어야 합니다")
+    out = []
+    for v in vals:
+        if not -360.0 <= v <= 360.0:
+            raise GeometryError(f"비틀림각 {v}° 는 −360~360° 범위여야 합니다")
+        w = ((v + 180.0) % 360.0) - 180.0
+        out.append(180.0 if w == -180.0 else w)
+    return out
+
+
+def backbone_path(mol) -> list[int]:
+    """주사슬 원자 번호 — 고리·할로젠·카보닐/나이트릴 탄소·곁가지 말단 헤테로원자를 뺀
+    원자들 중 가장 긴 사슬. 비닐 올리고머면 C1…C2n, PEO 면 C–C–O 반복이 잡힌다."""
+    heavy_ok = {"C", "N", "O", "S", "Si"}
+    cand = set()
+    for a in mol.GetAtoms():
+        if a.GetSymbol() not in heavy_ok or a.IsInRing():
+            continue
+        # C=O · C≡N · C=S 처럼 헤테로원자와 다중결합한 탄소(곁가지 작용기)는 주사슬이 아니다
+        if any(b.GetBondTypeAsDouble() > 1.0 and b.GetOtherAtom(a).GetSymbol() != "C"
+               for b in a.GetBonds()):
+            continue
+        cand.add(a.GetIdx())
+    nbr = {i: [n.GetIdx() for n in mol.GetAtomWithIdx(i).GetNeighbors() if n.GetIdx() in cand] for i in cand}
+    # 곁가지 끝의 헤테로원자(–OH, 에스터 O 등)를 반복해서 걷어 낸다
+    changed = True
+    while changed:
+        changed = False
+        for i in list(cand):
+            if mol.GetAtomWithIdx(i).GetSymbol() != "C" and len([n for n in nbr[i] if n in cand]) <= 1:
+                cand.discard(i)
+                changed = True
+    nbr = {i: [n for n in nbr[i] if n in cand] for i in cand}
+
+    def far(start):
+        # 고리 없는 부분 그래프(숲)에서 BFS — 가장 먼 원자와 경로
+        prev, order, dist = {start: None}, [start], {start: 0}
+        for u in order:
+            for v in sorted(nbr[u]):
+                if v not in dist:
+                    dist[v] = dist[u] + 1
+                    prev[v] = u
+                    order.append(v)
+        end = max(order, key=lambda k: (dist[k], -k))
+        path = [end]
+        while prev[path[-1]] is not None:
+            path.append(prev[path[-1]])
+        return path
+
+    best, seen = [], set()
+    for i in sorted(cand):
+        if i in seen:
+            continue
+        p1 = far(i)
+        seen.update(p1)
+        p2 = far(p1[0])
+        seen.update(p2)
+        if len(p2) > len(best):
+            best = p2
+    best = best[::-1] if best and best[0] > best[-1] else best
+    return best
+
+
+def build_torsion_start(smiles: str, pattern="T", seed: int = 42):
+    """주사슬 비틀림각을 패턴대로 맞춘 시작 구조 — 임베딩 → 비틀림 설정 → 비틀림 고정 역장 이완.
+
+    Returns: atoms, info {backbone, torsions:[{atoms, target, value}], forcefield, ff_energy}
+             주사슬 비틀림이 없으면(원자 4개 미만) torsions 가 빈 목록이다.
+    """
+    targets = parse_torsion_pattern(pattern)
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    mol = Chem.AddHs(mol)
+    path = backbone_path(mol)
+    quads = [tuple(path[i:i + 4]) for i in range(max(0, len(path) - 3))]
+    params = AllChem.ETKDGv3()
+    params.randomSeed = seed
+    if AllChem.EmbedMolecule(mol, params) != 0:
+        params.useRandomCoords = True
+        if AllChem.EmbedMolecule(mol, params) != 0:
+            raise GeometryError(f"3D 임베딩 실패: {smiles!r}")
+    conf = mol.GetConformer()
+    want = [(q, targets[k % len(targets)]) for k, q in enumerate(quads)]
+    for q, deg in want:
+        rdMolTransforms.SetDihedralDeg(conf, *q, deg)
+    forcefield, energy = "MMFF94", None
+    props = AllChem.MMFFGetMoleculeProperties(mol)
+    ff = AllChem.MMFFGetMoleculeForceField(mol, props) if props is not None else None
+    if ff is None:
+        forcefield = "UFF"
+        ff = AllChem.UFFGetMoleculeForceField(mol)
+    for q, deg in want:
+        lo, hi = deg - 0.5, deg + 0.5
+        if forcefield == "MMFF94":
+            ff.MMFFAddTorsionConstraint(*q, False, lo, hi, 1.0e4)
+        else:
+            ff.UFFAddTorsionConstraint(*q, False, lo, hi, 1.0e4)
+    ff.Initialize()
+    ff.Minimize(maxIts=5000)
+    energy = float(ff.CalcEnergy())
+    atoms = [(a.GetSymbol(), *conf.GetAtomPosition(a.GetIdx())) for a in mol.GetAtoms()]
+    tors = [{"atoms": list(q), "target": deg,
+             "value": round(rdMolTransforms.GetDihedralDeg(conf, *q), 1)} for q, deg in want]
+    return atoms, {"backbone": path, "backbone_elements": [mol.GetAtomWithIdx(i).GetSymbol() for i in path],
+                   "torsions": tors, "forcefield": forcefield, "ff_energy": energy}
+
+
+def dihedral_deg(atoms, quad) -> float:
+    """좌표 목록에서 비틀림각(°) — 최적화 뒤 시작 구조가 유지됐는지 확인용."""
+    p = [np.array(atoms[i][1:4], float) for i in quad]
+    b0, b1, b2 = p[0] - p[1], p[2] - p[1], p[3] - p[2]
+    b1 = b1 / np.linalg.norm(b1)
+    v, w = b0 - np.dot(b0, b1) * b1, b2 - np.dot(b2, b1) * b1
+    return float(np.degrees(np.arctan2(np.dot(np.cross(b1, v), w), np.dot(v, w))))
 
 
 def oligomerize(smiles: str, n_units: int) -> str:

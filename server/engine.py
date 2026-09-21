@@ -19,6 +19,7 @@
 
 import json
 import math
+import os
 import time
 import traceback
 
@@ -39,7 +40,8 @@ from . import presets
 from . import protocol as protocol_mod
 from . import store
 from . import thermo as thermo_mod
-from .geometry import (smiles_to_conformers, build_cluster,
+from .geometry import (smiles_to_conformers, build_cluster, build_torsion_start, dihedral_deg,
+                       parse_torsion_pattern,
                        build_cluster_from_atoms, atoms_to_xyz_block)
 
 HARTREE2KJ = 2625.4996
@@ -126,6 +128,17 @@ def _resolve_params(settings):
     # 민감도를 낼 conformer 는 DFT 재순위 후보 안에서 고르므로 재순위 수가 그만큼은 돼야 한다
     n_dft_rank = max(acc["n_dft_rank"], conf_sens) if conf_sens else acc["n_dft_rank"]
     # Li⁺ 상호작용 모델 (v2.0 P0-6) — bare: 고립 Li⁺ 결합, competition: 용매 경쟁
+    # 시작 구조 — auto: conformer 탐색 최저 구조 / all-trans · pattern: 주사슬 비틀림을 정해 만든 구조
+    start_mode = exp.get("startStructure") or "auto"
+    if start_mode not in ("auto", "all-trans", "pattern"):
+        raise ValueError(f"알 수 없는 시작 구조: {start_mode}")
+    if start_mode == "pattern" and not (exp.get("torsionPattern") or "").strip():
+        raise ValueError("시작 구조 «비틀림 패턴»에는 패턴(예: T G T G')이 필요합니다")
+    torsion_pattern = (parse_torsion_pattern(exp["torsionPattern"]) if start_mode == "pattern"
+                       else [180.0] if start_mode == "all-trans" else None)
+    representative = exp.get("representative") or ("start" if start_mode != "auto" else "lowest")
+    if representative not in ("start", "lowest"):
+        raise ValueError(f"알 수 없는 대표값 기준: {representative}")
     li_model = exp.get("liModel") or acc.get("li_model", "bare")
     if li_model not in licomp.MODELS:
         raise ValueError(f"알 수 없는 Li⁺ 모델: {li_model}")
@@ -133,6 +146,12 @@ def _resolve_params(settings):
         "li_model": li_model,
         "li_coordination": int(exp.get("liCoordination") or licomp.DEFAULT_COORDINATION),
         "li_max_sites": int(exp.get("liMaxSites") or acc.get("li_max_sites", 1)),
+        "start_mode": start_mode,
+        "torsion_pattern": torsion_pattern,
+        "torsion_pattern_text": (exp.get("torsionPattern") or "").strip() if start_mode == "pattern"
+                                else ("T" if start_mode == "all-trans" else None),
+        "representative": representative,
+        "fix_torsions": bool(exp.get("fixBackboneTorsions")) and start_mode != "auto",
         "n_conf": exp.get("nConformers") or acc["n_conf"],
         "n_dft_rank": n_dft_rank,
         "conf_sens": conf_sens,
@@ -486,7 +505,18 @@ def _freeze_solvent_from(mf_ion, dm_neutral):
     sv.frozen = True
 
 
-def _optimize_geometry(mf, log, label="", max_steps=100):
+def _constraints_file(torsions):
+    """geomeTRIC 제약 파일 — 비틀림각 고정 ($set dihedral, 원자 번호는 1부터)."""
+    import tempfile
+    lines = ["$set"] + [f"dihedral {q[0] + 1} {q[1] + 1} {q[2] + 1} {q[3] + 1} {deg:.2f}"
+                        for q, deg in torsions]
+    fd = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+    fd.write("\n".join(lines) + "\n")
+    fd.close()
+    return fd.name
+
+
+def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None):
     """DFT 기체상 구조 최적화. geomeTRIC → pyberny 순으로 시도.
 
     optimize() 는 수렴 여부를 버리고 구조만 돌려준다 — 최대 스텝에서 멈춰도
@@ -501,10 +531,24 @@ def _optimize_geometry(mf, log, label="", max_steps=100):
     try:
         try:
             from pyscf.geomopt.geometric_solver import kernel as geo_kernel
-            log(f"구조 최적화 시작{label} (geomeTRIC)")
-            converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps)
+            if torsions:
+                cfile = _constraints_file(torsions)
+                log(f"구조 최적화 시작{label} (geomeTRIC · 주사슬 비틀림 {len(torsions)}개 고정)")
+                try:
+                    converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps, constraints=cfile)
+                finally:
+                    try:
+                        os.unlink(cfile)
+                    except OSError:
+                        pass
+            else:
+                log(f"구조 최적화 시작{label} (geomeTRIC)")
+                converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps)
         except ImportError:
             from pyscf.geomopt.berny_solver import kernel as berny_kernel
+            if torsions:
+                log(f"주사슬 비틀림 고정은 geomeTRIC 이 있어야 합니다 — 이 서버에는 없어 고정 없이 "
+                    f"최적화합니다{label}")
             log(f"구조 최적화 시작{label} (pyberny)")
             converged, mol_opt = berny_kernel(work, callback=cb, maxsteps=max_steps)
     except RuntimeError as exc:
@@ -538,7 +582,11 @@ def _optimize_state(atoms, params, charge, multiplicity, log, label="", solvent_
     """구조 최적화 후 좌표를 반환. solvent_key가 있으면 용매장(SMD) 안에서 최적화한다."""
     mol = _build_mol(atoms, params["basis_opt"], charge, multiplicity)
     mf = _make_mf(mol, params["xc"], params["disp"], solvent_key, params["scf_tol"])
-    mol_opt = _optimize_geometry(mf, log, label, max_steps=params.get("opt_max_steps", 100))
+    # 시작 구조의 비틀림 고정 — 같은 분자(원자 구성·순서가 같은 중성·이온 구조)에만 건다
+    tc = params.get("torsion_constraints")
+    torsions = tc["torsions"] if tc and [a[0] for a in atoms] == tc["symbols"] else None
+    mol_opt = _optimize_geometry(mf, log, label, max_steps=params.get("opt_max_steps", 100),
+                                 torsions=torsions)
     return _mol_to_atoms(mol_opt)
 
 
@@ -992,6 +1040,7 @@ def run_job(job, update, is_cancelled=lambda: False):
             f"{m['count']}× {m.get('name') or m['smiles']}"
             for m in (settings.get("explicitMolecules") or []))
         fragments = None
+        rep_idx = 0   # 대표 conformer 의 재순위 번호 (시작 구조를 대표로 하면 그 번호)
 
         # 업로드된 3D 구조 — 초기 구조로 쓰고 conformer 탐색을 건너뛴다.
         # «구조 재탐색»이 켜져 있으면 좌표를 버리고 기존 경로로 돌아간다.
@@ -1023,6 +1072,12 @@ def run_job(job, update, is_cancelled=lambda: False):
             if explicit and params["redox_adiabatic"]:
                 params["redox_adiabatic"] = False
             log(f"저장된 구조({len(atoms)}원자)를 그대로 씁니다 — 구조 생성·최적화 생략")
+            st_ck = (geom_info or {}).get("start_structure")
+            if st_ck and st_ck.get("fix_torsions"):
+                # 이어서 할 이온 재최적화에도 같은 비틀림 고정을 건다
+                params["torsion_constraints"] = {
+                    "symbols": [a[0] for a in atoms],
+                    "torsions": [(tuple(t["atoms"]), t["target"]) for t in st_ck["torsions"]]}
         elif explicit:
             # 1') 명시적 주변 분자 클러스터 생성 (cluster-continuum)
             stage("클러스터 생성 (명시적 주변 분자 배치)", 5)
@@ -1048,6 +1103,8 @@ def run_job(job, update, is_cancelled=lambda: False):
         elif user_atoms:
             # 1'') 사용자 제공 3D 구조 — conformer 탐색 생략, 그 좌표에서 출발
             stage("사용자 제공 3D 구조 사용", 3)
+            if params["start_mode"] != "auto":
+                log("업로드 3D 구조가 있어 «시작 구조» 설정(비틀림 지정)은 쓰지 않습니다 — 업로드 좌표가 시작 구조입니다")
             atoms = user_atoms
             geom_info = {"n_conformers": 1, "forcefield": "사용자 제공",
                          "ff_energy": None}
@@ -1061,11 +1118,51 @@ def run_job(job, update, is_cancelled=lambda: False):
                    " (이 프리셋은 DFT 최적화도 없어 업로드 좌표 그대로 단일점을 계산합니다)"))
         else:
             # 1) conformer 탐색 (+ DFT 재순위화)
-            stage("구조 생성 (conformer 탐색)", 3)
-            candidates, geom_info = smiles_to_conformers(
-                smiles, n_conformers=params["n_conf"], top_k=params["n_dft_rank"])
-            log(f"conformer {geom_info['n_conformers']}개 생성, {geom_info['forcefield']} "
-                f"상위 {len(candidates)}개 후보 선택")
+            start = None
+            if params["start_mode"] != "auto":
+                # 1-0) 시작 구조 — 주사슬 비틀림을 패턴대로 맞춘 구조를 만들어 후보 맨 앞에 둔다
+                stage("시작 구조 생성 (주사슬 비틀림 지정)", 2)
+                s_atoms, s_info = build_torsion_start(smiles, params["torsion_pattern"])
+                if not s_info["torsions"]:
+                    log("주사슬 원자가 4개 미만이라 비틀림이 없습니다 — 시작 구조 설정 없이 "
+                        "conformer 탐색으로 진행합니다")
+                    params["start_mode"] = "auto"
+                    params["representative"] = "lowest"
+                    params["fix_torsions"] = False
+                else:
+                    start = (s_atoms, s_info)
+                    label_ = ("all-trans" if params["start_mode"] == "all-trans"
+                              else f"비틀림 패턴 «{params['torsion_pattern_text']}»")
+                    log(f"시작 구조 {label_} — 주사슬 {''.join(s_info['backbone_elements'])} "
+                        f"{len(s_info['backbone'])}원자 · 비틀림 {len(s_info['torsions'])}개 "
+                        f"({', '.join(f'{t['value']:.0f}°' for t in s_info['torsions'])}), "
+                        f"{s_info['forcefield']} 비틀림 고정 이완")
+                    if params["fix_torsions"]:
+                        params["torsion_constraints"] = {
+                            "symbols": [a[0] for a in s_atoms],
+                            "torsions": [(tuple(t["atoms"]), t["target"]) for t in s_info["torsions"]]}
+                    if params["representative"] == "start" and params["ensemble"]:
+                        params["ensemble"] = False
+                        log("대표값을 시작 구조로 정해 Boltzmann 앙상블 가중은 하지 않습니다 "
+                            "(다른 conformer 는 민감도로만 씁니다)")
+            n_other = params["n_dft_rank"] - (1 if start else 0)
+            if start and n_other <= 0:
+                candidates, geom_info = [], {"n_conformers": 1, "forcefield": start[1]["forcefield"],
+                                             "ff_energy": start[1]["ff_energy"]}
+                log("시작 구조 하나로 계산합니다 (conformer 탐색 생략 — 비교할 다른 conformer 가 필요 없음)")
+            else:
+                stage("구조 생성 (conformer 탐색)", 3)
+                candidates, geom_info = smiles_to_conformers(
+                    smiles, n_conformers=params["n_conf"], top_k=max(1, n_other))
+                log(f"conformer {geom_info['n_conformers']}개 생성, {geom_info['forcefield']} "
+                    f"상위 {len(candidates)}개 후보 선택")
+            if start:
+                candidates = [(start[0], start[1]["ff_energy"])] + list(candidates)
+                geom_info = dict(geom_info, start_structure={
+                    "mode": params["start_mode"], "pattern": params["torsion_pattern_text"],
+                    "backbone_elements": start[1]["backbone_elements"],
+                    "torsions": start[1]["torsions"], "representative": params["representative"],
+                    "fix_torsions": params["fix_torsions"]})
             if len(candidates) > 1:
                 stage("conformer DFT 재순위화", 8)
                 ranked = []
@@ -1081,6 +1178,16 @@ def run_job(job, update, is_cancelled=lambda: False):
             else:
                 ranked = [(0.0, candidates[0][0])]
             atoms = ranked[0][1]
+            if start:
+                start_idx = next(i for i, (_, at) in enumerate(ranked) if at is start[0])
+                rel_start = (ranked[start_idx][0] - ranked[0][0]) * HARTREE2KCAL
+                geom_info["start_structure"]["rel_e_kcal"] = round(rel_start, 2)
+                if len(ranked) > 1:
+                    log(f"시작 구조는 가장 안정한 conformer 보다 {rel_start:.2f} kcal/mol "
+                        + ("높습니다" if rel_start > 0.005 else "— 가장 안정한 구조입니다"))
+                if params["representative"] == "start":
+                    atoms = start[0]
+                    rep_idx = start_idx
             # Boltzmann 가중치 (설정 온도, 재순위 전자에너지 기준)
             kT_kcal = 1.98720425e-3 * temperature
             e_min = ranked[0][0]
@@ -1140,7 +1247,7 @@ def run_job(job, update, is_cancelled=lambda: False):
         # conformer 민감도(P0-5)가 재사용할 «재순위 번호 → 최종 단일점 결과» 캐시와
         # 지배 conformer 의 재순위 번호. 앙상블 경로에서는 여기서 채워진다.
         sp_cache = {}
-        dominant_idx = 0
+        dominant_idx = rep_idx
         if restored:
             stage("체크포인트 복원 — 단일점 재계산", 20)
             ensemble_avg = ckpt.get("ensemble_avg")
@@ -1184,6 +1291,16 @@ def run_job(job, update, is_cancelled=lambda: False):
             stage("DFT 구조 최적화" if params["do_opt"] else "단일점 SCF (환경 반영)", 18)
             atoms, mol, mf, e_total, homo, lumo, dipole = final_singlepoint(
                 atoms, f"최종({solvent_key or 'vacuum'})")
+            st_info = (geom_info or {}).get("start_structure")
+            if st_info and params["representative"] == "start" and params["do_opt"]:
+                # 최적화 뒤에도 시작 구조의 사슬 모양이 남았는지 — 비틀림각을 다시 잰다
+                finals = [round(dihedral_deg(atoms, t["atoms"]), 1) for t in st_info["torsions"]]
+                dev = max(abs(((f - t["target"] + 180) % 360) - 180)
+                          for f, t in zip(finals, st_info["torsions"]))
+                st_info["final_torsions"] = finals
+                st_info["max_deviation_deg"] = round(dev, 1)
+                log(f"최적화 후 주사슬 비틀림 {', '.join(f'{f:.0f}°' for f in finals)} — "
+                    f"시작 구조에서 최대 {dev:.0f}° 벗어남")
 
         # 4) 기술자 추출
         stage("기술자 추출", 40)

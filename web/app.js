@@ -180,6 +180,11 @@ function dismissIntroOverlay() {
 
 async function init() {
   PRESETS = await (await fetch("/api/presets")).json();
+  // 시작 구조 설정은 이를 아는 서버에서만 보인다 — 예전 서버는 이 값을 조용히 무시한다
+  if (!(PRESETS.features || []).includes("startStructure")) {
+    const f = $("start-structure")?.closest(".field");
+    if (f) { f.hidden = true; $("start-structure").value = ""; syncStartStructure(); }
+  }
 
   buildMaterialGrid();
 
@@ -331,6 +336,7 @@ async function submit() {
         bdeRelaxFragments: $("bde-relax").value === "" ? null : $("bde-relax").value === "true",
         bdeThermalCorrection: $("bde-thermal").value === "" ? null : $("bde-thermal").value === "true",
         freqScale: $("freq-scale").value ? parseFloat($("freq-scale").value) : null,
+        ...startStructureSettings(),
       },
     },
   };
@@ -426,6 +432,32 @@ async function rbRenderTrash() {
     rbRenderTrash();
   }));
 }
+
+/* ── 시작 구조 (전문가 설정) ─────────────────────────────────────────── */
+function startStructureSettings() {
+  const mode = $("start-structure")?.value || "";
+  if (!mode) return {startStructure: null, torsionPattern: null, representative: null, fixBackboneTorsions: null};
+  return {startStructure: mode,
+          torsionPattern: mode === "pattern" ? ($("torsion-pattern").value.trim() || null) : null,
+          representative: $("start-rep").value || "start",
+          fixBackboneTorsions: $("fix-torsions").value === "true"};
+}
+function syncStartStructure() {
+  const mode = $("start-structure")?.value || "";
+  if (!$("start-structure")) return;
+  $("torsion-pattern-wrap").hidden = mode !== "pattern";
+  $("start-rep-wrap").hidden = !mode;
+  $("fix-torsions-wrap").hidden = !mode;
+}
+window.rbSyncStartStructure = syncStartStructure;
+(function wireStartStructure() {
+  const sel = $("start-structure");
+  if (!sel) return;
+  sel.addEventListener("change", syncStartStructure);
+  $("torsion-preset").addEventListener("change", e => { if (e.target.value) $("torsion-pattern").value = e.target.value; });
+  $("torsion-pattern").addEventListener("input", () => { $("torsion-preset").value = ""; });
+  syncStartStructure();
+})();
 
 async function refreshJobs() {
   const res = await fetch("/api/jobs");
