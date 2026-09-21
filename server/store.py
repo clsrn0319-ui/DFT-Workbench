@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -158,20 +159,130 @@ def delete_grids(job_id: str) -> None:
         pass
 
 
+def _all_job_files(job_id: str) -> list:
+    """작업에 딸린 파일 전부 + 체크포인트 — 휴지통 이동·영구 삭제의 대상."""
+    return job_files(job_id) + [DATA_DIR / "checkpoints" / f"{safe_id(job_id)}.json"]
+
+
 def delete_job(job_id: str) -> bool:
+    """즉시 영구 삭제 (내부·테스트용). 화면의 «삭제»는 trash_job 을 쓴다."""
     with _lock:
         _load()
         if job_id in _jobs:
             del _jobs[job_id]
             _persist()
             # 작업을 지우면 로그·체크포인트도 함께 지운다 — 남겨 두면 디스크만 먹는다
-            for p in job_files(job_id) + [DATA_DIR / "checkpoints" / f"{safe_id(job_id)}.json"]:
+            for p in _all_job_files(job_id):
                 try:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
             return True
         return False
+
+
+# ── 휴지통 ─────────────────────────────────────────────────────────────
+# 결과와 계산 모니터 기록은 같은 작업 레코드(jobs.json)와 그 파일(로그·이벤트·궤적·격자·체크포인트)
+# 에서 나온다. 삭제하면 레코드는 trash.json 으로, 파일은 data/trash/<작업>/ 로 옮겨
+# 결과 목록·모니터·비교·라이브러리 계산 이력에서 함께 사라지고, 되살리면 그대로 돌아온다.
+ACTIVE_STATUSES = ("QUEUED", "RUNNING")
+
+
+class JobActiveError(Exception):
+    """진행 중인 작업은 휴지통으로 옮길 수 없다 — 먼저 취소."""
+
+
+def _trash_dir() -> Path:
+    return DATA_DIR / "trash"
+
+
+def _trash_file() -> Path:
+    return DATA_DIR / "trash.json"
+
+
+def _load_trash() -> list:
+    if not _trash_file().exists():
+        return []
+    try:
+        return json.loads(_trash_file().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_trash(items: list) -> None:
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = _trash_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(_trash_file())
+
+
+def trash_job(job_id: str) -> bool:
+    """작업을 휴지통으로 옮긴다. 없으면 False, 진행 중이면 JobActiveError."""
+    with _lock:
+        _load()
+        job = _jobs.get(job_id)
+        if job is None:
+            return False
+        if job.get("status") in ACTIVE_STATUSES:
+            raise JobActiveError(job_id)
+        folder = _trash_dir() / safe_id(job_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        files = []
+        for src in _all_job_files(job_id):
+            if src.exists():
+                # 원래 자리 — 데이터 폴더 기준 상대 경로 (서버를 옮겨도 되살릴 수 있게), 밖이면 절대 경로
+                try:
+                    rel = src.relative_to(DATA_DIR).as_posix()
+                except ValueError:
+                    rel = str(src)
+                dst = folder / (src.parent.name + "__" + src.name)
+                shutil.move(str(src), str(dst))
+                files.append({"path": rel, "name": dst.name, "bytes": dst.stat().st_size})
+        items = [t for t in _load_trash() if t["job"]["id"] != job_id]
+        items.insert(0, {"job": job, "deletedAt": time.time(), "files": files})
+        _save_trash(items)
+        del _jobs[job_id]
+        _persist()
+        return True
+
+
+def list_trash() -> list:
+    with _lock:
+        return _load_trash()
+
+
+def restore_job(job_id: str) -> bool:
+    """휴지통의 작업을 되살린다 — 레코드와 파일을 원래 자리로."""
+    with _lock:
+        _load()
+        items = _load_trash()
+        item = next((t for t in items if t["job"]["id"] == job_id), None)
+        if item is None:
+            return False
+        folder = _trash_dir() / safe_id(job_id)
+        for f in item.get("files", []):
+            src, dst = folder / f["name"], (DATA_DIR / f["path"]) if not Path(f["path"]).is_absolute() else Path(f["path"])
+            if src.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+        shutil.rmtree(folder, ignore_errors=True)
+        job = item["job"]
+        job.setdefault("logs", []).append(time.strftime("%H:%M:%S") + " 휴지통에서 되살림")
+        _jobs[job_id] = job
+        _persist()
+        _save_trash([t for t in items if t["job"]["id"] != job_id])
+        return True
+
+
+def purge_trash(job_id: str) -> bool:
+    """휴지통의 작업을 영구 삭제한다 (되돌릴 수 없음)."""
+    with _lock:
+        items = _load_trash()
+        if not any(t["job"]["id"] == job_id for t in items):
+            return False
+        shutil.rmtree(_trash_dir() / safe_id(job_id), ignore_errors=True)
+        _save_trash([t for t in items if t["job"]["id"] != job_id])
+        return True
 
 
 def request_cancel(job_id: str) -> bool:

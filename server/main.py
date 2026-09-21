@@ -1544,6 +1544,7 @@ def get_job_log(job_id: str, tail: int = 400, download: bool = False,
     job = _job_or_404(job_id)
     path = store.raw_log_path(job_id)
     if not path.exists():
+        from . import engine   # PySCF 를 끌어오므로 필요할 때만
         level = (job["settings"].get("expert") or {}).get("logLevel") or engine.DEFAULT_LOG_LEVEL
         return {"exists": False, "level": level,
                 "note": ("원본 로그가 없습니다 — 전문가 설정의 «원본 로그 수준»이 "
@@ -1709,9 +1710,58 @@ def cancel_job(job_id: str, _: bool = Depends(require_login)):
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str, _: bool = Depends(require_login)):
+    """삭제 = 휴지통으로 이동 (결과·계산 모니터 기록·로그·격자 함께). 되살리기: /api/trash/{id}/restore"""
     _job_or_404(job_id)
-    if not store.delete_job(job_id):
-        raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    try:
+        if not store.trash_job(job_id):
+            raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    except store.JobActiveError:
+        raise HTTPException(409, "진행 중인 작업은 삭제할 수 없습니다 — 먼저 취소하세요.")
+    return {"ok": True, "trashed": True}
+
+
+class TrashMoveRequest(BaseModel):
+    ids: list[str] = Field(..., min_length=1, max_length=2000)
+
+
+@app.post("/api/trash/move")
+def trash_move(req: TrashMoveRequest, _: bool = Depends(require_login)):
+    """여러 작업을 한 번에 휴지통으로. 진행 중이거나 없는 작업은 건너뛴다."""
+    moved, skipped = [], []
+    for jid in req.ids:
+        try:
+            (moved if store.trash_job(jid) else skipped).append(jid)
+        except store.JobActiveError:
+            skipped.append(jid)
+    return {"moved": moved, "skipped": skipped}
+
+
+@app.get("/api/trash")
+def trash_list(_: bool = Depends(require_login)):
+    out = []
+    for t in store.list_trash():
+        j = t["job"]
+        cond = ((j.get("result") or {}).get("conditions") or {})
+        out.append({"id": j["id"], "name": (j.get("material") or {}).get("name"), "status": j.get("status"),
+                    "method": cond.get("method"), "solvent": cond.get("solvent_model"),
+                    "createdAt": j.get("createdAt"), "finishedAt": j.get("finishedAt"),
+                    "deletedAt": t.get("deletedAt"), "bytes": sum(f.get("bytes", 0) for f in t.get("files", []))})
+    return {"items": out}
+
+
+@app.post("/api/trash/{job_id}/restore")
+def trash_restore(job_id: str, _: bool = Depends(require_login)):
+    if store.get_job(job_id):
+        raise HTTPException(409, "같은 ID 의 작업이 이미 있습니다.")
+    if not store.restore_job(job_id):
+        raise HTTPException(404, "휴지통에 없는 작업입니다.")
+    return {"ok": True}
+
+
+@app.delete("/api/trash/{job_id}")
+def trash_purge(job_id: str, _: bool = Depends(require_login)):
+    if not store.purge_trash(job_id):
+        raise HTTPException(404, "휴지통에 없는 작업입니다.")
     return {"ok": True}
 
 

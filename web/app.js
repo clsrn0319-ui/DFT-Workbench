@@ -356,6 +356,77 @@ async function submit() {
 const badgeClass = {QUEUED: "queued", RUNNING: "running", PUBLISHED: "published", FAILED: "failed"};
 const badgeLabel = {QUEUED: "대기", RUNNING: "실행", PUBLISHED: "PUBLISHED", FAILED: "실패"};
 
+/* ── 휴지통 ──────────────────────────────────────────────────────────
+   삭제하면 결과와 계산 모니터 기록(로그·이벤트·궤적·격자·체크포인트)을 함께 휴지통으로 옮긴다.
+   진행 중인 작업은 먼저 취소해야 한다. 휴지통에서 되살리거나 영구 삭제한다. */
+async function rbTrashJobs(ids) {
+  ids = [...new Set(ids)];
+  // 휴지통을 모르는 예전 서버는 DELETE 가 곧 영구 삭제 — 서버를 다시 켤 때까지 막는다
+  try { if (!(await fetch("/api/trash")).ok) throw 0; }
+  catch (e) { alert("서버가 아직 휴지통 기능을 지원하지 않습니다 — 서버를 다시 켠 뒤 삭제하세요. (지금 삭제하면 되살릴 수 없습니다)"); return; }
+  const jobs = ids.map(id => JOBS_CACHE.find(j => j.id === id)).filter(Boolean);
+  const active = jobs.filter(j => ["QUEUED", "RUNNING"].includes(j.status));
+  const names = jobs.slice(0, 3).map(j => `${j.material?.name || j.id}`).join(", ") + (jobs.length > 3 ? ` 외 ${jobs.length - 3}건` : "");
+  if (active.length === ids.length) { alert("진행 중인 작업은 삭제할 수 없습니다 — 먼저 취소하세요."); return; }
+  const msg = `${names}\n\n${ids.length - active.length}건의 결과와 계산 모니터 기록을 휴지통으로 옮깁니다.` +
+    (active.length ? `\n(진행 중인 ${active.length}건은 건너뜁니다)` : "") + "\n휴지통에서 언제든 되살릴 수 있습니다.";
+  if (!confirm(msg)) return;
+  let moved = [];
+  try {
+    if (ids.length === 1) {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(ids[0])}`, {method: "DELETE"});
+      if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || "삭제하지 못했습니다."); return; }
+      moved = ids;
+    } else {
+      const r = await fetch("/api/trash/move", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids})});
+      if (!r.ok) { alert("삭제하지 못했습니다."); return; }
+      moved = (await r.json()).moved;
+    }
+  } catch (e) { alert("서버에 연결할 수 없습니다."); return; }
+  moved.forEach(id => { EXPORT_SEL.delete(id); COMPARE_SEL.delete(id); });
+  if (moved.includes(SELECTED_RESULT)) { SELECTED_RESULT = null; const rc = $("result-card"); if (rc) rc.style.display = "none"; }
+  if (typeof MON_SEL !== "undefined" && moved.includes(MON_SEL)) { MON_SEL = null; const md = $("mon-detail"); if (md) md.style.display = "none"; }
+  if (window.rbToast) window.rbToast(`${moved.length}건을 휴지통으로 옮겼습니다 — «DFT 계산 결과» 아래 휴지통에서 되살릴 수 있습니다`);
+  await refreshJobs();
+  if (document.getElementById("rb-real")?.classList.contains("mode-monitor") && typeof monRenderList === "function") monRenderList();
+  rbRenderTrash();
+}
+window.rbTrashJobs = rbTrashJobs;
+
+async function rbRenderTrash() {
+  const box = $("trash-list"), cnt = $("trash-count");
+  if (!box || window.__RB_SNAPSHOT__) return;
+  let items = [];
+  try { const r = await fetch("/api/trash"); if (!r.ok) return; items = (await r.json()).items || []; } catch (e) { return; }
+  if (cnt) cnt.textContent = items.length ? `${items.length}건` : "비어 있음";
+  const card = $("trash-card");
+  if (!card || !card.open) return;
+  const when = t => t ? new Date(t * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "—";
+  const size = b => b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : b > 1024 ? Math.round(b / 1024) + " KB" : (b || 0) + " B";
+  box.className = items.length ? "" : "empty small";
+  box.innerHTML = items.length ? items.map(t => `<div class="trash-row">
+      <div class="nm"><b title="${esc(t.name || t.id)}">${esc(t.name || t.id)}</b>
+        <span class="small muted mono">${esc(t.id)}</span> <span class="small muted">· ${esc(t.status || "")}${t.method ? " · " + esc(t.method) : ""}${t.solvent ? " · " + esc(t.solvent) : ""}</span></div>
+      <span class="small muted" title="지운 시각">삭제 ${esc(when(t.deletedAt))} · ${esc(size(t.bytes))}</span>
+      <span class="acts"><button class="btn sm" type="button" data-trash-restore="${esc(t.id)}">되살리기</button>
+        <button class="btn ghost danger sm" type="button" data-trash-purge="${esc(t.id)}" title="되돌릴 수 없습니다">영구 삭제</button></span></div>`).join("")
+    : "휴지통이 비어 있습니다.";
+  box.querySelectorAll("[data-trash-restore]").forEach(b => b.addEventListener("click", async () => {
+    const r = await fetch(`/api/trash/${encodeURIComponent(b.dataset.trashRestore)}/restore`, {method: "POST"});
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || "되살리지 못했습니다."); return; }
+    if (window.rbToast) window.rbToast("되살렸습니다 — 결과 목록과 계산 모니터에 다시 나타납니다");
+    await refreshJobs(); rbRenderTrash();
+  }));
+  box.querySelectorAll("[data-trash-purge]").forEach(b => b.addEventListener("click", async () => {
+    const t = items.find(x => x.id === b.dataset.trashPurge);
+    if (!confirm(`${t?.name || t?.id} (${t?.id})\n\n휴지통에서 영구 삭제합니다. 결과·로그·계산 모니터 기록을 되돌릴 수 없습니다.`)) return;
+    const r = await fetch(`/api/trash/${encodeURIComponent(b.dataset.trashPurge)}`, {method: "DELETE"});
+    if (!r.ok) { alert("삭제하지 못했습니다."); return; }
+    if (window.rbToast) window.rbToast("영구 삭제했습니다");
+    rbRenderTrash();
+  }));
+}
+
 async function refreshJobs() {
   const res = await fetch("/api/jobs");
   if (res.status === 401) { location.reload(); return; }  // 세션 만료 → 로그인 화면
@@ -460,8 +531,7 @@ function renderJobList(force = false) {
     fetch(`/api/jobs/${b.dataset.retry}/retry`, {method: "POST"}).then(refreshJobs)));
   list.querySelectorAll("[data-cancel]").forEach(b => b.addEventListener("click", () =>
     fetch(`/api/jobs/${b.dataset.cancel}/cancel`, {method: "POST"}).then(refreshJobs)));
-  list.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () =>
-    fetch(`/api/jobs/${b.dataset.del}`, {method: "DELETE"}).then(refreshJobs)));
+  list.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => rbTrashJobs([b.dataset.del])));
   updateSelCount();
 }
 
@@ -505,7 +575,7 @@ function jobRowHtml(job) {
       ${job.status === "FAILED" ? `<button class="btn ghost" data-retry="${esc(job.id)}">재시도</button>` : ""}
       ${["QUEUED", "RUNNING"].includes(job.status)
         ? `<button class="btn ghost danger" data-cancel="${esc(job.id)}">취소</button>`
-        : `<button class="btn ghost danger" data-del="${esc(job.id)}">삭제</button>`}
+        : `<button class="btn ghost danger" data-del="${esc(job.id)}" title="결과와 계산 모니터 기록을 휴지통으로">삭제</button>`}
     </div></div>`;
 }
 
@@ -527,6 +597,15 @@ function wireResultsControls() {
   on("export-json", () => dl("json"));
   on("export-html", () => dl("html"));
   on("result-close", () => { $("result-card").style.display = "none"; SELECTED_RESULT = null; });
+  on("result-del", () => { if (SELECTED_RESULT) rbTrashJobs([SELECTED_RESULT]); });
+  on("sel-del", () => {
+    if (!EXPORT_SEL.size) { if (window.rbToast) window.rbToast("작업 큐에서 지울 작업을 체크하세요"); return; }
+    rbTrashJobs([...EXPORT_SEL]);
+  });
+  const tc = $("trash-card");
+  if (tc && !tc.dataset.wired) { tc.dataset.wired = "1"; tc.addEventListener("toggle", () => { if (tc.open) rbRenderTrash(); }); }
+  if (window.__RB_SNAPSHOT__) ["result-del", "sel-del", "trash-card", "mon-del"].forEach(id => { const el = $(id); if (el) el.hidden = true; });
+  else rbRenderTrash();
   const slider = $("cmp-opacity");
   if (slider) slider.oninput = () => {
     CMP_OPACITY = parseFloat(slider.value);
@@ -4059,6 +4138,10 @@ function monWire() {
   $("mon-campaign").onchange = e => { MON_CAMPAIGN = e.target.value; monRenderList(); };
   $("mon-filter").onchange = () => monRenderList();
   $("mon-detail-close").onclick = () => { MON_SEL = null; $("mon-detail").style.display = "none"; monRenderList(); };
+  if ($("mon-del")) {
+    if (window.__RB_SNAPSHOT__) $("mon-del").hidden = true;
+    $("mon-del").onclick = () => { if (MON_SEL) rbTrashJobs([MON_SEL]); };
+  }
   $("mon-log-search-btn").onclick = () => monLogSearch();
   $("mon-log-search").addEventListener("keydown", e => { if (e.key === "Enter") monLogSearch(); });
   $("mon-log-tail").onclick = () => { MON_LOG.mode = "tail"; MON_LOG.follow = true; $("mon-log-follow").checked = true; monLoadLog(); };

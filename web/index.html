@@ -941,6 +941,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real .lb-lib.lb-stack>.lb-panel{position:static;max-height:none}
 @media (max-width:900px){#rb-real .lb-envrow{grid-template-columns:1fr}#rb-real .lb-basket{font-size:12px;padding:6px 10px;gap:6px}#rb-real .lb-basket .lb-bsolv{display:none}}
 #rb-real .cmp-cond{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#rb-real .cmp-cond select{max-width:min(620px,100%)}#rb-real .cmp-pick2{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(240px,1fr);gap:12px;margin-bottom:16px;align-items:start}#rb-real .cmp-tabs{display:flex;gap:4px;align-items:center;margin-bottom:6px}#rb-real .cmp-tabs button{border:1px solid var(--border);background:var(--surface);color:var(--text-2);border-radius:99px;padding:3px 12px;font-size:12.5px;cursor:pointer}#rb-real .cmp-tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}#rb-real .cmp-tabs .muted{margin-left:auto}#rb-real .cmp-list{max-height:340px;overflow:auto;border:1px solid var(--grid);border-radius:10px}#rb-real .cmp-row{display:flex;gap:8px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--grid);cursor:pointer;font-size:13px;min-width:0}#rb-real .cmp-row:last-child{border-bottom:none}#rb-real .cmp-row:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}#rb-real .cmp-row.on{background:color-mix(in srgb,var(--accent) 10%,transparent)}#rb-real .cmp-row:focus-visible,#rb-real .cmp-pt:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}#rb-real .cmp-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#rb-real .cmp-row .chip{flex:none;font-size:11px}#rb-real .cmp-dt{flex:none;color:var(--muted);font-size:11.5px;white-space:nowrap}#rb-real .cmp-no{flex:none;width:20px;height:20px;border-radius:6px;color:#fff;font-style:normal;font-size:11px;font-weight:700;display:grid;place-items:center}#rb-real .cmp-no.off{background:transparent;border:1.5px solid var(--border)}#rb-real .cmp-basket{border:2px dashed color-mix(in srgb,var(--accent) 40%,transparent);border-radius:12px;padding:10px;min-height:160px}#rb-real .cmp-bhead{display:flex;gap:8px;align-items:center;margin-bottom:8px}#rb-real .cmp-bhead .btn{margin-left:auto;padding:2px 10px;font-size:12px}#rb-real .cmp-bk{display:flex;gap:8px;align-items:center;padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--text-1) 4%,transparent);margin-bottom:5px;font-size:13px;min-width:0}#rb-real .cmp-x{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 4px}#rb-real .cmp-x:hover{color:var(--danger)}#rb-real .cmp-bempty{padding:18px 6px;text-align:center}#rb-real .cmp-plot{border:1px solid var(--grid);border-radius:10px;background:var(--surface)}#rb-real .cmp-plot svg{width:100%;height:auto;display:block}#rb-real .cmp-pt{cursor:pointer}@media (max-width:900px){#rb-real .cmp-pick2{grid-template-columns:1fr}}
+#rb-real .trash-row{display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--grid);font-size:13px;flex-wrap:wrap}#rb-real .trash-row:last-child{border-bottom:none}#rb-real .trash-row .nm{flex:1 1 220px;min-width:0}#rb-real .trash-row .nm b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#rb-real .trash-row .acts{display:flex;gap:6px;flex:none}#rb-real #trash-card>summary::-webkit-details-marker{display:none}
 @media (max-width:1200px){#rb-real .ws-work{grid-template-columns:1fr 1fr}#rb-real .ws-work>.ws-panel:first-child{grid-column:1/-1}}
 @media (max-width:820px){#rb-real .ws-work{grid-template-columns:1fr}}
 /* ── 계산 통합 토글 · 템플릿 · 설정 · 튜토리얼 · 토스트 ── */
@@ -1205,7 +1206,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         border:1px solid var(--grid);border-radius:10px"></div>
       <div id="result-card" style="flex:1;min-width:300px;display:none">
         <div class="card-head"><h2 id="result-title">결과 상세</h2>
-          <button class="btn ghost" id="result-close">닫기</button></div>
+          <div class="toolbar"><button class="btn ghost danger" id="result-del" type="button" title="이 결과와 계산 모니터 기록을 휴지통으로 옮깁니다">휴지통으로</button>
+          <button class="btn ghost" id="result-close">닫기</button></div></div>
         <div id="result-body"></div>
       </div>
     </div>
@@ -1220,10 +1222,17 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         <button class="btn" id="export-json" type="button">선택 JSON 내보내기</button>
         <button class="btn primary" id="export-html" type="button"
           title="서버 없이 열리는 결과 사본 한 파일 — 메일·구글 드라이브로 공유">HTML로 공유</button>
+        <button class="btn ghost danger" id="sel-del" type="button" title="체크한 작업을 휴지통으로 (진행 중인 작업은 건너뜀)">선택 삭제</button>
         <span class="muted small" id="sel-count"></span>
       </div></div>
     <div id="job-list" class="empty small">작업이 없습니다.</div>
   </div>
+
+  <details class="card" id="trash-card">
+    <summary class="card-head" style="cursor:pointer;list-style:none"><h2 style="margin:0">휴지통 <span class="muted small" id="trash-count" style="font-weight:400"></span></h2>
+      <span class="muted small">지운 결과·계산 모니터 기록 — 되살리면 목록·모니터·비교에 그대로 돌아옵니다</span></summary>
+    <div id="trash-list" class="empty small" style="margin-top:10px">휴지통이 비어 있습니다.</div>
+  </details>
 </div>
 
 <div id="rbv-lookup" class="rbv">
@@ -1740,6 +1749,7 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       <div class="toolbar">
         <a class="btn small ghost" id="mon-log-download" href="#" download>원본 로그 내려받기</a>
         <a class="btn small ghost" id="mon-traj-download" href="#" download style="display:none">최적화 궤적(XYZ)</a>
+        <button class="btn ghost danger" id="mon-del" type="button" title="이 작업의 결과와 계산 모니터 기록을 휴지통으로 옮깁니다">휴지통으로</button>
         <button class="btn ghost" id="mon-detail-close" type="button">닫기</button>
       </div></div>
     <div id="mon-detail-body"></div>
