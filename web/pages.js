@@ -153,7 +153,7 @@
       const libId = m.libraryId || (m.id ? "MOL-" + String(m.id).toUpperCase() : null);
       if (libId && window.rbLibSelectInCalc) { try { window.rbLibSelectInCalc([libId]); } catch (e) {} }
       else if (m.id && window.rbSelectMaterialByName) try { window.rbSelectMaterialByName(m.name); } catch (e) {}
-      if (!libId && m.smiles) { setVal("custom-smiles", m.smiles); setVal("custom-name", m.name || ""); }
+      if (!libId && m.smiles) { setVal("custom-smiles", m.smiles); setVal("custom-name", m.name || ""); document.getElementById("calc-custom")?.setAttribute("open", ""); }
       rbToast(`«${m.name || m.smiles}» 조건 ${n}개 항목을 채웠습니다 — 확인 후 «계산 제출»`);
     }, 200);
   };

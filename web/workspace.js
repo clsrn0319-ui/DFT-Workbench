@@ -181,7 +181,7 @@ function render3D(r, opts = {}) {
         const p = project(pos[0], pos[1], pos[2], W, H, scale);
         ctx.setLineDash([3, 2]); ctx.strokeStyle = kind === "min" ? "#2a78d6" : "#e34948"; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(p.sx, p.sy, 9, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = ctx.strokeStyle; ctx.font = "10px system-ui"; ctx.textAlign = "center";
+        ctx.fillStyle = ctx.strokeStyle; ctx.font = "10px 'Pretendard Variable', system-ui, sans-serif"; ctx.textAlign = "center";
         ctx.fillText(kind === "min" ? "MEP− (Li⁺ 배위)" : "MEP+", p.sx, p.sy - 12);
       }
     }
@@ -259,7 +259,7 @@ function render3D(r, opts = {}) {
       else if (A.length === 3) txt = `∠ ${vAngle(A[0], A[1], A[2]).toFixed(1)}°`;
       else txt = `이면각 ${vDihedral(A[0], A[1], A[2], A[3]).toFixed(1)}°`;
       const mid = m[Math.floor(m.length / 2)];
-      ctx.font = "600 12px system-ui"; ctx.textAlign = "center";
+      ctx.font = "600 12px 'Pretendard Variable', system-ui, sans-serif"; ctx.textAlign = "center";
       const tw = ctx.measureText(txt).width;
       ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillRect(mid.sx - tw / 2 - 5, mid.sy - 30, tw + 10, 18);
       ctx.fillStyle = "#b45309"; ctx.fillText(txt, mid.sx, mid.sy - 17);

@@ -1534,6 +1534,53 @@ function eswSection(jobs) {
 /* ================= 물질 비교 ================= */
 const COMPARE_SEL = new Set();
 
+// 비교 조건 = 계산식(범함수/기저) + 용매 환경. 같은 조건의 결과끼리만 비교한다.
+const CMP_COND_KEY = "rb-cmp-cond";
+function cmpCondKey(j) {
+  const c = (j.result && j.result.conditions) || {};
+  return `${c.method || "?"} ‖ ${c.solvent_model || "vacuum"}`;
+}
+window.rbCmpCondKey = cmpCondKey;
+const CMP_TAB_KEY = "rb-cmp-tab";
+const CMP_MAX = 8;          // 그래프 계열 색 8가지 — 번호·색이 겹치지 않게
+let CMP_Q = "";
+const CMP_CAT = {monomer: "모노머", polymer: "고분자", solvent: "용매", additive: "첨가제", salt: "리튬염·이온", other: "기타"};
+function cmpCategory(j) {
+  const L = window.RBLIB, m = j.material || {};
+  if (!L || !L.by) return "";
+  const r = L.by[m.libraryId] || (m.id && L.by["MOL-" + String(m.id).toUpperCase()]);
+  return r ? (CMP_CAT[r.category] || "") : "";
+}
+/** D 탭 — HOMO(가로)·LUMO(세로) 산점도에서 점을 눌러 고른다 */
+function cmpScatter(list, colorOf, selIds) {
+  const pts = list.map(j => ({j, x: j.result.descriptors.homo_ev, y: j.result.descriptors.lumo_ev}))
+    .filter(p => typeof p.x === "number" && typeof p.y === "number");
+  const miss = list.length - pts.length;
+  if (!pts.length) return '<div class="empty small">HOMO·LUMO 값이 있는 결과가 없습니다 — «목록» 탭에서 고르세요.</div>';
+  const W = 640, H = 330, L0 = 48, B = 38, T = 12, R0 = 14;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const pad = (lo, hi) => { const d = Math.max(hi - lo, 0.5) * 0.08; return [lo - d, hi + d]; };
+  const [x0, x1] = pad(Math.min(...xs), Math.max(...xs)), [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
+  const X = v => L0 + (v - x0) / (x1 - x0) * (W - L0 - R0), Y = v => H - B - (v - y0) / (y1 - y0) * (H - T - B);
+  const ticks = (lo, hi) => { const st = [0.25, 0.5, 1, 2, 5].find(s => (hi - lo) / s <= 6) || 5; const out = []; for (let v = Math.ceil(lo / st) * st; v <= hi + 1e-9; v += st) out.push(+v.toFixed(2)); return out; };
+  let g = "";
+  for (const v of ticks(x0, x1)) g += `<line x1="${X(v)}" y1="${T}" x2="${X(v)}" y2="${H - B}" stroke="var(--grid)"/><text x="${X(v)}" y="${H - B + 15}" font-size="11" fill="var(--muted)" text-anchor="middle">${v}</text>`;
+  for (const v of ticks(y0, y1)) g += `<line x1="${L0}" y1="${Y(v)}" x2="${W - R0}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${L0 - 6}" y="${Y(v) + 4}" font-size="11" fill="var(--muted)" text-anchor="end">${v}</text>`;
+  g += `<text x="${(L0 + W - R0) / 2}" y="${H - 4}" font-size="11.5" fill="var(--text-2)" text-anchor="middle">HOMO (eV) — 왼쪽일수록 산화에 강함</text>
+    <text x="${L0 - 38}" y="${T - 2}" font-size="11.5" fill="var(--text-2)" transform="rotate(-90 ${L0 - 38} ${T - 2})" text-anchor="end">LUMO (eV)</text>`;
+  // 선택 안 된 점 먼저, 선택된 점은 위에
+  const sorted = [...pts].sort((a, b) => (selIds.includes(a.j.id) ? 1 : 0) - (selIds.includes(b.j.id) ? 1 : 0));
+  for (const p of sorted) {
+    const c = colorOf(p.j.id), k = selIds.indexOf(p.j.id);
+    g += `<g data-cmp="${esc(p.j.id)}" data-name="${esc(p.j.material.name.toLowerCase())}" class="cmp-pt" tabindex="0" role="button">
+      <title>${esc(p.j.material.name)} · HOMO ${fmt(p.x)} · LUMO ${fmt(p.y)} eV${k >= 0 ? " · 선택됨 (눌러서 빼기)" : ""}</title>
+      <circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${c ? 9 : 6}" fill="${c || "var(--muted)"}" fill-opacity="${c ? 1 : 0.45}" stroke="var(--surface)" stroke-width="1.5"/>
+      ${c ? `<text x="${X(p.x).toFixed(1)}" y="${(Y(p.y) + 3.8).toFixed(1)}" font-size="10" font-weight="700" fill="#fff" text-anchor="middle" pointer-events="none">${k + 1}</text>` : ""}</g>`;
+  }
+  return `<div class="cmp-plot"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="HOMO–LUMO 산점도">${g}</svg></div>
+    <p class="small muted" style="margin:4px 0 0">점에 마우스를 올리면 이름이 나오고, 누르면 바구니에 담깁니다${miss ? ` · HOMO·LUMO 값이 없는 ${miss}건은 «목록» 탭에서 고르세요` : ""}.</p>`;
+}
+
 window.rbRenderCompare = function () {
   const jobs = JOBS_CACHE.filter(j => j.status === "PUBLISHED" && j.result);
   const box = $("compare-body");
@@ -1543,16 +1590,60 @@ window.rbRenderCompare = function () {
     return;
   }
   for (const id of [...COMPARE_SEL]) if (!jobs.some(j => j.id === id)) COMPARE_SEL.delete(id);
-  let picker = '<div class="mol-grid" style="margin-bottom:14px">';
-  for (const j of jobs) {
-    picker += `<button class="mol-card ${COMPARE_SEL.has(j.id) ? "selected" : ""}" data-cmp="${esc(j.id)}">
-      <b>${esc(j.material.name)}</b>
-      <span class="small muted">${esc(j.result.conditions.method)} · ${esc(j.result.conditions.solvent_model)}</span>
-      <span class="mono small muted">${esc(j.id)}</span></button>`;
+  // 비교는 같은 계산식(범함수/기저)·같은 용매 환경의 결과끼리만 — 조건을 먼저 고르고 그 안에서 물질을 고른다
+  const groups = new Map();
+  for (const j of jobs) { const k = cmpCondKey(j); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(j); }
+  const firstSel = [...COMPARE_SEL].map(id => jobs.find(j => j.id === id)).find(Boolean);
+  let cond = firstSel ? cmpCondKey(firstSel) : (localStorage.getItem(CMP_COND_KEY) || "");
+  if (!groups.has(cond)) cond = [...groups.entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
+  const dropped = [...COMPARE_SEL].map(id => jobs.find(j => j.id === id)).filter(j => j && cmpCondKey(j) !== cond);
+  if (dropped.length) {
+    dropped.forEach(j => COMPARE_SEL.delete(j.id));
+    if (window.rbToast) window.rbToast(`계산 조건이 다른 결과 ${dropped.length}개는 비교에서 뺐습니다 — 같은 계산식·용매 조건끼리만 비교합니다`);
   }
-  picker += "</div>";
+  try { localStorage.setItem(CMP_COND_KEY, cond); } catch (e) {}
+  const inGroup = [...groups.get(cond)].sort((a, b) => a.material.name.localeCompare(b.material.name, "ko") || (b.finishedAt || 0) - (a.finishedAt || 0));
+  const sameName = n => inGroup.filter(j => j.material.name === n).length > 1;
+  const day = t => t ? new Date(t * 1000).toLocaleDateString("ko-KR", {month: "numeric", day: "numeric"}) : "";
+  const condLabel_ = k => k.replace(" ‖ ", " · ");
+  const selIds = [...COMPARE_SEL];
+  const colorOf = id => { const k = selIds.indexOf(id); return k < 0 ? null : `var(--series-${(k % 8) + 1})`; };
+  const tab = localStorage.getItem(CMP_TAB_KEY) === "plot" ? "plot" : "list";
+  let picker = `<div class="cmp-cond"><label class="small" for="cmp-cond">비교 조건 <span class="muted">(계산식 · 용매)</span></label>
+      <select class="input" id="cmp-cond">${[...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, v]) => `<option value="${esc(k)}" ${k === cond ? "selected" : ""}>${esc(condLabel_(k))} — ${v.length}건</option>`).join("")}</select>
+      <input class="input" id="cmp-q" placeholder="이름·약어로 찾기" value="${esc(CMP_Q)}" style="max-width:220px"></div>
+    <div class="cmp-pick2">
+      <div class="cmp-left">
+        <div class="cmp-tabs" role="tablist">
+          <button type="button" role="tab" class="${tab === "list" ? "on" : ""}" data-cmptab="list">목록</button>
+          <button type="button" role="tab" class="${tab === "plot" ? "on" : ""}" data-cmptab="plot">HOMO–LUMO 그래프</button>
+          <span class="small muted" id="cmp-count"></span></div>`;
+  if (tab === "list") {
+    picker += '<div class="cmp-list">' + inGroup.map(j => {
+      const on = COMPARE_SEL.has(j.id), cat = cmpCategory(j);
+      return `<div class="cmp-row ${on ? "on" : ""}" data-cmp="${esc(j.id)}" data-name="${esc(j.material.name.toLowerCase())}" title="${esc(j.material.name)} · ${esc(j.id)}" role="button" tabindex="0">
+        ${on ? `<i class="cmp-no" style="background:${colorOf(j.id)}">${selIds.indexOf(j.id) + 1}</i>` : '<i class="cmp-no off"></i>'}
+        <span class="cmp-nm">${esc(j.material.name)}</span>${cat ? `<span class="chip">${esc(cat)}</span>` : ""}
+        <span class="cmp-dt">${esc(day(j.finishedAt))}${sameName(j.material.name) ? " · " + esc(j.id.slice(-6)) : ""}</span></div>`;
+    }).join("") + "</div>";
+  } else {
+    picker += cmpScatter(inGroup, colorOf, selIds);
+  }
+  picker += `</div>
+      <div class="cmp-basket">
+        <div class="cmp-bhead"><b>비교 바구니</b> <span class="small muted">${COMPARE_SEL.size}/${CMP_MAX}</span>
+          ${COMPARE_SEL.size ? '<button class="btn ghost" type="button" id="cmp-clear">비우기</button>' : ""}</div>
+        ${selIds.length ? selIds.map((id, k) => {
+          const j = jobs.find(x => x.id === id);
+          return `<div class="cmp-bk"><i class="cmp-no" style="background:${colorOf(id)}">${k + 1}</i>
+            <span class="cmp-nm" title="${esc(j.material.name)} · ${esc(id)}">${esc(j.material.name)}${sameName(j.material.name) ? ` <span class="small muted">${esc(day(j.finishedAt))}</span>` : ""}</span>
+            <button type="button" class="cmp-x" data-cmp="${esc(id)}" title="바구니에서 빼기">✕</button></div>`;
+        }).join("") : '<div class="small muted cmp-bempty">왼쪽에서 물질을 누르면 여기에 번호와 그래프 색이 붙어 담깁니다. 아래 그래프·표도 같은 번호·색을 씁니다.</div>'}
+        ${selIds.length === 1 ? '<div class="small muted" style="margin-top:6px">하나 더 고르면 비교가 나타납니다.</div>' : ""}
+      </div>
+    </div>`;
 
-  const chosen = jobs.filter(j => COMPARE_SEL.has(j.id));
+  const chosen = [...COMPARE_SEL].map(id => jobs.find(j => j.id === id)).filter(Boolean);
   let table = "";
   if (chosen.length >= 2) {
     // 요약 타일 — 물질별 핵심 지표
@@ -1667,11 +1758,40 @@ window.rbRenderCompare = function () {
     if (msg) { alert(msg); return; }
     window.rbRenderCompare();
   }));
-  box.querySelectorAll("[data-cmp]").forEach(b => b.addEventListener("click", () => {
-    const id = b.dataset.cmp;
-    COMPARE_SEL.has(id) ? COMPARE_SEL.delete(id) : COMPARE_SEL.add(id);
+  const toggle = id => {
+    if (COMPARE_SEL.has(id)) COMPARE_SEL.delete(id);
+    else if (COMPARE_SEL.size >= CMP_MAX) { if (window.rbToast) window.rbToast(`비교는 한 번에 ${CMP_MAX}개까지입니다 — 바구니에서 하나를 빼고 고르세요`); return; }
+    else COMPARE_SEL.add(id);
+    window.rbRenderCompare();
+  };
+  box.querySelectorAll("[data-cmp]").forEach(b => {
+    b.addEventListener("click", () => toggle(b.dataset.cmp || b.getAttribute("data-cmp")));
+    b.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(b.getAttribute("data-cmp")); } });
+  });
+  box.querySelectorAll("[data-cmptab]").forEach(b => b.addEventListener("click", () => {
+    try { localStorage.setItem(CMP_TAB_KEY, b.dataset.cmptab); } catch (e) {}
     window.rbRenderCompare();
   }));
+  const cs = $("cmp-cond");
+  if (cs) cs.addEventListener("change", () => {
+    COMPARE_SEL.clear();
+    try { localStorage.setItem(CMP_COND_KEY, cs.value); } catch (e) {}
+    window.rbRenderCompare();
+  });
+  const cq = $("cmp-q");
+  const applyQ = () => {
+    const q = CMP_Q.trim().toLowerCase();
+    let n = 0, all = 0;
+    box.querySelectorAll(".cmp-left [data-name]").forEach(b => {
+      const hide = !!q && !b.getAttribute("data-name").includes(q);
+      b.toggleAttribute("hidden", hide); all++; if (!hide) n++;
+    });
+    const c = $("cmp-count"); if (c) c.textContent = q ? `${n}/${all}건` : `${all}건`;
+  };
+  if (cq) cq.addEventListener("input", () => { CMP_Q = cq.value; applyQ(); });
+  applyQ();
+  const cc = $("cmp-clear");
+  if (cc) cc.addEventListener("click", () => { COMPARE_SEL.clear(); window.rbRenderCompare(); });
 };
 
 /* ================= 건식 음극 바인더 스크리닝 ================= */

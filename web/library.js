@@ -99,7 +99,7 @@
   const fmtFormula = f => h(f || "").replace(/(\d+)/g, "<sub>$1</sub>");
   const when = t => t ? new Date(t * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false}) : "";
   const gradeBadge = j => `<span class="badge ${j.grade === "PASS" ? "published" : j.grade === "REVIEW" ? "review" : j.grade || j.status === "FAILED" ? "failed" : j.status === "PUBLISHED" ? "published" : "running"}">${h(j.grade || (j.status === "PUBLISHED" ? "완료" : j.status === "FAILED" ? "실패" : j.status === "QUEUED" ? "대기" : `실행 ${j.progress ?? 0}%`))}</span>`;
-  const jobLink = j => `<a class="btn ghost sm lb-joblink" data-job="${h(j.id)}" title="결과·모니터 열기">${h(j.id)}</a>`;
+  const jobLink = (j, short) => `<a class="btn ghost sm lb-joblink" data-job="${h(j.id)}" title="${h(j.id)} — 결과·모니터 열기">${h(short ? "…" + j.id.slice(-6) : j.id)}</a>`;
   function wireJobLinks(root) {
     root.querySelectorAll("[data-job]").forEach(a => a.addEventListener("click", e => {
       e.stopPropagation();
@@ -204,6 +204,74 @@
     });
   }
 
+  /* ── 창 크기 조절 — 세로 분할선(열 너비) · 가로 분할선(높이). 값은 브라우저에 저장, 두 번 누르면 기본값 ── */
+  const LAYOUT_DEF = {msL: 320, msR: 380, msH: 0, libF: 210, libP: 420};
+  const layout = () => Object.assign({}, LAYOUT_DEF, LS.get("rb-lib-layout", {}));
+  function applyLayout(grid, keys) {
+    const lay = layout();
+    if (lay.msH) grid.style.setProperty("--ms-h", lay.msH + "px");
+    // 왼쪽·오른쪽 열 너비 — 화면보다 넓으면 가운데 최소 폭(320px)을 남기도록 비율대로 줄이고,
+    // 그래도 모자라면(좁은 화면) 한 줄로 쌓는다 (분할선 숨김)
+    const sides = keys.filter(k => k[0] !== "msH");
+    const hs = sides.map(([k]) => grid.querySelector(`[data-sp="${k}"]`));
+    const mins = hs.map(hd => +(hd?.dataset.min || 180));
+    let w = sides.map(([k]) => lay[k] || LAYOUT_DEF[k]);
+    const avail = grid.clientWidth - 12 * sides.length - (+(grid.dataset.midMin || 320));
+    if (grid.clientWidth > 0 && w.reduce((a, b) => a + b, 0) > avail) { const f = avail / w.reduce((a, b) => a + b, 0); w = w.map(x => Math.round(x * f)); }
+    const stack = grid.clientWidth > 0 && w.some((x, i) => x < mins[i]);
+    grid.classList.toggle("lb-stack", stack);
+    sides.forEach(([, cssVar], i) => grid.style.setProperty(cssVar, w[i] + "px"));
+    // 가운데 열이 좁으면(결과 표 이름 칸이 사라질 폭) 보조 칸을 숨긴다
+    const mid = stack ? grid.clientWidth : grid.clientWidth - 12 * sides.length - w.reduce((a, b) => a + b, 0);
+    grid.classList.toggle("lb-midnarrow", grid.clientWidth > 0 && mid < 540);
+  }
+  function initSplits(grid, keys) {
+    if (grid.dataset.splitInit) { applyLayout(grid, keys); return; }
+    grid.dataset.splitInit = "1";
+    applyLayout(grid, keys);
+    if (window.ResizeObserver) new ResizeObserver(() => applyLayout(grid, keys)).observe(grid);
+    grid.querySelectorAll("[data-sp]").forEach(hd => {
+      const key = hd.dataset.sp, sign = +(hd.dataset.sign || 1), min = +(hd.dataset.min || 180), max = +(hd.dataset.max || 900);
+      hd.title = "끌어서 창 너비 조절 · 두 번 누르면 기본값";
+      hd.addEventListener("dblclick", () => { const lay = LS.get("rb-lib-layout", {}); delete lay[key]; LS.set("rb-lib-layout", lay); grid.style.removeProperty(keys.find(k => k[0] === key)[1]); applyLayout(grid, keys); });
+      hd.addEventListener("pointerdown", e => {
+        e.preventDefault(); hd.setPointerCapture(e.pointerId); hd.classList.add("on");
+        const cssVar = keys.find(k => k[0] === key)[1], x0 = e.clientX, w0 = parseFloat(getComputedStyle(grid).getPropertyValue(cssVar)) || layout()[key] || LAYOUT_DEF[key];
+        const other = keys.filter(k => k[0] !== key && k[0] !== "msH").reduce((t, [k]) => t + (parseFloat(getComputedStyle(grid).getPropertyValue(keys.find(x => x[0] === k)[1])) || LAYOUT_DEF[k]), 0);
+        const room = grid.clientWidth - other - 24 - 320;
+        const move = ev => { const w = Math.round(Math.max(min, Math.min(max, room, w0 + sign * (ev.clientX - x0)))); grid.style.setProperty(cssVar, w + "px"); hd.dataset.w = w; };
+        const up = () => { hd.classList.remove("on"); hd.removeEventListener("pointermove", move); hd.removeEventListener("pointerup", up); if (hd.dataset.w) { const lay = LS.get("rb-lib-layout", {}); lay[key] = +hd.dataset.w; LS.set("rb-lib-layout", lay); } };
+        hd.addEventListener("pointermove", move); hd.addEventListener("pointerup", up);
+      });
+    });
+    const hs = grid.parentNode.querySelector(`[data-hs="${grid.id}"]`);
+    if (hs) {
+      hs.title = "끌어서 창 높이 조절 · 두 번 누르면 기본값";
+      hs.addEventListener("dblclick", () => { const lay = LS.get("rb-lib-layout", {}); delete lay.msH; LS.set("rb-lib-layout", lay); grid.style.removeProperty("--ms-h"); });
+      hs.addEventListener("pointerdown", e => {
+        e.preventDefault(); hs.setPointerCapture(e.pointerId); hs.classList.add("on");
+        const y0 = e.clientY, h0 = grid.getBoundingClientRect().height;
+        const move = ev => { const hh = Math.max(380, Math.min(1600, h0 + ev.clientY - y0)); grid.style.setProperty("--ms-h", hh + "px"); hs.dataset.h = hh; };
+        const up = () => { hs.classList.remove("on"); hs.removeEventListener("pointermove", move); hs.removeEventListener("pointerup", up); if (hs.dataset.h) { const lay = LS.get("rb-lib-layout", {}); lay.msH = +hs.dataset.h; LS.set("rb-lib-layout", lay); } };
+        hs.addEventListener("pointermove", move); hs.addEventListener("pointerup", up);
+      });
+    }
+  }
+  const MS_KEYS = [["msL", "--ms-l"], ["msR", "--ms-r"], ["msH", "--ms-h"]];
+  const LIB_KEYS = [["libF", "--lib-f"], ["libP", "--lib-p"]];
+
+  /* 계산 화면에 넣을 분자를 고르는 중 — 두 화면 위에 안내 막대 */
+  function renderPickBar(rootId) {
+    const root = document.getElementById(rootId); if (!root) return;
+    let bar = root.querySelector(".lb-pickbar");
+    if (!L.pickForCalc) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = document.createElement("div"); bar.className = "banner success lb-pickbar"; root.prepend(bar); }
+    bar.innerHTML = `<b>계산 화면에 넣을 분자를 고르는 중</b> — 체크하거나 «선택»을 누르면 선택함에 담깁니다. 선택함 <b>${L.sel.length}</b>개
+      <span class="sp"><button class="btn primary sm" type="button" data-pk="go" ${L.sel.length ? "" : "disabled"}>계산 화면에 넣기 →</button><button class="btn sm" type="button" data-pk="cancel">취소</button></span>`;
+    bar.querySelector('[data-pk="go"]').onclick = () => { const ids = L.sel.slice(); L.pickForCalc = false; window.rbOpenMode("calc", "계산"); load().then(() => { rbLibAddToCalc(ids); toast(`분자 ${ids.length}개를 계산 화면에 넣었습니다`); }); };
+    bar.querySelector('[data-pk="cancel"]').onclick = () => { L.pickForCalc = false; window.rbOpenMode("calc", "계산"); };
+  }
+
   /* ══════════ 분자 검색 및 선택 ══════════ */
   const MODE_NOTE = {
     name: "이름·약어·CAS·화학식·태그 검색 — 같은 화학식의 이성질체는 각각 다른 행으로 나옵니다. SMILES 를 넣으면 구조 일치도 함께 찾습니다.",
@@ -264,9 +332,9 @@
       root.dataset.built = "1";
       root.innerHTML = `<div class="lb-head"><div><h1>분자 검색 및 선택</h1><p class="rb-note">이름·구조·SMILES 로 정확히 찾고, 구조를 검토한 뒤 계산 대상을 확정합니다. «분자 라이브러리»와 즐겨찾기·선택함·계산 환경을 공유합니다.</p></div>
           <div class="lb-steps"><span class="on"><b>1</b>검색</span><i></i><span class="on"><b>2</b>선택</span><i></i><span><b>3</b>계산 설정</span><i></i><span><b>4</b>실행·결과</span></div></div>
-        <div class="lb-sel3">
+        <div class="lb-sel3" id="lb-sel3" data-mid-min="400">
           <div class="card lb-left">
-            <div class="lb-tabs" id="lb-stabs">${[["name", "이름 검색"], ["exact", "구조 검색"], ["sim", "유사도"], ["sub", "부분구조"]].map(([k, l]) => `<button type="button" data-m="${k}">${l}</button>`).join("")}</div>
+            <div class="lb-tabs" id="lb-stabs">${[["name", "이름", "이름·약어·CAS·화학식 검색"], ["exact", "구조", "구조 완전 일치 (InChIKey)"], ["sim", "유사도", "Morgan 지문 Tanimoto 유사도"], ["sub", "부분구조", "SMARTS 부분구조 포함"]].map(([k, l, t]) => `<button type="button" data-m="${k}" title="${t}">${l}</button>`).join("")}</div>
             <div class="small muted" id="lb-mode-note" style="margin-bottom:8px"></div>
             <div class="toolbar" style="margin:0 0 6px;gap:6px"><span class="seg" id="lb-kind"><button type="button" data-k="smiles" class="on">SMILES</button><button type="button" data-k="inchi">InChI</button></span></div>
             <div style="display:flex;gap:6px"><input class="input grow" id="lb-sq" autocomplete="off" placeholder="이름 · 약어 · CAS · 화학식 · SMILES (예: EC, C3H6O3, C=CC#N)"><button class="btn primary" type="button" id="lb-sgo">검색</button></div>
@@ -279,6 +347,7 @@
               <div class="small muted" style="margin-top:4px">«계산» 화면의 구조·Li⁺ 모델 칸에 그대로 채워집니다 (프리셋 모노머는 서버 정의 2·3량체 사용).</div></div>
             <div class="lb-mini2"><div><h5>최근 검색</h5><ul id="lb-recent"></ul></div><div><h5>즐겨찾기</h5><div id="lb-favs" class="lb-favs"></div></div></div>
           </div>
+          <div class="lb-split" data-sp="msL" data-sign="1" data-min="240" data-max="560"></div>
           <div class="card lb-mid">
             <div class="toolbar" style="gap:8px;margin-bottom:8px"><h2 style="margin:0;font-size:15px">검색 결과 <span id="lb-tcount" style="color:var(--accent)"></span></h2>
               <input class="input" id="lb-tq" placeholder="결과 내 재검색" style="max-width:200px"><select class="input" id="lb-tstate"><option value="">모든 상태</option><option value="계산 완료">계산 완료</option><option value="계산 중">계산 중</option><option value="미계산">미계산</option></select>
@@ -287,8 +356,10 @@
             <div class="lb-tablewrap"><table class="table lb-table" id="lb-table"></table></div>
             <div class="lb-tfoot"><span id="lb-tsel"></span><span class="sp"><button class="btn" type="button" id="lb-tclear">선택 초기화</button><button class="btn" type="button" id="lb-tfav">☆ 즐겨찾기에 추가</button><button class="btn primary" type="button" id="lb-tgo">계산 설정으로 이동 →</button></span></div>
           </div>
+          <div class="lb-split" data-sp="msR" data-sign="-1" data-min="260" data-max="760"></div>
           <div class="card lb-right" id="lb-spanel"></div>
         </div>
+        <div class="lb-hsplit" data-hs="lb-sel3"></div>
         <div class="card" id="lb-envcard"></div>`;
       const u = L.ui;
       root.querySelectorAll("#lb-stabs button").forEach(b => b.addEventListener("click", () => { u.mode = b.dataset.m; if (u.mode === "sim" && !u.sq && u.focus && rec(u.focus)) u.sq = rec(u.focus).smiles; syncSearchUi(); runSearch(); runParse(); }));
@@ -311,6 +382,8 @@
     syncSearchUi();
     if (!L.ui.rows) runSearch(); else renderTable();
     renderSelPanel(); renderEnvCard(); renderRecent();
+    initSplits(document.getElementById("lb-sel3"), MS_KEYS);
+    renderPickBar("rbv-molsearch");
   }
   function syncSearchUi() {
     const u = L.ui, root = document.getElementById("rbv-molsearch"); if (!root) return;
@@ -363,16 +436,22 @@
     if (!rows.length) {
       t.innerHTML = `<tr><td class="empty small">${u.mode === "name" && u.sq ? "라이브러리에 없습니다 — 왼쪽 «PubChem 에서 찾기»로 가져오거나 SMILES 로 «라이브러리에 추가»하세요." : "결과가 없습니다."}</td></tr>`;
     } else {
-      t.innerHTML = `<tr><th></th><th>분자</th><th>구조</th><th>화학식</th><th class="num">분자량</th>${showScore ? `<th class="num">${u.mode === "sim" ? "유사도" : "일치 비율"}</th>` : ""}<th>상태</th><th>최근 계산</th><th></th></tr>`
+      // 5열로 압축 — 선택 · 구조 · 분자(이름·정식 명칭·화학식·분자량·ID) · 상태/최근 계산 · 선택 버튼
+      t.innerHTML = `<colgroup><col style="width:30px"><col style="width:84px"><col><col style="width:128px"><col style="width:86px"></colgroup><tr><th></th><th>구조</th><th>분자</th><th>${showScore ? (u.mode === "sim" ? "유사도 · " : "일치 · ") : ""}상태 · 최근 계산</th><th></th></tr>`
         + rows.map(r => { const m = r.m, [cls, st] = calcState(m), j = m.jobs[0], on = L.sel.includes(m.id), foc = u.focus === m.id;
           return `<tr data-row="${h(m.id)}" class="${foc ? "row-active" : ""}"><td><input type="checkbox" data-selk="${h(m.id)}" ${on ? "checked" : ""} title="선택함에 담기"></td>
-            <td><b>${h(m.name)}</b> <button class="lb-star ${m.fav ? "on" : ""}" type="button" data-fav="${h(m.id)}" title="즐겨찾기">★</button><div class="small muted">${h(m.full || "")}</div><div class="mono small muted">${h(m.id)}</div></td>
-            <td class="lb-st">${r.svg ? `<span class="lb-svg">${r.svg}</span>` : svgOf(m)}</td><td>${fmtFormula(m.formula)}</td><td class="num">${nf(m.mw, 3)}</td>${showScore ? `<td class="num">${nf(r.score, 2)}</td>` : ""}
-            <td><span class="badge ${cls}">${st}</span></td><td class="small">${j ? jobLink(j) + `<div class="muted">${h(when(j.when))}</div>` : "—"}</td>
-            <td><button class="btn sm ${foc ? "primary" : ""}" type="button" data-pick="${h(m.id)}">${foc ? "선택됨" : "선택"}</button></td></tr>`; }).join("");
+            <td class="lb-st">${r.svg ? `<span class="lb-svg">${r.svg}</span>` : svgOf(m)}</td>
+            <td class="lb-molcell"><b>${h(m.name)}</b> <button class="lb-star ${m.fav ? "on" : ""}" type="button" data-fav="${h(m.id)}" title="즐겨찾기">★</button><div class="small muted lb-ell">${h(m.full || "")}</div><div class="small">${fmtFormula(m.formula)} · ${nf(m.mw, 2)} g/mol <span class="mono muted">${h(m.id)}</span></div></td>
+            <td class="small">${showScore ? `<b class="mono">${nf(r.score, 2)}</b> · ` : ""}<span class="badge ${cls}">${st}</span>${j ? `<div>${jobLink(j, true)} <span class="muted">${h(when(j.when))}</span></div>` : ""}</td>
+            <td><button class="btn sm ${on ? "primary" : ""}" type="button" data-pick="${h(m.id)}" title="${on ? "누르면 선택 취소" : "선택함에 담고 오른쪽에 표시"}">${on ? "선택됨 ✕" : "선택"}</button></td></tr>`; }).join("");
     }
     t.querySelectorAll("[data-selk]").forEach(c => c.addEventListener("change", () => toggleSel(c.dataset.selk, c.checked)));
-    t.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", () => { u.focus = b.dataset.pick; if (!L.sel.includes(u.focus)) { L.sel.push(u.focus); saveSel(); } rerender(); }));
+    t.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", () => {
+      const id = b.dataset.pick;
+      if (L.sel.includes(id)) { L.sel = L.sel.filter(x => x !== id); if (u.focus === id) u.focus = L.sel[L.sel.length - 1] || null; }   // 선택 취소
+      else { L.sel.push(id); u.focus = id; }
+      saveSel(); rerender();
+    }));
     t.querySelectorAll("[data-fav]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); setFav(b.dataset.fav, !rec(b.dataset.fav).fav); }));
     t.querySelectorAll("tr[data-row]").forEach(tr => tr.addEventListener("click", e => { if (e.target.closest("button,input,a")) return; u.focus = tr.dataset.row; renderTable(); renderSelPanel(); }));
     wireJobLinks(t);
@@ -427,10 +506,11 @@
   function renderSelPanel() {
     const box = document.getElementById("lb-spanel"); if (!box) return;
     const u = L.ui, m = rec(u.focus) || rec(L.sel[L.sel.length - 1]);
-    if (!m) { box.innerHTML = '<h2 style="font-size:15px;margin:0">선택한 분자</h2><div class="empty small">표에서 «선택»을 누르면 여기에 구조·식별자·계산 이력이 나타납니다.</div>'; return; }
+    if (!m) { box.innerHTML = '<h2 style="font-size:15px;margin:0">선택한 분자</h2><div class="empty small">표에서 «선택»을 누르거나 행을 누르면 여기에 구조·식별자·계산 이력이 나타납니다.</div>'; return; }
     u.focus = m.id;
     const t = L.tpl ? TEMPLATES[L.tpl][0] : "미선택";
-    box.innerHTML = `<div class="card-head" style="margin-bottom:4px"><h2 style="font-size:15px;margin:0">선택한 분자</h2><button class="btn ghost sm" type="button" data-openlib="${h(m.id)}">라이브러리에서 보기 →</button></div>
+    const inSel = L.sel.includes(m.id);
+    box.innerHTML = `<div class="card-head" style="margin-bottom:4px"><h2 style="font-size:15px;margin:0">${inSel ? "선택한 분자" : "분자 보기"}</h2><span class="row-actions">${inSel ? `<button class="btn sm" type="button" data-unsel="${h(m.id)}">선택 취소</button>` : `<button class="btn sm primary" type="button" data-addsel="${h(m.id)}">선택함에 담기</button>`}<button class="btn ghost sm" type="button" data-openlib="${h(m.id)}">라이브러리 →</button></span></div>
       <div style="font-weight:800;font-size:17px">${h(m.name)} <span class="chip">${h(CAT_LABEL[m.category] || m.category)}</span></div><div class="small muted">${h(m.full || "")}</div>
       ${viewer(m, "lb-sp3d")}${panelInfo(m)}${m.solvent ? solventTable(m) : ""}
       <div class="lb-sub">빠른 계산 시작 <span class="small muted">— 템플릿만 고르고 «계산» 화면에서 전하·다중도·범함수·기저를 확인 후 제출 (즉시 실행하지 않음)</span></div>
@@ -444,6 +524,8 @@
     const sim = box.querySelector("[data-sim]"); if (sim) sim.addEventListener("click", () => { u.mode = "sim"; u.sq = m.smiles; syncSearchUi(); runSearch(); runParse(); });
     const cmp = box.querySelector("[data-cmp]"); if (cmp) cmp.addEventListener("click", () => { const j = lastDone(m); if (!j) return; COMPARE_SEL.add(j.id); toast(`«${m.name}» 결과(${j.id})를 물질 비교에 추가했습니다 (${COMPARE_SEL.size}건)`); if (COMPARE_SEL.size >= 2 && window.rbOpenMode) window.rbOpenMode("compare", "물질 비교"); });
     const ol = box.querySelector("[data-openlib]"); if (ol) ol.addEventListener("click", () => { L.ui.preview = m.id; window.rbOpenMode("library", "분자 라이브러리"); });
+    const us = box.querySelector("[data-unsel]"); if (us) us.addEventListener("click", () => { L.sel = L.sel.filter(x => x !== m.id); saveSel(); rerender(); });
+    const as_ = box.querySelector("[data-addsel]"); if (as_) as_.addEventListener("click", () => { if (!L.sel.includes(m.id)) L.sel.push(m.id); saveSel(); rerender(); });
   }
   function solventTable(m) {
     const s = m.solvent;
@@ -516,8 +598,10 @@
           <button class="btn" type="button" id="lb-go-search">구조 검색 / 정밀 선택 →</button>${IS_SNAPSHOT ? "" : '<button class="btn primary" type="button" id="lb-add">+ 분자 등록</button>'}</div>
         <div id="lb-addform"></div>
         <div class="lb-cats" id="lb-cats"></div>
-        <div class="lb-lib"><div class="card lb-filter" id="lb-filter"></div>
-          <div><div class="toolbar" style="gap:8px"><b id="lb-rcount"></b><span class="lb-sorts" id="lb-sorts"></span><span class="seg" style="margin-left:auto" id="lb-view"><button type="button" data-v="grid">▦ 카드</button><button type="button" data-v="list">☰ 목록</button></span></div><div id="lb-results"></div></div>
+        <div class="lb-lib" id="lb-lib" data-stack-at="900"><div class="card lb-filter" id="lb-filter"></div>
+          <div class="lb-split" data-sp="libF" data-sign="1" data-min="170" data-max="420"></div>
+          <div class="lb-libmain"><div class="toolbar" style="gap:8px"><b id="lb-rcount"></b><span class="lb-sorts" id="lb-sorts"></span><span class="seg" style="margin-left:auto" id="lb-view"><button type="button" data-v="grid">▦ 카드</button><button type="button" data-v="list">☰ 목록</button></span></div><div id="lb-results"></div></div>
+          <div class="lb-split" data-sp="libP" data-sign="-1" data-min="300" data-max="900"></div>
           <div class="card lb-panel" id="lb-panel"></div></div>`;
       root.querySelector("#lb-q").addEventListener("input", e => { u.q = e.target.value; renderLibResults(); renderLibCats(); });
       root.querySelector("#lb-go-search").addEventListener("click", () => { L.ui.sq = u.q; L.ui.mode = "name"; L.ui.rows = null; window.rbOpenMode("molsearch", "분자 검색 및 선택"); });
@@ -527,6 +611,8 @@
     root.querySelector("#lb-q").value = u.q;
     root.querySelector("#lb-total").textContent = `${mols().length}개 분자 · 혼합 용매 ${mixes().length}개`;
     renderLibCats(); renderLibFilter(); renderLibResults(); renderLibPanel();
+    initSplits(document.getElementById("lb-lib"), LIB_KEYS);
+    renderPickBar("rbv-library");
   }
   function renderLibCats() {
     const box = document.getElementById("lb-cats"); if (!box) return;
@@ -569,7 +655,7 @@
           <div class="lb-thumb">${svgOf(m)}<span class="f">${fmtFormula(m.formula)}</span></div>
           <div class="lb-nm">${h(m.name)}</div><div class="lb-full">${h(m.full || "")}</div><div class="mono small muted">${h(m.id)} · ${h(m.source || "")}</div>
           <div class="lb-tags">${(m.tags || []).slice(0, 2).map(t => `<span class="chip">${h(t)}</span>`).join("")}${m.roles.includes("solvent") ? '<span class="chip lb-solv">용매</span>' : ""}<span class="badge ${cls}">${st}</span></div>
-          <div class="lb-acts"><button class="btn primary sm" type="button" data-go="${h(m.id)}">계산 설정으로</button>${m.solvent ? `<button class="btn sm" type="button" data-addsolv="${h(m.id)}" title="계산 환경의 용매 구성에 추가">용매로</button>` : ""}<button class="btn sm" type="button" data-detail="${h(m.id)}">상세</button></div></div>`; }).join("")}</div>`;
+          <div class="lb-acts"><button class="btn primary sm" type="button" data-go="${h(m.id)}" title="이 분자로 계산 설정 화면 열기 (바로 실행하지 않음)">계산 →</button>${m.solvent ? `<button class="btn sm" type="button" data-addsolv="${h(m.id)}" title="계산 환경의 용매 구성에 추가">용매로</button>` : ""}<button class="btn sm" type="button" data-detail="${h(m.id)}">상세</button></div></div>`; }).join("")}</div>`;
     } else {
       box.innerHTML = `<div class="card" style="padding:0 6px"><div class="scroll-x"><table class="table lb-table"><tr><th></th><th>구조</th><th>분자</th><th>화학식</th><th class="num">분자량</th><th>역할·태그</th><th>상태</th><th>최근 계산</th><th></th></tr>${list.map(m => { const [cls, st] = calcState(m), j = m.jobs[0];
         return `<tr data-k="${h(m.id)}" class="${u.preview === m.id ? "row-active" : ""}"><td><input type="checkbox" data-selk="${h(m.id)}" ${L.sel.includes(m.id) ? "checked" : ""}></td><td class="lb-st">${svgOf(m)}</td><td><b>${h(m.name)}</b> <button class="lb-star ${m.fav ? "on" : ""}" type="button" data-fav="${h(m.id)}">★</button><div class="small muted">${h(m.full || "")}</div></td><td>${fmtFormula(m.formula)}</td><td class="num">${nf(m.mw, 2)}</td><td>${m.roles.map(r => `<span class="chip">${ROLE_LABEL[r]}</span>`).join(" ")} ${(m.tags || []).slice(0, 2).map(t => `<span class="chip">${h(t)}</span>`).join(" ")}</td><td><span class="badge ${cls}">${st}</span></td><td class="small">${j ? jobLink(j) : "—"}</td><td class="row-actions"><button class="btn ghost sm" type="button" data-go="${h(m.id)}">계산 설정 →</button>${m.solvent ? `<button class="btn ghost sm" type="button" data-addsolv="${h(m.id)}">용매로</button>` : ""}</td></tr>`; }).join("")}</table></div></div>`;
@@ -678,6 +764,7 @@
 
   /* ── 선택함 · 즐겨찾기 ── */
   function toggleSel(id, on) { const i = L.sel.indexOf(id); if (on && i < 0) L.sel.push(id); if (!on && i >= 0) L.sel.splice(i, 1); saveSel(); rerender(); }
+  function refreshPickBars() { renderPickBar("rbv-molsearch"); renderPickBar("rbv-library"); }
   async function setFav(id, v, silent) {
     const m = rec(id); if (!m) return;
     if (IS_SNAPSHOT) { m.fav = v; rerender(); return; }
@@ -708,6 +795,7 @@
     if (!ids.length) { toast("분자를 먼저 선택하세요"); return; }
     const envS = envToSettings(L.env);
     if (envS.error) { toast("계산 환경 오류 — " + envS.error); return; }
+    L.pickForCalc = false;
     if (ids.length > 1) return goBatch(ids, envS);
     const m = rec(ids[0]);
     window.rbOpenMode("calc", "계산");
@@ -753,44 +841,32 @@
   }
   function setSelect(id, v) { const el = document.getElementById(id); if (!el || v == null) return false; if ([...el.options].some(o => o.value === String(v))) { el.value = String(v); el.dispatchEvent(new Event("change")); return true; } return false; }
 
-  /* 계산 화면 — 소재 카드 (분자 라이브러리) */
+  /* 계산 화면 — 소재: 분자 검색 및 선택 · 분자 라이브러리에서 고른 분자 목록 */
+  const calcItem = m => ({key: m.id, name: m.name, smiles: m.smiles, formula: m.formula, dictId: m.presetId || null, libraryId: m.id});
   function rbLibBuildMaterialGrid() {
     const grid = document.getElementById("material-grid"); if (!grid) return;
+    grid.classList.remove("mol-grid"); grid.classList.add("lb-calcsel");
     if (!L.data) { grid.innerHTML = '<div class="small muted">분자 라이브러리 불러오는 중…</div>'; load().then(rbLibBuildMaterialGrid).catch(e => { if (!L.failed) grid.innerHTML = `<div class="form-error">분자 라이브러리를 불러오지 못했습니다 — ${h(e.message)}</div>`; }); return; }
-    let tools = document.getElementById("lb-calc-tools");
-    if (!tools) {
-      tools = document.createElement("div"); tools.id = "lb-calc-tools"; tools.className = "toolbar"; tools.style.margin = "0 0 8px";
-      tools.innerHTML = `<input class="input grow" id="lb-calc-q" placeholder="분자 라이브러리에서 찾기 — 이름 · 화학식 · 태그"><select class="input" id="lb-calc-cat"><option value="">모든 분류</option>${(L.data.categories || []).map(c => `<option value="${c.id}">${h(c.label)}</option>`).join("")}<option value="fav">★ 즐겨찾기</option><option value="sel">선택한 것만</option></select><button class="btn ghost" type="button" id="lb-calc-open">분자 검색 및 선택 →</button>`;
-      grid.parentNode.insertBefore(tools, grid);
-      tools.querySelector("#lb-calc-q").addEventListener("input", rbLibBuildMaterialGrid);
-      tools.querySelector("#lb-calc-cat").addEventListener("change", rbLibBuildMaterialGrid);
-      tools.querySelector("#lb-calc-open").addEventListener("click", () => window.rbOpenMode("molsearch", "분자 검색 및 선택"));
-      const head = grid.parentNode.querySelector(".card-head h2"); if (head && !head.dataset.lb) { head.dataset.lb = "1"; head.insertAdjacentHTML("afterend", '<span class="small muted">분자 라이브러리 — 여러 개를 고르면 분자마다 작업이 만들어집니다</span>'); }
-    }
-    const q = (document.getElementById("lb-calc-q")?.value || "").toLowerCase(), cat = document.getElementById("lb-calc-cat")?.value || "";
     for (const key of [...selected.keys()]) if (!rec(key)) selected.delete(key);
-    const list = mols().filter(m => (!cat || (cat === "fav" ? m.fav : cat === "sel" ? selected.has(m.id) : m.category === cat))
-      && (!q || [m.name, m.full, m.formula, m.smiles, ...(m.tags || [])].join(" ").toLowerCase().includes(q)));
-    grid.innerHTML = list.length ? "" : '<div class="small muted">조건에 맞는 분자가 없습니다 — 아래 «사용자 SMILES» 로 직접 넣거나 분자 라이브러리에 등록하세요.</div>';
-    for (const m of list) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "mol-card lb-molcard" + (selected.has(m.id) ? " selected" : "");
-      btn.innerHTML = `<span class="lb-mc-top">${svgOf(m, "xs")}<span><b>${h(m.name)}</b><span class="small muted" style="display:block">${fmtFormula(m.formula)} · ${h(CAT_LABEL[m.category] || "")}</span></span></span><span class="small muted lb-mc-full">${h(m.full || "")}</span>`;
-      btn.title = m.smiles;
-      btn.onclick = () => {
-        if (selected.has(m.id)) selected.delete(m.id);
-        else selected.set(m.id, {key: m.id, name: m.name, smiles: m.smiles, formula: m.formula, dictId: m.presetId || null, libraryId: m.id});
-        btn.classList.toggle("selected", selected.has(m.id));
-      };
-      grid.appendChild(btn);
-    }
+    const list = [...selected.keys()].map(rec).filter(Boolean);
+    grid.innerHTML = `${list.length ? `<div class="lb-calcchips">${list.map(m => `<span class="lb-calcchip" title="${h(m.smiles)}">${svgOf(m, "xs")}<span class="nm"><b>${h(m.name)}</b><span class="small muted">${fmtFormula(m.formula)} · ${h(CAT_LABEL[m.category] || "")}</span></span><button class="btn ghost sm" type="button" data-calcrm="${h(m.id)}" title="계산 목록에서 빼기">✕</button></span>`).join("")}</div>`
+        : '<div class="lb-calcempty">계산할 분자를 아직 고르지 않았습니다. 아래 버튼으로 분자 검색 및 선택 또는 분자 라이브러리에서 고르세요.</div>'}
+      <div class="toolbar" style="margin:10px 0 0;gap:8px"><button class="btn primary" type="button" data-calcpick="molsearch">＋ 분자 검색 및 선택에서 고르기</button><button class="btn" type="button" data-calcpick="library">＋ 분자 라이브러리에서 고르기</button>
+        <span class="small muted">${list.length ? `${list.length}개 — 분자마다 작업이 따로 만들어집니다` : ""}</span>${list.length ? '<button class="btn ghost sm" type="button" data-calcclear="1">모두 빼기</button>' : ""}</div>`;
+    grid.querySelectorAll("[data-calcrm]").forEach(b => b.addEventListener("click", () => { selected.delete(b.dataset.calcrm); rbLibBuildMaterialGrid(); }));
+    const cl = grid.querySelector("[data-calcclear]"); if (cl) cl.addEventListener("click", () => { selected.clear(); rbLibBuildMaterialGrid(); });
+    grid.querySelectorAll("[data-calcpick]").forEach(b => b.addEventListener("click", () => {
+      L.pickForCalc = true; L.sel = [...selected.keys()]; saveSel();
+      window.rbOpenMode(b.dataset.calcpick, b.dataset.calcpick === "molsearch" ? "분자 검색 및 선택" : "분자 라이브러리");
+    }));
   }
   function rbLibSelectInCalc(ids) {
     selected.clear();
-    for (const id of ids) { const m = rec(id); if (m) selected.set(m.id, {key: m.id, name: m.name, smiles: m.smiles, formula: m.formula, dictId: m.presetId || null, libraryId: m.id}); }
-    const q = document.getElementById("lb-calc-q"); if (q) q.value = "";
-    const c = document.getElementById("lb-calc-cat"); if (c) c.value = "";
+    for (const id of ids) { const m = rec(id); if (m) selected.set(m.id, calcItem(m)); }
+    rbLibBuildMaterialGrid();
+  }
+  function rbLibAddToCalc(ids) {
+    for (const id of ids) { const m = rec(id); if (m && !selected.has(m.id)) selected.set(m.id, calcItem(m)); }
     rbLibBuildMaterialGrid();
   }
 
@@ -860,6 +936,7 @@
   window.rbLibSetCalcMixture = rbLibSetCalcMixture;
   window.rbLibExplicitSpecies = () => (L.data ? explicitSpecies() : null);
   window.rbLibSelectInCalc = ids => load().then(() => rbLibSelectInCalc(ids));
+  window.rbLibAddToCalc = ids => load().then(() => rbLibAddToCalc(ids));
   window.rbLibGoCalc = goCalc;
 
   /* ── 화면 진입 ── */
@@ -867,7 +944,7 @@
     const real = document.getElementById("rb-real");
     if (real?.classList.contains("mode-molsearch")) { renderTable(); renderSelPanel(); renderEnvCard(); renderRecent(); }
     if (real?.classList.contains("mode-library")) { renderLibCats(); renderLibFilter(); renderLibResults(); renderLibPanel(); const t = document.getElementById("lb-total"); if (t) t.textContent = `${mols().length}개 분자 · 혼합 용매 ${mixes().length}개`; }
-    renderBasket();
+    renderBasket(); refreshPickBars();
   }
   async function enter(fn, rootId) {
     const root = document.getElementById(rootId); if (!root) return;
@@ -878,6 +955,7 @@
     }
     if (!root.dataset.built) root.innerHTML = "";
     fn(); renderBasket();
+    renderPickBar(rootId);
     if (rootId === "rbv-library" && L.pendingAdd) { const p = L.pendingAdd; L.pendingAdd = null; openAddForm(p); }
   }
   window.rbRenderMolSearch = () => enter(renderMolSearch, "rbv-molsearch");

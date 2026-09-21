@@ -211,9 +211,9 @@ def test_li_interaction_real_scf_with_water_reference(monkeypatch):
     li = d["li_interaction"]
     assert d["li_binding_kj"] < 0 and li["n_sites"] >= 1
     assert li["model"] == "competition" and li["coordination"] == 2
-    assert li["references"] and li["references"][0]["abbr"] == "H2O"
+    assert li["references"] and li["references"][0]["abbr"] == "Water"
     assert li["references"][0]["cached"] is False
-    assert "li_exchange_kj" in d and d["li_exchange_solvent"] == "H2O"
+    assert "li_exchange_kj" in d and d["li_exchange_solvent"] == "Water"
     assert li["verdict"]["key"] in ("trapping", "competitive", "solvent")
     assert "li_complex" in out["structures"]
     assert any("ΔE_exchange" in n for n in out["notes"])

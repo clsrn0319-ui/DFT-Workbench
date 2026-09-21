@@ -36,6 +36,16 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 app = FastAPI(title="RhoBench DFT Workbench", version="1.0")
 
 
+@app.middleware("http")
+async def _no_stale_ui(request, call_next):
+    """화면 파일은 매번 새 버전 확인(ETag 304) — 업데이트 뒤 브라우저가 옛 JS 를 쓰지 않게."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.on_event("startup")
 def _resume_campaigns():
     """서버 재시작 시 중단된 작업을 체크포인트에서 재개하고, 캠페인을 이어서 진행한다."""
