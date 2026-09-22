@@ -567,8 +567,19 @@ function renderJobList(force = false) {
   updateSelCount();
 }
 
+/** 작업의 용매 표시 — 프리셋 · 라이브러리 용매 · 직접 구성한 혼합 용매 · 결과의 용매 모델 순 */
+function jobSolventLabel(job) {
+  const st = job.settings || {};
+  if (st.envType === "진공·기체") return "vacuum";
+  const pre = PRESETS.solvents.find(s => s.id === st.solventId);
+  if (pre) return pre.abbr;
+  if (st.customMixedSolvent) return st.customMixedSolvent.name || "혼합 용매";
+  const lib = window.RBLIB && window.RBLIB.by && window.RBLIB.by[st.solventId];
+  if (lib) return lib.name;
+  return job.result?.conditions?.solvent_model || st.solventId || "용매";
+}
+
 function jobRowHtml(job) {
-  const solvent = PRESETS.solvents.find(s => s.id === job.settings.solventId);
   const method = job.result?.conditions?.method
     || `${job.settings.expert.functional}${job.settings.expert.basis ? "/" + job.settings.expert.basis : ""}`;
   const done = job.status === "PUBLISHED";
@@ -579,16 +590,16 @@ function jobRowHtml(job) {
             ${EXPORT_SEL.has(job.id) ? "checked" : ""}> 내보내기</label> ` : ""}
         <span class="mono small muted">${esc(job.id)}</span>
       </div>
-      <div class="small muted">${esc(job.settings.envType)} · ${esc(solvent?.abbr ?? "vacuum")} ·
+      <div class="small muted">${esc(job.settings.envType)} · ${esc(jobSolventLabel(job))} ·
         ${esc(job.settings.structure)} · ${esc(method)} · ${esc(job.settings.accuracy)}</div>
       ${["RUNNING", "QUEUED"].includes(job.status)
-        ? `<div class="progress-track"><div class="progress-fill" style="width:${job.progress}%"></div></div>
-           <div class="small muted">${esc(job.stage)} · <b>${job.progress}%</b></div>` : ""}
+        ? `<div class="progress-track"><div class="progress-fill" style="width:${Math.min(99, job.progress || 0)}%"></div></div>
+           <div class="small muted">${esc(job.stage)} · <b>${Math.min(99, job.progress || 0)}%</b></div>` : ""}
       ${job.status === "RUNNING" && job.monitor?.scf?.cycle != null
         ? `<div class="small muted mono">SCF ${esc(job.monitor.scf.label || "")} cycle ${job.monitor.scf.cycle}${job.monitor.scf.max_cycle ? "/" + job.monitor.scf.max_cycle : ""} · |g| ${fmtExp(job.monitor.scf.gorb)}${job.monitor.opt?.step ? ` · OPT step ${job.monitor.opt.step}${job.monitor.opt.max_steps ? "/" + job.monitor.opt.max_steps : ""} |grad| ${fmtExp(job.monitor.opt.grad_norm)}` : ""}${job.monitor.scf.recovered ? ` · 복구 ${job.monitor.scf.recovered}` : ""}</div>` : ""}
       ${job.validation ? `<div class="small"><span class="badge ${MON_GRADE_BADGE[job.validation.grade] || "queued"}">검증 ${esc(job.validation.grade)}</span> <span class="muted">${esc(job.validation.summary || "")}</span></div>` : ""}
       ${job.checkpoint?.done?.length && ["QUEUED", "RUNNING", "FAILED"].includes(job.status)
-        ? `<div class="small"><span class="badge review" style="border:1px solid currentColor" title="서버가 꺼져도 끝난 단계는 다시 계산하지 않습니다">체크포인트 ${job.checkpoint.done.length}단계</span> <span class="muted">${esc((job.checkpoint.labels || job.checkpoint.done).join(" · "))}${job.interrupted ? " · 재개 대기" : ""}</span></div>` : ""}
+        ? `<div class="small"><span class="badge review" style="border:1px solid currentColor" title="서버가 꺼져도 끝난 단계는 다시 계산하지 않습니다">체크포인트 ${job.checkpoint.done.length}단계</span> <span class="muted">${esc((job.checkpoint.labels || job.checkpoint.done).join(" · "))}${job.interrupted && job.status === "QUEUED" ? " · 재개 대기" : ""}</span></div>` : ""}
       ${job.benchmark ? `<div class="small"><span class="chip soft" title="문헌 참조값과 비교하는 벤치마크 작업 — «벤치마크» 페이지에서 판정을 봅니다">벤치마크 · ${esc(job.benchmark.set)} · ${esc(job.benchmark.entry)}</span></div>` : ""}
       ${job.error ? `<div class="small" style="color:var(--danger)">${esc(job.error)}</div>` : ""}
       <details><summary class="small muted">로그 (${job.logs.length})</summary>
@@ -3367,7 +3378,7 @@ async function scrRenderDetail() {
           (cd.fgroups || []).length
             ? `<br><span class="muted small">${cd.fgroups.map(esc).join(" · ")}</span>` : ""}</td>
         <td class="small">${esc(cd.state)}${cd.progress != null && cd.state === "계산 중"
-            ? ` ${cd.progress}%` : ""}${cd.detail
+            ? ` ${Math.min(99, cd.progress)}%` : ""}${cd.detail
             ? `<br><span class="muted">${esc(cd.detail)}</span>` : ""}</td>
         <td><span class="badge ${SCR_GRADE_BADGE[grade] || "queued"}">${esc(grade)}</span>
           ${cd.provisional ? '<span class="muted small"> 잠정</span>' : ""}${vd.basis === "수직"
@@ -4254,7 +4265,7 @@ async function monRenderList() {
         <td class="small">${j.campaign
           ? `${esc(j.campaign.name || j.campaign.id)}<br><span class="muted">${(j.campaign.stage ?? 0) + 1}단계 · ${esc(j.campaign.accuracy || "")}</span>`
           : `<span class="muted">단건 · ${esc(j.accuracy || "")}</span>`}</td>
-        <td class="small">${esc(j.stage || "")}${j.status === "RUNNING" && j.progress != null ? ` <span class="muted">${j.progress}%</span>` : ""}</td>
+        <td class="small">${esc(j.stage || "")}${j.status === "RUNNING" && j.progress != null ? ` <span class="muted">${Math.min(99, j.progress)}%</span>` : ""}</td>
         <td class="small mono">${scf}</td><td class="small mono">${opt}</td><td class="small">${freq}</td>
         <td class="small">${j.recovered ? `<span class="verdict-mid">${j.recovered}회</span>` : (j.attempts ? `${j.attempts} attempt` : '<span class="muted">—</span>')}</td>
         <td class="small">${hb}</td>
@@ -4287,7 +4298,7 @@ async function monRenderDetail(quiet = false) {
     <div class="mini-card"><div class="stat-label">상태</div>
       <div><span class="badge ${badgeClass[v.status] || "queued"}">${esc(v.status)}</span>
         <span class="badge ${MON_GRADE_BADGE[v.grade] || "queued"}">${esc(v.grade || "")}</span></div>
-      <div class="small muted">${esc(v.stage || "")}${v.status === "RUNNING" && v.progress != null ? ` · ${v.progress}%` : ""}</div></div>
+      <div class="small muted">${esc(v.stage || "")}${v.status === "RUNNING" && v.progress != null ? ` · ${Math.min(99, v.progress)}%` : ""}</div></div>
     <div class="mini-card"><div class="stat-label">SCF (${esc(s.label || "—")})</div>
       <div class="mono small">cycle ${s.cycle ?? "—"}${s.max_cycle ? "/" + s.max_cycle : ""} · E ${s.energy != null ? Number(s.energy).toFixed(6) : "—"}</div>
       <div class="mono small">ΔE ${fmtExp(s.delta_e)} · |g| ${fmtExp(s.gorb)} · |ddm| ${fmtExp(s.ddm)}</div>

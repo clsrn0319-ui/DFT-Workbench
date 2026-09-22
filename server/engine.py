@@ -678,7 +678,7 @@ def _frontier_orbitals(mf):
 
 
 def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage,
-                      prog=66, tag=""):
+                      prog=66, tag="", span=14):
     """한 구조의 전자 IP/EA — 수직 ΔSCF, 켜져 있으면 단열까지. 열보정은 밖에서 한다.
 
     지배 conformer 와 민감도용 conformer(P0-5)가 «같은 경로»를 타야 둘의 차이가
@@ -744,7 +744,8 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
         return e
 
     e_cat_v = ion_vertical(+1, "양이온", prog)
-    e_an_v = ion_vertical(-1, "음이온", prog + 4)
+    # 진행률 — prog 에서 prog+span 사이를 네 단계(양·음이온 수직, 양·음이온 단열)로 나눈다
+    e_an_v = ion_vertical(-1, "음이온", prog + round(span * 4 / 14))
     out = {
         "ip_vertical_ev": (e_cat_v - _neutral_ref(+1)) * HARTREE2EV,
         "ea_vertical_ev": (_neutral_ref(-1) - e_an_v) * HARTREE2EV,
@@ -768,8 +769,8 @@ def _redox_electronic(at, e_neutral, mf_neutral, params, solvent_key, log, stage
                 spins.append(sc)
             return e_i, ion_atoms
 
-        e_cat_a, cat_atoms = ion_adiabatic(+1, "양이온", prog + 8)
-        e_an_a, an_atoms = ion_adiabatic(-1, "음이온", prog + 14)
+        e_cat_a, cat_atoms = ion_adiabatic(+1, "양이온", prog + round(span * 8 / 14))
+        e_an_a, an_atoms = ion_adiabatic(-1, "음이온", prog + span)
         out.update({
             "ip_adiabatic_ev": (e_cat_a - _neutral_ref(+1)) * HARTREE2EV,
             "ea_adiabatic_ev": (_neutral_ref(-1) - e_an_a) * HARTREE2EV,
@@ -946,6 +947,7 @@ def run_job(job, update, is_cancelled=lambda: False):
     def stage(name, progress):
         if is_cancelled():
             raise CancelledError()
+        progress = max(0, min(99, int(progress)))   # 100 은 «완료»에만
         update({"stage": name, "progress": progress})
         log(f"[{name}]")
         log(gpu_mod.describe(log))
@@ -1630,13 +1632,16 @@ def run_job(job, update, is_cancelled=lambda: False):
                             f"(IP {prev['ip_ev']} · EA {prev['ea_ev']} eV)")
                         continue
                     try:
-                        stage(f"conformer 민감도 {k + 1}/{len(extra)} — 구조 준비{tag}", 91)
+                        # 민감도 전체를 81~90 % 에 나눠 담는다 (다음 단계가 92 %)
+                        p0 = 81 + round(9 * k / len(extra))
+                        p_span = max(1, round(9 / len(extra)) - 1)
+                        stage(f"conformer 민감도 {k + 1}/{len(extra)} — 구조 준비{tag}", p0)
                         if ci not in sp_cache:
                             sp_cache[ci] = final_singlepoint(
                                 ranked[ci][1], f"민감도 conformer{tag}")
                         at_i, _mol_i, mf_i, e_i, _h, _l, _d = sp_cache[ci]
                         rx_i = _redox_electronic(at_i, e_i, mf_i, params, solvent_key,
-                                                 log, stage, 91, tag=tag)
+                                                 log, stage, p0, tag=tag, span=p_span)
                         member = {"conformer": ci + 1, "e_hartree": e_i,
                                   "ip_ev": round(rx_i[key_ip], 3), "ea_ev": round(rx_i[key_ea], 3),
                                   "dominant": False}

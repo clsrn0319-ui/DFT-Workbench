@@ -172,9 +172,15 @@ def test_conformer_sensitivity_resumes_per_conformer():
     assert "confsens" not in ck["done"] and len(ck["confsens_partial"]) == 1
     first = ck["confsens_partial"][0]["conformer"]
 
-    state2 = {}
-    run_job(dict(job, logs=[]), update=state2.update)
+    state2, seen = {}, []
+
+    def upd(patch):
+        if patch.get("progress") is not None and patch.get("status") != "PUBLISHED":
+            seen.append(patch["progress"])
+        state2.update(patch)
+    run_job(dict(job, logs=[]), update=upd)
     assert state2["status"] == "PUBLISHED", state2.get("error")
+    assert seen and max(seen) <= 99            # 진행률은 완료 전까지 100 을 넘지 않는다
     logs = "\n".join(state2["logs"])
     assert f"conformer 민감도 [conf {first}] — 체크포인트에 저장된 결과를 씁니다" in logs
     assert f"민감도 conformer [conf {first}]" not in logs          # 다시 계산하지 않았다

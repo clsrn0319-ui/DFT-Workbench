@@ -71,7 +71,7 @@
         var jobCell = "";
         if (r.job) {
           jobCell = "<div class=\"small mono muted\">" + h(r.job) + "</div>" +
-            (r.status === "RUNNING" || r.status === "QUEUED" ? "<div class=\"small\">" + h(r.stage || r.status) + (r.progress != null ? " · " + r.progress + "%" : "") + "</div>" : "") +
+            (r.status === "RUNNING" || r.status === "QUEUED" ? "<div class=\"small\">" + h(r.stage || r.status) + (r.progress != null ? " · " + Math.min(99, r.progress) + "%" : "") + "</div>" : "") +
             (r.validation ? "<div class=\"small\">검증 " + badge(r.validation) + "</div>" : "") +
             (r.error ? "<div class=\"small\" style=\"color:var(--danger)\">" + h(r.error) + "</div>" : "") +
             "<div class=\"row-actions\">" +
