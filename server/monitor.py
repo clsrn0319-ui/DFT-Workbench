@@ -295,7 +295,13 @@ class JobMonitor:
     def opt_callback(self, envs: dict):
         """pyberny/geomeTRIC kernel 의 callback(locals()) — 스텝마다."""
         try:
-            step = int(envs.get("cycle", -1)) + 1
+            # 스텝 번호 — pyberny 는 지역 변수 cycle(0부터), geomeTRIC 은 엔진 객체의 self.cycle(1부터)
+            if envs.get("cycle") is not None:
+                step = int(envs["cycle"]) + 1
+            elif getattr(envs.get("self"), "cycle", None) is not None:
+                step = int(envs["self"].cycle)
+            else:
+                step = len(self._opt_hist) + 1
             e = _num(envs.get("energy"))
             g_raw = envs.get("gradients")
             grad = np.asarray(g_raw.get() if hasattr(g_raw, "get") and not isinstance(g_raw, dict) else g_raw)  # cupy → numpy

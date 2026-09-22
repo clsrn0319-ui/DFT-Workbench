@@ -195,6 +195,40 @@ def test_opt_callback_tracks_steps_and_trajectory(tmp_path, monkeypatch):
     assert len(oh["runs"][0]["steps"]) == 3 and oh["runs"][0]["converged"] is False
 
 
+def test_opt_callback_counts_geometric_steps(tmp_path, monkeypatch):
+    """geomeTRIC 은 스텝 번호를 지역 변수 cycle 이 아니라 엔진 객체(self.cycle)에 둔다 — 0 으로 찍히던 문제."""
+    monkeypatch.setattr(store, "LOGS_DIR", tmp_path)
+    import numpy as np
+    from types import SimpleNamespace
+    from pyscf import gto
+    m = monitor.JobMonitor("T-GEO", raw=None, update=None)
+    m.begin_opt("구조 최적화", max_steps=100)
+    mol = gto.M(atom="H 0 0 0; H 0 0 0.74", basis="sto-3g", verbose=0)
+    eng = SimpleNamespace(cycle=0)
+    for k in range(4):
+        eng.cycle += 1
+        m.opt_callback({"self": eng, "energy": -1.1 - 0.001 * k,
+                        "gradients": np.full((2, 3), 1e-2), "mol": mol})
+    assert m.summary["opt"]["step"] == 4
+
+
+def test_real_geometric_optimization_reports_steps(tmp_path, monkeypatch):
+    """실제 geomeTRIC 최적화 — 모니터 스텝 수와 «수렴 (N 스텝)» 로그에 숫자가 나온다."""
+    pytest.importorskip("geometric")
+    monkeypatch.setattr(store, "LOGS_DIR", tmp_path)
+    from server import engine
+    from server.geometry import smiles_to_xyz
+    mon = monitor.JobMonitor("T-GEO2", raw=None, update=None)
+    monkeypatch.setattr(engine, "_MON", mon)
+    atoms, _ = smiles_to_xyz("O", n_conformers=1)
+    params = {"basis_opt": "sto-3g", "xc": "b3lyp", "disp": None, "scf_tol": 1e-8, "opt_max_steps": 30}
+    logs = []
+    engine._optimize_state(atoms, params, 0, 1, logs.append)
+    steps = mon.summary["opt"]["step"]
+    assert steps and steps >= 1
+    assert any(f"수렴 ({steps} 스텝)" in line for line in logs), logs
+
+
 def test_raw_log_helpers_range_search_offset(tmp_path):
     p = tmp_path / "x.log"
     lines = [f"line {i}" for i in range(1, 51)]
