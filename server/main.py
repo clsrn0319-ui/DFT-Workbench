@@ -1027,7 +1027,8 @@ def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
     n_units = {"모노머": 1, "2량체": 2, "3량체": 3}.get(settings["structure"], 1)
 
     def resolve_custom(smiles, name):
-        if n_units > 1:
+        # 2·3량체 전개, 또는 연결점(*)이 있는 반복단위는 모노머여도 말단을 막아야 계산할 수 있다
+        if n_units > 1 or geometry.has_attachment_points(smiles):
             try:
                 smiles = geometry.oligomerize(smiles, n_units)
             except geometry.GeometryError as exc:

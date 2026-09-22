@@ -229,7 +229,7 @@ def minimum_defined_length(smiles: str, max_n: int = 4) -> dict:
     out = {"smiles": smiles, "bde_min_n": None, "checked": []}
     for n in range(1, max_n + 1):
         try:
-            oligo = oligomerize(smiles, n) if n > 1 else smiles
+            oligo = oligomerize(smiles, n)
             bonds = len(desc_mod.breakable_bonds(oligo))
         except (GeometryError, ValueError) as exc:
             out["checked"].append({"n": n, "error": str(exc)})
@@ -252,7 +252,7 @@ def build_series(smiles: str, lengths=DEFAULT_LENGTHS) -> list[dict]:
     out = []
     for n in lengths:
         try:
-            oligo = oligomerize(smiles, n) if n > 1 else smiles
+            oligo = oligomerize(smiles, n)
         except (GeometryError, ValueError) as exc:
             out.append({"n": n, "error": str(exc)})
             continue

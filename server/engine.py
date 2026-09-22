@@ -41,7 +41,7 @@ from . import protocol as protocol_mod
 from . import store
 from . import thermo as thermo_mod
 from .geometry import (smiles_to_conformers, build_cluster, build_torsion_start, dihedral_deg,
-                       parse_torsion_pattern,
+                       parse_torsion_pattern, has_attachment_points, oligomerize,
                        build_cluster_from_atoms, atoms_to_xyz_block)
 
 HARTREE2KJ = 2625.4996
@@ -1001,9 +1001,14 @@ def run_job(job, update, is_cancelled=lambda: False):
                                            "entropy_hartree_per_k", "n_imaginary",
                                            "lowest_freq_cm", "qrrho")}
 
+        # conformer 민감도는 conformer 하나에 수십 시간 — 하나 끝날 때마다 남겨 재시작 때 건너뛴다
+        confsens_partial = list(ckpt.get("confsens_partial") or [])
+
         def save_ckpt(stage_name):
-            """단계가 끝난 직후의 상태를 남긴다 — 실패해도 계산은 계속한다."""
-            done.add(stage_name)
+            """단계가 끝난 직후의 상태를 남긴다 — 실패해도 계산은 계속한다.
+            stage_name 이 None 이면 단계 완료 표시 없이 진행 상태만 저장한다."""
+            if stage_name:
+                done.add(stage_name)
             try:
                 info = checkpoint_mod.save(job, done, {
                     "atoms": atoms, "ranked": ranked, "significant": significant,
@@ -1015,6 +1020,7 @@ def run_job(job, update, is_cancelled=lambda: False):
                         "ip_vertical_ev", "ea_vertical_ev", "ip_adiabatic_ev", "ea_adiabatic_ev",
                         "basis_anion", "noneq_skipped", "use_noneq")} if rx else None),
                     "spin_checks": spin_checks, "fragments": fragments, "mep": mep,
+                    "confsens_partial": confsens_partial,
                 })
                 update({"checkpoint": info})
             except Exception as exc:  # noqa: BLE001
@@ -1027,6 +1033,11 @@ def run_job(job, update, is_cancelled=lambda: False):
 
         solvent_key = _solvent_key(settings)
         smiles = job["material"]["smiles"]
+        if has_attachment_points(smiles):
+            # 연결점(*)이 남은 반복단위(예전 서버에서 제출된 작업 등) — 계산 전에 말단을 막는다
+            capped = oligomerize(smiles, 1)
+            log(f"반복단위 연결점(*)을 말단기로 바꿔 계산합니다: {capped}")
+            smiles = capped
         temperature = float(settings.get("temperature") or 298.15)
         purpose = settings.get("purpose", "")
         # 바인더 스크리닝은 지문 전체(접착·응집·BDE)와 전위를 모두 필요로 한다
@@ -1611,6 +1622,13 @@ def run_job(job, update, is_cancelled=lambda: False):
                     if is_cancelled():
                         raise CancelledError()
                     tag = f" [conf {ci + 1}]"
+                    prev = next((m for m in confsens_partial if m.get("conformer") == ci + 1
+                                 and m.get("basis") == sens_basis), None)
+                    if prev:
+                        sens_members.append({k2: v for k2, v in prev.items() if k2 != "basis"})
+                        log(f"conformer 민감도{tag} — 체크포인트에 저장된 결과를 씁니다 "
+                            f"(IP {prev['ip_ev']} · EA {prev['ea_ev']} eV)")
+                        continue
                     try:
                         stage(f"conformer 민감도 {k + 1}/{len(extra)} — 구조 준비{tag}", 91)
                         if ci not in sp_cache:
@@ -1619,10 +1637,13 @@ def run_job(job, update, is_cancelled=lambda: False):
                         at_i, _mol_i, mf_i, e_i, _h, _l, _d = sp_cache[ci]
                         rx_i = _redox_electronic(at_i, e_i, mf_i, params, solvent_key,
                                                  log, stage, 91, tag=tag)
-                        sens_members.append({
-                            "conformer": ci + 1, "e_hartree": e_i,
-                            "ip_ev": round(rx_i[key_ip], 3), "ea_ev": round(rx_i[key_ea], 3),
-                            "dominant": False})
+                        member = {"conformer": ci + 1, "e_hartree": e_i,
+                                  "ip_ev": round(rx_i[key_ip], 3), "ea_ev": round(rx_i[key_ea], 3),
+                                  "dominant": False}
+                        sens_members.append(member)
+                        confsens_partial.append({**member, "basis": sens_basis})
+                        save_ckpt(None)
+                        log(f"conformer 민감도{tag} 완료 — 체크포인트 저장 (재시작해도 이 conformer 는 건너뜀)")
                     except CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001 — conformer 하나의 실패가 결과를 막지 않는다

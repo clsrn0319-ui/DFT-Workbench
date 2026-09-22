@@ -208,17 +208,76 @@ def dihedral_deg(atoms, quad) -> float:
     return float(np.degrees(np.arctan2(np.dot(np.cross(b1, v), w), np.dot(v, w))))
 
 
-def oligomerize(smiles: str, n_units: int) -> str:
-    """비닐 모노머(C=C 보유)를 head-to-tail 부가 중합 방식으로 n량체 SMILES로 변환.
+_CAP_HETERO = {"O", "N", "S"}
 
-    비고리·비방향족 C=C 하나를 골라 단일결합으로 바꾸고 사슬로 연결한다
-    (양 끝은 수소 캡핑). 이중결합이 여러 개면 첫 번째를 사용한다.
+
+def _join_repeat_units(base, n_units: int) -> str:
+    """연결점(*) 두 개가 있는 반복단위 SMILES → n량체 (n=1 이면 양 끝만 막은 단위 하나).
+
+    첫 번째 * 자리 원자 = 머리(h), 두 번째 * 자리 원자 = 꼬리(t). 단위 u 의 꼬리와 단위 u+1 의
+    머리를 결합한다 (셀룰로오스: C4–O–C1′ 글리코사이드, 폴리에스터: C–O 에스터 결합).
+    사슬 양 끝은 끊긴 상대 원자가 O·N·S 면 그 원자(+H)로, 탄소면 H 로 막는다
+    — 셀룰로오스는 양 끝 OH, PEO 는 HO–(CH2CH2O)n–H, 비닐계는 H.
     """
-    if n_units <= 1:
-        return smiles
+    dummies = [a.GetIdx() for a in base.GetAtoms() if a.GetAtomicNum() == 0]
+    if len(dummies) != 2:
+        raise GeometryError(f"반복단위의 연결점(*)은 2개여야 합니다 (지금 {len(dummies)}개)")
+    ends = []
+    for d in dummies:
+        nb = base.GetAtomWithIdx(d).GetNeighbors()
+        if len(nb) != 1:
+            raise GeometryError("연결점(*)은 원자 하나에만 붙어 있어야 합니다")
+        ends.append(nb[0].GetIdx())
+    (d_head, d_tail), (h, t) = dummies, ends
+    n_atoms = base.GetNumAtoms()
+    combo = base
+    for _ in range(n_units - 1):
+        combo = Chem.CombineMols(combo, base)
+    rw = Chem.RWMol(combo)
+    for u in range(n_units - 1):
+        rw.AddBond(t + u * n_atoms, h + (u + 1) * n_atoms, Chem.BondType.SINGLE)
+    el_h, el_t = base.GetAtomWithIdx(h).GetSymbol(), base.GetAtomWithIdx(t).GetSymbol()
+    if el_t in _CAP_HETERO:      # 첫 단위의 머리 끝 — 상대(꼬리)가 헤테로원자면 그 원자로
+        cap = rw.AddAtom(Chem.Atom(el_t))
+        rw.AddBond(h, cap, Chem.BondType.SINGLE)
+    if el_h in _CAP_HETERO:      # 마지막 단위의 꼬리 끝
+        cap = rw.AddAtom(Chem.Atom(el_h))
+        rw.AddBond(t + (n_units - 1) * n_atoms, cap, Chem.BondType.SINGLE)
+    # 결합이 바뀐 머리·꼬리 원자만 수소 수를 다시 계산하게 둔다 ([CH2] 같은 괄호 표기 대비)
+    for u in range(n_units):
+        for i in (h, t):
+            at = rw.GetAtomWithIdx(i + u * n_atoms)
+            if not at.GetIsAromatic():
+                at.SetNoImplicit(False)
+                at.SetNumExplicitHs(0)
+    for u in reversed(range(n_units)):
+        for d in sorted((d_head, d_tail), reverse=True):
+            rw.RemoveAtom(d + u * n_atoms)
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+    return Chem.MolToSmiles(mol)
+
+
+def has_attachment_points(smiles: str) -> bool:
+    mol = Chem.MolFromSmiles(smiles)
+    return bool(mol) and any(a.GetAtomicNum() == 0 for a in mol.GetAtoms())
+
+
+def oligomerize(smiles: str, n_units: int) -> str:
+    """반복단위 → n량체 SMILES.
+
+    - 연결점(*) 두 개가 있으면(셀룰로오스·폴리에스터·폴리에테르 등 축합계) 그 자리로 이어 붙인다.
+      n=1 이어도 * 를 말단기로 바꾼 SMILES 를 돌려준다 (* 는 계산할 수 없다).
+    - 없으면 비닐 모노머(C=C 보유)를 head-to-tail 부가 중합 방식으로 잇는다 — 비고리·비방향족 C=C
+      하나를 단일결합으로 바꾸고 사슬로 연결(양 끝 수소 캡핑). 이중결합이 여러 개면 첫 번째를 쓴다.
+    """
     base = Chem.MolFromSmiles(smiles)
     if base is None:
         raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    if any(a.GetAtomicNum() == 0 for a in base.GetAtoms()):
+        return _join_repeat_units(base, max(1, n_units))
+    if n_units <= 1:
+        return smiles
     target = None
     for bond in base.GetBonds():
         if (bond.GetBondType() == Chem.BondType.DOUBLE and not bond.GetIsAromatic()
@@ -229,7 +288,9 @@ def oligomerize(smiles: str, n_units: int) -> str:
             break
     if target is None:
         raise GeometryError(
-            "중합 가능한 C=C 이중결합이 없어 2량체/3량체를 만들 수 없습니다 — 모노머로 계산하세요")
+            "중합 가능한 C=C 이중결합이나 연결점(*) 두 개가 없어 2량체/3량체를 만들 수 없습니다 — "
+            "모노머로 계산하거나, 반복단위 SMILES 에 연결점 * 두 개를 넣으세요 "
+            "(예: 셀룰로오스 *C1OC(CO)C(O*)C(O)C1O)")
     a_idx, b_idx = target.GetBeginAtomIdx(), target.GetEndAtomIdx()
     n_atoms = base.GetNumAtoms()
     combo = base

@@ -153,3 +153,30 @@ def test_run_job_ignores_stale_checkpoint():
     logs = "\n".join(state["logs"])
     assert "조건(설정·분자)이 달라 처음부터" in logs and "[구조 생성 (conformer 탐색)]" in logs
     assert state["result"]["descriptors"]["homo_ev"] != -9.9
+
+
+def test_conformer_sensitivity_resumes_per_conformer():
+    """민감도 conformer 하나가 끝날 때마다 저장 — 두 번째 conformer 도중 중단 뒤 재실행하면
+    첫 번째는 다시 계산하지 않는다 (VDF 작업이 재시작마다 민감도를 처음부터 되풀이하던 문제)."""
+    from server.engine import run_job
+    job = {"id": "T-SENS", "material": {"id": None, "name": "pentane", "smiles": "CCCCC"},
+           "settings": _settings(envType="진공·기체", solventId=None, accuracy="빠름",
+                                 purpose="전자구조 + 산화/환원 전위",
+                                 expert={"basis": "sto-3g", "nConformers": 8, "conformerSensitivity": True}),
+           "logs": []}
+    state = {}
+    run_job(dict(job, logs=[]), update=state.update,
+            is_cancelled=lambda: "conformer 민감도 2/" in (state.get("stage") or ""))
+    assert state["status"] == "FAILED", state.get("error")
+    ck = checkpoint.load(job)
+    assert "confsens" not in ck["done"] and len(ck["confsens_partial"]) == 1
+    first = ck["confsens_partial"][0]["conformer"]
+
+    state2 = {}
+    run_job(dict(job, logs=[]), update=state2.update)
+    assert state2["status"] == "PUBLISHED", state2.get("error")
+    logs = "\n".join(state2["logs"])
+    assert f"conformer 민감도 [conf {first}] — 체크포인트에 저장된 결과를 씁니다" in logs
+    assert f"민감도 conformer [conf {first}]" not in logs          # 다시 계산하지 않았다
+    sens = state2["result"]["descriptors"]["conformer_sensitivity"]
+    assert sens["n_conformers"] == 3

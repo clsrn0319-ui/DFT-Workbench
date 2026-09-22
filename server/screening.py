@@ -171,7 +171,7 @@ def parse_candidates(text: str, structure: str = "모노머",
         row["canonical"] = canonical
         row["fgroups"] = _fgroups(canonical)
         calc_smiles = smiles
-        if n_units > 1:
+        if n_units > 1 or geometry.has_attachment_points(smiles):
             try:
                 calc_smiles = geometry.oligomerize(smiles, n_units)
             except geometry.GeometryError as exc:
