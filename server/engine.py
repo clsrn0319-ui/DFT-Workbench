@@ -166,6 +166,8 @@ def _resolve_params(settings):
         "freq_scale": (float(exp["freqScale"]) if exp.get("freqScale")
                        else presets.FREQ_SCALE.get(functional, 1.0)),
         "opt_in_solvent": bool(exp.get("optimizeInSolvent")),
+        # 접촉 구조(이량체·흡착·표면) 를 DFT 로 이완할지 — 역장 구조만 쓰면 수소결합을 과소평가한다
+        "pair_relax": do_opt if exp.get("pairRelax") is None else bool(exp["pairRelax"]),
         # BDE 라디칼 조각 재최적화 (기본 활성 — 고정 구조는 BDE를 크게 과대평가)
         "bde_relax": True if exp.get("bdeRelaxFragments") is None
                      else bool(exp["bdeRelaxFragments"]),
@@ -505,18 +507,22 @@ def _freeze_solvent_from(mf_ion, dm_neutral):
     sv.frozen = True
 
 
-def _constraints_file(torsions):
-    """geomeTRIC 제약 파일 — 비틀림각 고정 ($set dihedral, 원자 번호는 1부터)."""
+def _constraints_file(torsions=None, freeze=None):
+    """geomeTRIC 제약 파일 — 비틀림각 고정($set dihedral)·원자 고정($freeze xyz). 번호는 1부터."""
     import tempfile
-    lines = ["$set"] + [f"dihedral {q[0] + 1} {q[1] + 1} {q[2] + 1} {q[3] + 1} {deg:.2f}"
-                        for q, deg in torsions]
+    lines = []
+    if freeze:
+        lines += ["$freeze"] + [f"xyz {i + 1}" for i in freeze]
+    if torsions:
+        lines += ["$set"] + [f"dihedral {q[0] + 1} {q[1] + 1} {q[2] + 1} {q[3] + 1} {deg:.2f}"
+                             for q, deg in torsions]
     fd = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
     fd.write("\n".join(lines) + "\n")
     fd.close()
     return fd.name
 
 
-def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None):
+def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None, freeze=None):
     """DFT 기체상 구조 최적화. geomeTRIC → pyberny 순으로 시도.
 
     optimize() 는 수렴 여부를 버리고 구조만 돌려준다 — 최대 스텝에서 멈춰도
@@ -531,9 +537,10 @@ def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None):
     try:
         try:
             from pyscf.geomopt.geometric_solver import kernel as geo_kernel
-            if torsions:
-                cfile = _constraints_file(torsions)
-                log(f"구조 최적화 시작{label} (geomeTRIC · 주사슬 비틀림 {len(torsions)}개 고정)")
+            if torsions or freeze:
+                cfile = _constraints_file(torsions, freeze)
+                log(f"구조 최적화 시작{label} (geomeTRIC · "
+                    + (f"주사슬 비틀림 {len(torsions)}개 고정" if torsions else f"원자 {len(freeze)}개 고정") + ")")
                 try:
                     converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps, constraints=cfile)
                 finally:
@@ -546,6 +553,8 @@ def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None):
                 converged, mol_opt = geo_kernel(work, callback=cb, maxsteps=max_steps)
         except ImportError:
             from pyscf.geomopt.berny_solver import kernel as berny_kernel
+            if freeze:
+                log(f"원자 고정 최적화는 geomeTRIC 이 있어야 합니다 — 고정 없이 진행{label}")
             if torsions:
                 log(f"주사슬 비틀림 고정은 geomeTRIC 이 있어야 합니다 — 이 서버에는 없어 고정 없이 "
                     f"최적화합니다{label}")
@@ -1731,10 +1740,27 @@ def run_job(job, update, is_cancelled=lambda: False):
         # 8) 물성 지문 — 확장 기술자 (MEP · 반응성 지표 · 결합/흡착 · TDDFT)
         # 접촉 클러스터 상호작용 에너지 — 표면·이량체·흡착이 함께 쓴다 (BSSE counterpoise 보정)
         def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None):
-            """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출."""
+            """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출.
+
+            역장으로 만든 접촉 구조는 수소결합 거리가 느슨해 상호작용을 과소평가한다.
+            그래서 host 는 고정한 채 guest 만 DFT 로 이완한 뒤 에너지를 낸다 (geomeTRIC 필요).
+            """
             stage(label, prog)
             cl_atoms, frags, _ = build_cluster_from_atoms(
                 host_atoms, host_smiles or smiles, guest_smiles, seed=7)
+            if params.get("pair_relax"):
+                try:
+                    n_host = frags[0]["end"]
+                    mol_r = _build_mol(cl_atoms, params["basis_opt"], params["charge"] + charge, mult)
+                    mf_r = _make_mf(mol_r, params["xc"], params["disp"], solvent_key, params["scf_tol"])
+                    mol_opt = _optimize_geometry(mf_r, log, f" ({label} 접촉 구조)",
+                                                 max_steps=params.get("opt_max_steps", 100),
+                                                 freeze=list(range(n_host)))
+                    cl_atoms = _mol_to_atoms(mol_opt)
+                except CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — 이완 실패해도 역장 구조로 계산한다
+                    log(f"{label}: 접촉 구조 DFT 이완 실패 — 역장 구조로 진행 ({exc})")
             mol_c = _build_mol(cl_atoms, params["basis_sp"],
                                params["charge"] + charge, mult)
             e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],

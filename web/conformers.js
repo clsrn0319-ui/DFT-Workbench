@@ -10,9 +10,11 @@
   var S = {
     sets: [], doc: null, cur: 1, sel: new Set(), tab: "prep", overlay: false,
     busy: false, error: "", timer: null,
+    lib: null, libOpen: false, libQuery: "",
     form: {smiles: "", name: "", libraryId: null, structure: "모노머", reference: "all-trans",
            pattern: "T G T G'", nConformers: 20, seed: 42, pruneRms: 0.5},
   };
+  var CAT = {monomer: "바인더 모노머", polymer: "고분자·올리고머", solvent: "용매", additive: "첨가제", salt: "리튬염·이온", other: "기타"};
   var $ = function (id) { return document.getElementById(id); };
   function h(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -109,13 +111,37 @@
     if (window.rbSyncConfPick) window.rbSyncConfPick();
     if (window.rbOpenCalc) window.rbOpenCalc();
   }
-  function fromBasket() {
-    var L = window.RBLIB;
-    var id = L && L.sel && L.sel[0];
-    var m = id && L.by && L.by[id];
-    if (!m) { S.error = "«분자 검색 및 선택»에서 분자를 먼저 고르세요."; render(); return; }
+  async function openLib() {
+    S.libOpen = !S.libOpen;
+    if (S.libOpen && !S.lib) {
+      try { S.lib = (await api("/api/library")).molecules || []; }
+      catch (e) { S.error = "분자 라이브러리를 불러오지 못했습니다 — " + e.message; S.libOpen = false; }
+    }
+    render();
+  }
+  function pickMolecule(id) {
+    var m = (S.lib || []).find(function (x) { return x.id === id; });
+    if (!m) return;
     S.form.smiles = m.smiles; S.form.name = m.name; S.form.libraryId = m.id;
-    S.error = ""; render();
+    S.libOpen = false; S.error = "";
+    render();
+  }
+  function libRows() {
+    var q = (S.libQuery || "").trim().toLowerCase();
+    var list = (S.lib || []).filter(function (m) {
+      if (!q) return true;
+      return [m.name, m.full, m.formula, m.smiles, (m.tags || []).join(" ")]
+        .some(function (v) { return (v || "").toLowerCase().indexOf(q) >= 0; });
+    });
+    var sel = (window.RBLIB && window.RBLIB.sel) || [];
+    list.sort(function (a, b) { return (sel.indexOf(b.id) >= 0) - (sel.indexOf(a.id) >= 0); });
+    return list.slice(0, 200).map(function (m) {
+      return '<div class="cf-librow" data-mol="' + h(m.id) + '">' +
+        "<b>" + h(m.name) + "</b>" +
+        '<span class="small muted">' + h(m.formula || "") + " · " + h(CAT[m.category] || m.category || "") +
+        (sel.indexOf(m.id) >= 0 ? ' · <span class="chip">선택함</span>' : "") + "</span>" +
+        '<span class="mono small muted sp">' + h((m.smiles || "").slice(0, 28)) + "</span></div>";
+    }).join("") || '<div class="small muted">맞는 분자가 없습니다.</div>';
   }
 
   /* ── 그리기 ── */
@@ -260,7 +286,7 @@
       '<div class="cf-fields">' +
       field("분자 이름", '<input class="input" id="cf-name" value="' + h(f.name) + '" placeholder="예: PVDF 3량체">') +
       field("SMILES", '<input class="input" id="cf-smiles" value="' + h(f.smiles) + '" placeholder="예: C=C(F)F" style="min-width:220px">') +
-      field("&nbsp;", '<button class="btn" id="cf-basket" type="button">선택함에서 가져오기</button>') +
+      field("&nbsp;", '<button class="btn" id="cf-lib" type="button">＋ 분자 라이브러리에서 고르기</button>') +
       field("구조", select("cf-structure", ["모노머", "2량체", "3량체"], f.structure)) +
       field("기준 구조", select("cf-reference", [["auto", "자동 (최저 에너지)"], ["all-trans", "all-trans"], ["pattern", "비틀림 패턴"]], f.reference)) +
       (f.reference === "pattern" ? field("패턴", '<input class="input" id="cf-pattern" value="' + h(f.pattern) + '" placeholder="T G T G\'" style="width:130px">') : "") +
@@ -269,7 +295,13 @@
       field("seed", '<input class="input" id="cf-seed" type="number" value="' + f.seed + '" style="width:80px">') +
       field("&nbsp;", '<button class="btn primary" id="cf-go" type="button"' + (S.busy ? " disabled" : "") + ">" +
         (S.busy ? "탐색 중…" : "탐색") + "</button>") +
-      "</div>" + (S.error ? '<div class="form-error">' + h(S.error) + "</div>" : "") + "</div>";
+      "</div>" +
+      (S.libOpen ? '<div class="cf-libpick"><div class="toolbar" style="gap:8px;margin-bottom:6px">' +
+        '<input class="input" id="cf-libq" placeholder="이름 · 화학식 · SMILES 로 찾기" value="' + h(S.libQuery) + '" style="max-width:260px">' +
+        '<span class="small muted">' + ((S.lib || []).length) + '개 · 선택함에 담은 분자가 위에 옵니다</span>' +
+        '<button class="btn ghost sm" type="button" id="cf-libclose" style="margin-left:auto">닫기</button></div>' +
+        '<div class="cf-liblist">' + libRows() + "</div></div>" : "") +
+      (S.error ? '<div class="form-error">' + h(S.error) + "</div>" : "") + "</div>";
 
     if (!S.doc) {
       el.innerHTML = head + '<div class="card"><div class="empty small">분자를 넣고 «탐색»을 누르거나, 저장된 세트를 고르세요.</div></div>';
@@ -324,7 +356,14 @@
     bind("cf-structure", "change", function (e) { S.form.structure = e.target.value; });
     bind("cf-reference", "change", function (e) { S.form.reference = e.target.value; render(); });
     bind("cf-go", "click", search);
-    bind("cf-basket", "click", fromBasket);
+    bind("cf-lib", "click", openLib);
+    bind("cf-libclose", "click", function () { S.libOpen = false; render(); });
+    bind("cf-libq", "input", function (e) {
+      S.libQuery = e.target.value;
+      var box = document.querySelector(".cf-liblist");
+      if (box) { box.innerHTML = libRows(); wireLibRows(); }
+    });
+    wireLibRows();
     bind("cf-set", "change", function (e) { if (e.target.value) openSet(e.target.value); else { S.doc = null; render(); } });
     el.querySelectorAll("[data-tab]").forEach(function (b) {
       b.addEventListener("click", function () { S.tab = b.dataset.tab; render(); });
@@ -348,6 +387,14 @@
         else if (a === "tocalc") toCalc();
         else if (a === "del") removeSet();
       });
+    });
+  }
+
+  function wireLibRows() {
+    var el = root();
+    if (!el) return;
+    el.querySelectorAll("[data-mol]").forEach(function (b) {
+      b.addEventListener("click", function () { pickMolecule(b.dataset.mol); });
     });
   }
 
