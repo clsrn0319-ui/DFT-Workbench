@@ -77,6 +77,7 @@
     if (s.customMixedSolvent && window.rbLibSetCalcMixture) { window.rbLibSetCalcMixture(s.customMixedSolvent); n++; }
     if (s.temperature != null) { setVal("temperature", s.temperature); n++; }
     if (s.referenceElectrode) { if (setSel("ref-electrode", s.referenceElectrode)) n++; }
+    if (s.surfaceId !== undefined && setSel("surface", s.surfaceId || "")) { n++; if (window.rbSyncSurface) window.rbSyncSurface(); }
     if (s.structure && setSel("structure", s.structure)) n++;
     if (s.accuracy && setSel("accuracy", s.accuracy)) n++;
     if (s.purpose && setSel("purpose", s.purpose)) n++;
@@ -117,6 +118,7 @@
     Object.keys(exp).forEach(k => { if (exp[k] === undefined) delete exp[k]; });
     return {envType: env, solventId: env === "진공·기체" ? null : (g("solvent") || null), temperature: num(g("temperature")) ?? 298.15,
             referenceElectrode: g("ref-electrode") || null, structure: g("structure") || "모노머", accuracy: g("accuracy") || "표준",
+            surfaceId: g("surface") || null, surfaceCompetition: g("surface-comp") !== "false",
             purpose: g("purpose") || "전자구조(구조 최적화)", expert: exp};
   }
   async function saveTemplateFromForm(mode) {

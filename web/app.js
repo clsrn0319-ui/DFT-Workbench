@@ -205,6 +205,21 @@ async function init() {
   fillSelect("ref-electrode",
     [["없음", "없음 (IP·EA만 보고)"], ...PRESETS.referenceElectrodes.map(r => [r, r + " 기준 전위"])],
     PRESETS.defaults.referenceElectrode);
+  // 표면·계면 — 집전체·활물질을 그룹으로 묶어 보여 준다
+  const surfSel = $("surface");
+  if (surfSel) {
+    surfSel.innerHTML = '<option value="">계산 안 함</option>';
+    const groups = {};
+    for (const s of PRESETS.surfaces || []) (groups[s.group] = groups[s.group] || []).push(s);
+    for (const [g, list] of Object.entries(groups)) {
+      const og = document.createElement("optgroup");
+      og.label = g;
+      for (const s of list) og.appendChild(new Option(s.label, s.key));
+      surfSel.appendChild(og);
+    }
+    surfSel.onchange = syncSurface;
+    syncSurface();
+  }
   fillSelect("structure", PRESETS.structures.map(s => [s, s]), PRESETS.defaults.structure);
   fillSelect("accuracy", Object.keys(PRESETS.accuracy).map(k => [k, k]), PRESETS.defaults.accuracy);
   fillSelect("purpose", PRESETS.purposes.map(p => [p, p]), PRESETS.defaults.purpose);
@@ -282,6 +297,16 @@ function syncAccuracyDesc() {
   $("accuracy-desc").textContent = PRESETS.accuracy[$("accuracy").value] || "";
 }
 
+/** 표면·계면 선택에 따라 설명·용매 경쟁 칸을 보여 준다 */
+function syncSurface() {
+  const sel = $("surface"), desc = $("surface-desc"), wrap = $("surface-comp-wrap");
+  if (!sel) return;
+  const s = (PRESETS.surfaces || []).find(x => x.key === sel.value);
+  if (desc) desc.textContent = s ? s.desc : "집전체·활물질 표면과의 흡착·용매 경쟁을 계산합니다 (선택)";
+  if (wrap) wrap.hidden = !s;
+}
+window.rbSyncSurface = syncSurface;
+
 function syncEnvState() {
   const env = document.querySelector('input[name="env"]:checked')?.value;
   $("solvent").disabled = env === "진공·기체";
@@ -315,6 +340,8 @@ async function submit() {
       accuracy: $("accuracy").value,
       purpose: $("purpose").value,
       referenceElectrode: $("ref-electrode").value,
+      surfaceId: $("surface") ? ($("surface").value || null) : null,
+      surfaceCompetition: $("surface-comp") ? $("surface-comp").value === "true" : true,
       expert: {
         charge: parseInt($("charge").value) || 0,
         multiplicity: parseInt($("multiplicity").value) || 1,

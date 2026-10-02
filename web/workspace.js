@@ -487,6 +487,24 @@ function startStructMeta(r) {
   return `<span>|</span><span title="${esc(tip)}">${esc(parts.join(" · "))}</span>`;
 }
 
+/** 지정한 표면(집전체 등)과의 흡착·용매 경쟁 카드 */
+function surfaceCard(si) {
+  const V = {binder: ["verdict-ok", "바인더 우세"], competitive: ["verdict-mid", "경쟁"], solvent: ["verdict-no", "용매 우세"]};
+  const [cls, label] = V[si.verdict] || ["muted", "흡착만 계산"];
+  const row = (k, v) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`;
+  return `<div><h3 style="font-size:13px;color:var(--accent)">표면·계면 — ${esc(si.label)}</h3>
+    <table class="kv-table" style="max-width:520px">
+      ${row("표면 모델", esc(si.model))}
+      ${row("바인더 흡착", `<b>${fmt(si.binding_kj)}</b> kJ/mol`)}
+      ${si.solvent ? row(`${esc(si.solvent)} 흡착`, `${fmt(si.solvent_binding_kj)} kJ/mol`) : ""}
+      ${si.exchange_kj != null ? row("교환 에너지", `<b>${fmt(si.exchange_kj)}</b> kJ/mol
+        <span class="badge ${cls}" style="margin-left:6px">${label}</span>`) : ""}
+    </table>
+    <p class="muted small" style="margin:4px 0 0">${si.verdict_text ? esc(si.verdict_text) + " · " : ""}
+      음수일수록 강하게 붙습니다. 교환 에너지가 음수면 바인더가 표면의 용매를 밀어내고 붙는다는 뜻입니다.
+      슬랩이 아닌 클러스터 모델이라 절대값이 아니라 후보끼리의 순위로 보세요.</p></div>`;
+}
+
 /* ── Orbital Information 표 (Geometry 탭 세 번째 열) ── */
 function orbInfoTable(r, key) {
   const oc = (r.orbital_clouds || {})[key], lv = orbLevelsOf(r);
@@ -557,11 +575,12 @@ function tabSummaryHtml(job, r) {
   if (radar) {
     html += `<div class="grid-2" style="margin-top:16px"><div><h3 style="font-size:13px;color:var(--accent)">물성 지문 (축 선택 가능)</h3><div id="fp-axis-picker"></div><div id="fp-radar">${radar}</div>
       <p class="muted small" style="margin:4px 0 0">저장된 PUBLISHED 결과 전체 범위로 min-max 정규화 · 점에 마우스를 올리면 원값·단위 표시 · 바깥쪽일수록 스크리닝에 유리한 방향</p></div>`;
+    if (d.surface_interaction) html += surfaceCard(d.surface_interaction);
     if (d.surface_adsorption) html += `<div><h3 style="font-size:13px;color:var(--accent)">활물질 표면 흡착 에너지</h3>${svgAdsorption(d.surface_adsorption)}<p class="muted small" style="margin:4px 0 0">막대가 길수록 해당 표면에 강하게 흡착 (E_ad 음수 방향) · 대용 클러스터 모델 전제 — 다른 표면 모델·문헌 절대값과 비교 금지</p></div>`;
     html += "</div>";
   } else if (d.surface_adsorption) html += `<h3 style="font-size:13px;color:var(--accent);margin-top:16px">활물질 표면 흡착 에너지</h3>${svgAdsorption(d.surface_adsorption)}`;
   if (r.validation) html += htmlValidationCard(r.validation, job.id);
-  const shown = new Set(["potential_reference", "conformer_populations", "conformer_sensitivity", "li_interaction", "mep_points", "surface_adsorption", "bde_all", "bde_weakest_bond", "uvvis_states"]);
+  const shown = new Set(["potential_reference", "conformer_populations", "conformer_sensitivity", "li_interaction", "mep_points", "surface_adsorption", "surface_interaction", "bde_all", "bde_weakest_bond", "uvvis_states"]);
   const ordered = [...PINNED, ...KV_GROUPS.flatMap(g => g[1]), ...Object.keys(d)];
   let listRows = ""; const seen = new Set();
   for (const k of ordered) {

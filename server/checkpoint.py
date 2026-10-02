@@ -24,11 +24,12 @@ from . import store
 
 #: 단계 순서 — 화면 표시와 «어디까지 왔는가» 판단용
 STAGES = ["geometry", "thermo", "solvation", "interaction", "redox", "confsens",
-          "mep", "li", "dimer", "adsorption", "bde", "tddft"]
+          "mep", "li", "surface", "dimer", "adsorption", "bde", "tddft"]
 STAGE_LABEL = {
     "geometry": "구조 생성·최적화", "thermo": "진동수·열보정", "solvation": "용매화 에너지",
     "interaction": "클러스터 상호작용", "redox": "산화/환원 전위", "confsens": "conformer 민감도",
-    "mep": "MEP·반응성 지표", "li": "Li⁺ 상호작용", "dimer": "이량체 결합",
+    "mep": "MEP·반응성 지표", "li": "Li⁺ 상호작용", "surface": "표면·계면 상호작용",
+    "dimer": "이량체 결합",
     "adsorption": "표면 흡착", "bde": "결합 해리에너지", "tddft": "UV-Vis",
 }
 _lock = threading.Lock()

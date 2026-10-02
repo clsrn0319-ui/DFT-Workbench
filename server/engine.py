@@ -40,7 +40,7 @@ from . import presets
 from . import protocol as protocol_mod
 from . import store
 from . import thermo as thermo_mod
-from .geometry import (smiles_to_conformers, build_cluster, build_torsion_start, dihedral_deg,
+from .geometry import (smiles_to_conformers, smiles_to_xyz, build_cluster, build_torsion_start, dihedral_deg,
                        parse_torsion_pattern, has_attachment_points, oligomerize,
                        build_cluster_from_atoms, atoms_to_xyz_block)
 
@@ -837,6 +837,60 @@ def _li_ion_energy(params, solvent_key, log) -> float:
             "Li⁺ (고립)", log))
 
     return float(licomp.get_constant(key, compute))
+
+
+SURFACE_VERDICT = [
+    (-10.0, "binder", "바인더가 용매를 밀어내고 표면에 붙습니다 — 접착에 유리"),
+    (10.0, "competitive", "바인더와 용매가 비슷하게 경쟁합니다 — 건조·용매 조건이 접착을 좌우"),
+    (None, "solvent", "용매가 표면에 더 강하게 붙습니다 — 잔류 용매가 접착을 막을 수 있음"),
+]
+
+
+def _surface_interaction(atoms, smiles, settings, params, solvent_key, log, stage, pair_energy):
+    """지정한 표면 모델과의 흡착 에너지, 그리고 용매와의 경쟁(교환 에너지).
+
+    ΔE_ads(바인더)  : 표면 + 바인더 접촉 클러스터의 상호작용 에너지 (BSSE 보정)
+    ΔE_ads(용매)    : 같은 표면 + 용매 분자 하나
+    ΔE_exchange     : ΔE_ads(바인더) − ΔE_ads(용매) — 음수면 바인더가 용매를 밀어내고 붙는다
+
+    슬랩이 아닌 작은 클러스터 모델이라 절대값은 쓰지 않고, 후보끼리의 순위·경쟁 방향만 본다.
+    """
+    surf = presets.SURFACES_BY_ID[settings["surfaceId"]]
+    out = {"descriptors": {}, "structures": {}, "notes": []}
+    stage(f"{surf['label']} 흡착", 83)
+    e_ads, ads_atoms = pair_energy(atoms, surf["smiles"], f"{surf['label']} 흡착", 83)
+    info = {"surface": surf["key"], "label": surf["label"], "model": surf["desc"],
+            "binding_kj": round(e_ads, 1)}
+    out["structures"]["surface_complex"] = atoms_to_xyz_block(ads_atoms, f"{surf['label']} + 바인더")
+    out["descriptors"]["surface_binding_kj"] = round(e_ads, 1)
+
+    comps = licomp.solvent_components(settings) if settings.get("surfaceCompetition") else []
+    if comps:
+        sol = comps[0]            # 혼합 용매면 비율이 가장 큰 성분 하나로 경쟁을 본다
+        stage(f"{surf['label']} · {sol['abbr']} 경쟁", 84)
+        surf_atoms, _ = smiles_to_xyz(surf["smiles"], n_conformers=3)
+        e_sol, sol_atoms = pair_energy(surf_atoms, sol["smiles"], f"{surf['label']} · {sol['abbr']} 흡착", 84,
+                                       host_smiles=surf["smiles"])
+        ex = e_ads - e_sol
+        key = next(k for lim, k, _ in SURFACE_VERDICT if lim is None or ex <= lim)
+        text = next(t for lim, _, t in SURFACE_VERDICT if lim is None or ex <= lim)
+        info.update({"solvent": sol["abbr"], "solvent_binding_kj": round(e_sol, 1),
+                     "exchange_kj": round(ex, 1), "verdict": key, "verdict_text": text})
+        out["structures"]["surface_solvent"] = atoms_to_xyz_block(
+            sol_atoms, f"{surf['label']} + {sol['abbr']}")
+        out["descriptors"]["surface_solvent_binding_kj"] = round(e_sol, 1)
+        out["descriptors"]["surface_exchange_kj"] = round(ex, 1)
+        out["notes"].append(
+            f"{surf['label']}: 바인더 흡착 {e_ads:.1f} kJ/mol · {sol['abbr']} 흡착 {e_sol:.1f} kJ/mol → "
+            f"교환 {ex:+.1f} kJ/mol — {text}")
+    else:
+        out["notes"].append(f"{surf['label']}: 바인더 흡착 {e_ads:.1f} kJ/mol (용매 경쟁 미계산)")
+    out["notes"].append(
+        "표면 상호작용은 슬랩이 아닌 작은 클러스터 모델이라 절대값은 문헌·실험과 직접 비교하지 말고, "
+        "같은 표면 모델에서 후보끼리의 순위·경쟁 방향으로만 보세요. 금속 Al 이 아니라 자연 산화막을 "
+        "모사한 모델입니다.")
+    out["descriptors"]["surface_interaction"] = info
+    return out
 
 
 def _li_interaction(atoms, mol, e_total, smiles, params, settings, solvent_key, temperature,
@@ -1667,26 +1721,43 @@ def run_job(job, update, is_cancelled=lambda: False):
                 log("클러스터 계산에서는 conformer 민감도를 산출하지 않습니다")
 
         # 8) 물성 지문 — 확장 기술자 (MEP · 반응성 지표 · 결합/흡착 · TDDFT)
+        # 접촉 클러스터 상호작용 에너지 — 표면·이량체·흡착이 함께 쓴다 (BSSE counterpoise 보정)
+        def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None):
+            """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출."""
+            stage(label, prog)
+            cl_atoms, frags, _ = build_cluster_from_atoms(
+                host_atoms, host_smiles or smiles, guest_smiles, seed=7)
+            mol_c = _build_mol(cl_atoms, params["basis_sp"],
+                               params["charge"] + charge, mult)
+            e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],
+                                    solvent_key, params["scf_tol"]), label, log)
+            # BSSE counterpoise: 두 조각 모두 복합체 basis에서 평가
+            e_host_cp = _counterpoise_energy(
+                cl_atoms, (0, frags[0]["end"]), params["basis_sp"],
+                params["charge"], params["multiplicity"], params["xc"], params["disp"],
+                solvent_key, params["scf_tol"], f"{label} 호스트(CP)", log)
+            e_guest_cp = _counterpoise_energy(
+                cl_atoms, (frags[1]["start"], frags[1]["end"]), params["basis_sp"],
+                charge, mult, params["xc"], params["disp"],
+                solvent_key, params["scf_tol"], f"{label} 게스트(CP)", log)
+            return (e_c - e_host_cp - e_guest_cp) * HARTREE2KJ, cl_atoms
+
+        # 지정한 표면(집전체·활물질)과의 상호작용 — 흡착 + 용매 경쟁 (3절 «표면·계면»)
+        if closed_shell and settings.get("surfaceId") and "surface" not in done:
+            try:
+                surf_out = _surface_interaction(atoms, smiles, settings, params, solvent_key,
+                                                log, stage, pair_energy)
+                descriptors.update(surf_out["descriptors"])
+                fingerprint_structures.update(surf_out["structures"])
+                for n_ in surf_out["notes"]:
+                    add_note(n_)
+            except CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 표면 하나가 실패해도 결과를 막지 않는다
+                log(f"표면 상호작용 계산 실패 — 건너뜀: {exc}")
+            save_ckpt("surface")
+
         if want_fingerprint:
-            def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1):
-                """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출."""
-                stage(label, prog)
-                cl_atoms, frags, _ = build_cluster_from_atoms(
-                    host_atoms, smiles, guest_smiles, seed=7)
-                mol_c = _build_mol(cl_atoms, params["basis_sp"],
-                                   params["charge"] + charge, mult)
-                e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],
-                                        solvent_key, params["scf_tol"]), label, log)
-                # BSSE counterpoise: 두 조각 모두 복합체 basis에서 평가
-                e_host_cp = _counterpoise_energy(
-                    cl_atoms, (0, frags[0]["end"]), params["basis_sp"],
-                    params["charge"], params["multiplicity"], params["xc"], params["disp"],
-                    solvent_key, params["scf_tol"], f"{label} 호스트(CP)", log)
-                e_guest_cp = _counterpoise_energy(
-                    cl_atoms, (frags[1]["start"], frags[1]["end"]), params["basis_sp"],
-                    charge, mult, params["xc"], params["disp"],
-                    solvent_key, params["scf_tol"], f"{label} 게스트(CP)", log)
-                return (e_c - e_host_cp - e_guest_cp) * HARTREE2KJ, cl_atoms
 
             if "mep" not in done:
                 stage("MEP · 반응성 지표", 60)

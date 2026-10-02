@@ -197,6 +197,29 @@ PURPOSES = [
     # (엔진·판정 로직은 남아 있어 목록에 되살리면 그대로 동작한다)
 ]
 
+# 표면·계면 모델 — 집전체·활물질 표면을 대신하는 작은 닫힌 껍질 클러스터.
+# 실제 Al 집전체 표면은 금속이 아니라 자연 산화막(Al2O3·수산화물)이므로 그쪽을 기본으로 둔다.
+# 금속 클러스터(Al2·Cu)는 홀전자 때문에 분자 DFT 로 다루기 어려워 넣지 않았다.
+SURFACES = [
+    {"key": "al_oxide_oh", "label": "Al 집전체 — 산화막 수산화 사이트", "group": "집전체",
+     "smiles": "O[Al](O)O", "desc": "Al(OH)3 — 자연 산화막 표면의 –OH 사이트 (기본 권장)"},
+    {"key": "al_oxide_boehmite", "label": "Al 집전체 — 보에마이트 사이트", "group": "집전체",
+     "smiles": "O[Al]=O", "desc": "AlO(OH) — 산화막의 Al–O 사이트"},
+    {"key": "al_oxide_dry", "label": "Al 집전체 — 무수 산화물", "group": "집전체",
+     "smiles": "O=[Al]O[Al]=O", "desc": "Al2O3 조각 — 수분이 없는 산화막"},
+    {"key": "al_oxide_wet", "label": "Al 집전체 — 수분 흡착 산화막", "group": "집전체",
+     "smiles": "O[Al](O)O.O", "desc": "Al(OH)3 + H2O — 표면에 물이 남아 있을 때"},
+    {"key": "graphite", "label": "흑연 활물질", "group": "활물질",
+     "smiles": "c1ccc2ccccc2c1", "desc": "흑연 π 표면 — 나프탈렌 조각"},
+    {"key": "si", "label": "실리콘 활물질", "group": "활물질",
+     "smiles": "[SiH3][SiH3]", "desc": "수소 종단 Si–Si 사이트"},
+    {"key": "ncm811", "label": "NCM811 양극", "group": "활물질",
+     "smiles": "[Li]O[Li]", "desc": "층상 산화물 — 리튬 산화물 사이트 근사"},
+    {"key": "lfp", "label": "LFP 양극", "group": "활물질",
+     "smiles": "[Li]OP(=O)(O[Li])O[Li]", "desc": "인산철 — 인산 리튬 사이트 근사"},
+]
+SURFACES_BY_ID = {s["key"]: s for s in SURFACES}
+
 # 스크리닝 레이더(물성 지문) 축 — (기술자 키, 표시명, 단위, 낮을수록 좋음)
 FINGERPRINT_AXES = [
     ("gap_ev", "HOMO-LUMO gap", "eV", False),
@@ -216,6 +239,8 @@ DEFAULT_SETTINGS = {
     "accuracy": "표준",
     "purpose": "전자구조(구조 최적화)",
     "referenceElectrode": "Li/Li+",
+    "surfaceId": None,          # «표면·계면» 모델 (집전체·활물질) — None 이면 계산하지 않음
+    "surfaceCompetition": True,  # 표면에 붙은 용매를 밀어내는지(교환 에너지)까지 계산
     "expert": {
         "charge": 0,
         "multiplicity": 1,

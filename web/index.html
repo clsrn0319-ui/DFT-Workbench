@@ -1056,6 +1056,15 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
         <select class="input" id="atmosphere"></select></div>
       <div class="field"><span class="field-label">기준 전극</span>
         <select class="input" id="ref-electrode"></select></div>
+      <div class="field"><span class="field-label">표면 · 계면 (선택)</span>
+        <select class="input" id="surface"
+          title="집전체·활물질 표면 위에 이 분자가 얼마나 잘 붙는지, 그리고 용매를 밀어내는지를 계산합니다. 작은 클러스터 모델이라 순위 비교용입니다."></select>
+        <p class="muted small" id="surface-desc" style="margin:4px 0 0"></p></div>
+      <div class="field" id="surface-comp-wrap" hidden><span class="field-label">용매 경쟁</span>
+        <select class="input" id="surface-comp">
+          <option value="true">계산 (바인더가 용매를 밀어내는지)</option>
+          <option value="false">생략 (흡착 에너지만)</option>
+        </select></div>
     </div>
     <div class="option-group" style="margin-top:14px;margin-bottom:0">
       <div class="option-title">명시적 주변 분자 (선택) — 용질 주위에 실제 분자를 배치 (cluster-continuum)</div>

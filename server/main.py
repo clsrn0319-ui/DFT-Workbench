@@ -136,6 +136,9 @@ class JobSettings(BaseModel):
     accuracy: str = "표준"
     purpose: str = "전자구조(구조 최적화)"
     referenceElectrode: Optional[str] = "Li/Li+"  # "없음"/None이면 IP·EA만 보고
+    # 표면·계면 — 집전체(Al 산화막 등) 위 흡착과 용매 경쟁. None 이면 계산하지 않는다.
+    surfaceId: Optional[str] = Field(None, max_length=40)
+    surfaceCompetition: bool = True
     expert: ExpertSettings = ExpertSettings()
 
 
@@ -212,6 +215,7 @@ def get_presets(_: bool = Depends(require_login)):
         "materials": presets.MATERIALS,
         "solvents": [{k: v for k, v in s.items() if k != "smd"} for s in presets.SOLVENTS],
         "envTypes": presets.ENV_TYPES,
+        "surfaces": presets.SURFACES,
         "accuracy": {k: v["desc"] for k, v in presets.ACCURACY.items()},
         "functionals": list(presets.FUNCTIONALS.keys()),
         "basisSets": presets.BASIS_SETS,
@@ -671,6 +675,7 @@ def screening_create(req: ScreeningCampaignRequest, _: bool = Depends(require_lo
                                  f"(요청 {len(req.candidates)}개).")
     settings = req.settings.model_dump()
     _check_solvent(settings)
+    _check_surface(settings)
 
     # 후보를 서버에서 다시 검증한다 — 파싱 화면을 거치지 않은 API 호출 대비
     structure = settings.get("structure", "모노머")
@@ -1011,10 +1016,17 @@ def lookup_compound(req: LookupRequest, _: bool = Depends(require_login)):
     return lookup_mod.lookup(req.query)
 
 
+def _check_surface(settings: dict):
+    sid = settings.get("surfaceId")
+    if sid and sid not in presets.SURFACES_BY_ID:
+        raise HTTPException(400, f"알 수 없는 표면 모델: {sid}")
+
+
 @app.post("/api/jobs")
 def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
     settings = req.settings.model_dump()
     _check_solvent(settings)
+    _check_surface(settings)
     if settings["accuracy"] not in presets.ACCURACY:
         raise HTTPException(400, f"알 수 없는 정확도 프리셋: {settings['accuracy']}")
     total_explicit = sum(m["count"] for m in settings["explicitMolecules"])
