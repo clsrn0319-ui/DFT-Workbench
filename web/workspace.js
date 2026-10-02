@@ -85,6 +85,9 @@ function render3D(r, opts = {}) {
   const orb = ORB_MODES.has(mode) ? (r.orbital_clouds || {})[mode] : null;
   // 등가면 격자 — /api/jobs/{id}/grids 에서 받아 r.grids 에 붙여 둔다 (wsLoadGrids). 없으면 점 구름으로 그린다.
   const G = r.grids || null;
+  const espData = (mode === "mep" && G && G.esp && G.esp.points) ? G.esp : null;
+  // 색 범위: 양쪽 극값 중 큰 쪽으로 대칭 (문헌 그림과 같은 방식)
+  const espSpan = espData ? Math.max(Math.abs(espData.min_kcal), Math.abs(espData.max_kcal)) : 1;
   const gridOrb = G && ORB_MODES.has(mode) ? G[mode] : null;
   const gridRho = G && (mode === "cloud" || mode === "mep") ? G.density : null;
   const useIso = !!(window.rbIso && (gridOrb || gridRho) && V.style !== "cloud" && V.style !== "none");
@@ -109,11 +112,14 @@ function render3D(r, opts = {}) {
       charge: "부분 전하(Mulliken): 파랑 = 음전하(친핵 부위) · 빨강 = 양전하(친전자 부위)",
       cloud: cloud ? "전자구름: 점의 밀집도 ∝ 전자 밀도 ρ(r)" : (r.slimmed ? "배치 결과는 용량 절약을 위해 점 데이터를 저장하지 않습니다 — «계산»에서 단건으로 다시 계산하면 표시됩니다." : "이 결과에는 전자밀도 데이터가 없습니다 (이전 버전 계산). 다시 계산하면 표시됩니다."),
       ...Object.fromEntries(ORB_ORDER.map(k => [k, orb ? `${ORB_LABEL[k]} ${fmt(orb.energy_ev)} eV · 붉은 점 = + 위상, 파란 점 = − 위상 · 점 크기 ∝ |ψ|` : "이 결과에는 궤도 데이터가 없습니다 (이전 버전 계산 또는 배치 결과). 다시 계산하면 표시됩니다."])),
-      mep: cloud ? "정전위(ESP) 근사: 전자밀도 표면을 가까운 원자의 부분 전하로 색칠 · MEP−/MEP+ 극값은 표식으로" : "정전위 표면을 그리려면 전자밀도 데이터가 필요합니다.",
+      mep: espData
+        ? `정전위(ESP): 전자밀도에서 직접 계산한 V(r) 를 등가면에 입혔습니다 (${espData.n_points}점 · ${espData.surface} 표면) · 빨강 = 음(친핵) · 파랑 = 양(친전자) · 📷 저장하면 색 막대가 함께 들어갑니다`
+        : (cloud ? "정전위(ESP) 근사: 전자밀도 표면을 가까운 원자의 부분 전하로 색칠 — 다시 계산하면 실제 ESP 값으로 칠합니다" : "정전위 표면을 그리려면 전자밀도 데이터가 필요합니다."),
     };
     if (note) note.textContent = base + (notes[mode] || notes.element);
     if (legend) {
       if (mode === "element") legend.innerHTML = [...new Set(atoms.map(a => a.el))].map(el => `<span class="legend-item"><span class="legend-swatch" style="background:${COLOR[el] ?? "#888"};border:1px solid rgba(0,0,0,.15)"></span>${esc(el)}</span>`).join("");
+      else if (mode === "mep" && espData) legend.innerHTML = espLegendHtml(espSpan);
       else if (mode === "charge" || mode === "mep") legend.innerHTML = `<span class="legend-item"><span class="legend-swatch" style="background:rgb(75,145,216)"></span>음전하 · MEP−</span><span class="legend-item"><span class="legend-swatch" style="background:#fff;border:1px solid var(--border)"></span>중성</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(214,45,40)"></span>양전하 · MEP+</span>`;
       else if (ORB_MODES.has(mode)) legend.innerHTML = `<span class="legend-item"><span class="legend-swatch" style="background:#e0663e"></span>+ lobe</span><span class="legend-item"><span class="legend-swatch" style="background:#2a78d6"></span>− lobe</span>`;
       else legend.innerHTML = `<span class="legend-item">점이 촘촘할수록 전자 밀도 ρ(r)가 높은 영역</span>`;
@@ -201,7 +207,12 @@ function render3D(r, opts = {}) {
         if (!m || !m.n) continue;
         const base = kind === "+" ? [226, 72, 56] : kind === "-" ? [44, 108, 226] : [206, 211, 220];
         surfAlpha = kind === "+" || kind === "-" ? alphaOrb : alphaRho;
-        if (kind === "mep" && !m._q) {                                   // 정전위 근사: 주변 원자 부분 전하의 거리 가중 평균(σ 1.2 Å) — 경계가 부드럽다
+        if (kind === "mep" && espData && !m._esp) {                      // 계산된 ESP 로 색칠
+          const at = espSampler(espData);
+          m._esp = new Float32Array(m.n * 3);
+          for (let v = 0; v < m.n * 3; v++) m._esp[v] = at(m.pos[3 * v], m.pos[3 * v + 1], m.pos[3 * v + 2]);
+        }
+        if (kind === "mep" && !espData && !m._q) {                                   // 정전위 근사: 주변 원자 부분 전하의 거리 가중 평균(σ 1.2 Å) — 경계가 부드럽다
           m._q = new Float32Array(m.n * 3);
           for (let v = 0; v < m.n * 3; v++) { let sw = 0, sq = 0; const x = m.pos[3 * v], y = m.pos[3 * v + 1], z = m.pos[3 * v + 2];
             for (let i = 0; i < atoms.length; i++) { const d2 = (x - atoms[i].x) ** 2 + (y - atoms[i].y) ** 2 + (z - atoms[i].z) ** 2; const w = Math.exp(-d2 / 1.44); sw += w; sq += w * (charges[i] ?? 0); }
@@ -216,7 +227,8 @@ function render3D(r, opts = {}) {
           const p0 = project(m.pos[o], m.pos[o + 1], m.pos[o + 2], W, H, scale), p1 = project(m.pos[o + 3], m.pos[o + 4], m.pos[o + 5], W, H, scale), p2 = project(m.pos[o + 6], m.pos[o + 7], m.pos[o + 8], W, H, scale);
           const diff = Math.max(0, (rx * Lx + ry * Ly + rz * Lz) / nl), spec = Math.pow(Math.max(0, (rx * Hx + ry * Hy + rz * Hz) / nl), 30);
           let b = base;
-          if (kind === "mep") { const c = chargeColor((m._q[3 * t] + m._q[3 * t + 1] + m._q[3 * t + 2]) / 3, qmax * 0.45).match(/\d+/g); b = c ? c.slice(0, 3).map(Number) : base; }   // 가중 평균으로 옅어진 값을 되살려 대비를 키운다
+          if (kind === "mep" && espData) b = espColor((m._esp[3 * t] + m._esp[3 * t + 1] + m._esp[3 * t + 2]) / 3, espSpan);
+          else if (kind === "mep") { const c = chargeColor((m._q[3 * t] + m._q[3 * t + 1] + m._q[3 * t + 2]) / 3, qmax * 0.45).match(/\d+/g); b = c ? c.slice(0, 3).map(Number) : base; }   // 가중 평균으로 옅어진 값을 되살려 대비를 키운다
           const k = 0.36 + 0.64 * diff, sp = spec * 110;
           const col = `rgb(${Math.min(255, Math.round(b[0] * k + sp))},${Math.min(255, Math.round(b[1] * k + sp))},${Math.min(255, Math.round(b[2] * k + sp))})`;
           tris.push({z: (p0.z + p1.z + p2.z) / 3, x0: p0.sx, y0: p0.sy, x1: p1.sx, y1: p1.sy, x2: p2.sx, y2: p2.sy, col});
@@ -423,6 +435,37 @@ function hillFormula(atoms) {
   const keys = Object.keys(n).filter(k => k !== "C" && k !== "H").sort();
   return (n.C ? "C" + (n.C > 1 ? sub(n.C) : "") : "") + (n.H ? "H" + (n.H > 1 ? sub(n.H) : "") : "") + keys.map(k => k + (n[k] > 1 ? sub(n[k]) : "")).join("");
 }
+/** ESP 색 막대 — 화면 범례 */
+function espLegendHtml(span) {
+  const n = 24, stops = [];
+  for (let i = 0; i < n; i++) {
+    const v = -span + (2 * span) * i / (n - 1), c = espColor(v, span);
+    stops.push(`rgb(${c[0]},${c[1]},${c[2]}) ${(100 * i / (n - 1)).toFixed(1)}%`);
+  }
+  return `<span class="legend-item" style="gap:6px">정전위 (kcal/mol)</span>
+    <span class="legend-item" style="gap:6px">−${span.toFixed(0)}
+      <span style="display:inline-block;width:120px;height:10px;border-radius:3px;border:1px solid var(--grid);
+        background:linear-gradient(90deg,${stops.join(",")})"></span>+${span.toFixed(0)}</span>
+    <span class="legend-item muted">빨강 = 음(친핵) · 파랑 = 양(친전자)</span>`;
+}
+
+/** 저장 PNG 아래쪽에 색 막대를 그려 넣는다 (논문 그림용) */
+function drawEspBar(ctx, W, H, span) {
+  const bw = Math.min(260, W * 0.4), bh = 12, x = (W - bw) / 2, y = H - 34;
+  const g = ctx.createLinearGradient(x, 0, x + bw, 0);
+  for (let i = 0; i <= 10; i++) { const c = espColor(-span + 2 * span * i / 10, span); g.addColorStop(i / 10, `rgb(${c[0]},${c[1]},${c[2]})`); }
+  ctx.save();
+  ctx.fillStyle = g; ctx.fillRect(x, y, bw, bh);
+  ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.lineWidth = 1; ctx.strokeRect(x, y, bw, bh);
+  ctx.fillStyle = "#222"; ctx.font = "11px 'Pretendard Variable', system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("Electrostatic potential (kcal/mol)", W / 2, y - 5);
+  ctx.textAlign = "right"; ctx.fillText(`−${span.toFixed(0)}`, x - 6, y + bh - 1);
+  ctx.textAlign = "left"; ctx.fillText(`+${span.toFixed(0)}`, x + bw + 6, y + bh - 1);
+  ctx.restore();
+}
+window.rbDrawEspBar = drawEspBar;
+
 function downloadText(name, text, type = "text/plain") {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
@@ -503,6 +546,41 @@ function surfaceCard(si) {
     <p class="muted small" style="margin:4px 0 0">${si.verdict_text ? esc(si.verdict_text) + " · " : ""}
       음수일수록 강하게 붙습니다. 교환 에너지가 음수면 바인더가 표면의 용매를 밀어내고 붙는다는 뜻입니다.
       슬랩이 아닌 클러스터 모델이라 절대값이 아니라 후보끼리의 순위로 보세요.</p></div>`;
+}
+
+/* ── 실제 정전위(ESP) — 계산된 표면 표본값을 등가면 꼭짓점에 입힌다 ──
+   원자 부분전하 근사와 달리 V(r) = ΣZ/|r−R| − ∫ρ/|r−r'| 계산값이라 논문 그림에 쓸 수 있다. */
+function espSampler(esp) {
+  const pts = esp.points, val = esp.values_kcal, n = pts.length;
+  const cell = 1.6, grid = new Map();                      // 1.6 Å 격자 해시 — 가까운 표본만 본다
+  const key = (i, j, k) => i + "," + j + "," + k;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], kk = key(Math.floor(p[0] / cell), Math.floor(p[1] / cell), Math.floor(p[2] / cell));
+    let a = grid.get(kk); if (!a) grid.set(kk, a = []); a.push(i);
+  }
+  return function (x, y, z) {
+    const ci = Math.floor(x / cell), cj = Math.floor(y / cell), ck = Math.floor(z / cell);
+    let sw = 0, sv = 0, best = Infinity, bv = 0;
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (let dk = -1; dk <= 1; dk++) {
+      const a = grid.get(key(ci + di, cj + dj, ck + dk));
+      if (!a) continue;
+      for (const i of a) {
+        const p = pts[i], d2 = (x - p[0]) ** 2 + (y - p[1]) ** 2 + (z - p[2]) ** 2;
+        if (d2 < best) { best = d2; bv = val[i]; }
+        const w = 1 / (d2 + 0.25);
+        sw += w; sv += w * val[i];
+      }
+    }
+    return sw > 0 ? sv / sw : bv;                          // 거리 가중 평균 (없으면 최근접)
+  };
+}
+
+/** ESP 색: 음(빨강) → 0(초록) → 양(파랑) — 문헌 그림과 같은 방향 */
+function espColor(v, span) {
+  const t = Math.max(-1, Math.min(1, v / (span || 1)));
+  const stops = [[214, 45, 40], [245, 160, 60], [250, 240, 120], [60, 190, 110], [40, 140, 220], [30, 60, 190]];
+  const x = (t + 1) / 2 * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
+  return stops[i].map((c, k) => Math.round(c + (stops[i + 1][k] - c) * f));
 }
 
 /* ── Orbital Information 표 (Geometry 탭 세 번째 열) ── */
@@ -623,9 +701,10 @@ function tabGeometryHtml(job, r) {
         <button class="ws-tool ${WS.mo.style !== "none" ? "on" : ""}" type="button" data-mo-tool="surface" title="등가면 → 점 구름 → 숨김 순으로 바뀝니다"><i>◐</i><span data-mo-style-label>${WS.mo.style === "cloud" ? "점 구름" : WS.mo.style === "none" ? "숨김" : "등가면"}</span></button>
         <button class="ws-tool ${WS.mo.sync ? "on" : ""}" type="button" data-mo-tool="sync" title="왼쪽 구조 뷰어와 카메라 각도 동기화"><i>⧉</i>동기화</button>
         <button class="ws-tool" type="button" data-mo-tool="reset"><i>⌂</i>초기화</button>
+        <button class="ws-tool" type="button" data-mo-tool="shot" title="논문 그림용 PNG — ESP 보기에서는 색 막대가 함께 들어갑니다"><i>📷</i>저장</button>
       </div>
       <div id="viewer3d-mo" style="position:relative;width:100%;height:340px;background:radial-gradient(ellipse at 50% 40%,color-mix(in srgb,var(--accent) 6%,var(--surface)) 0%,var(--grid) 90%)"></div>
-      <div class="legend" style="padding:6px 12px 0"><span class="legend-item"><span class="legend-swatch" style="background:#e0663e"></span>+ 위상</span><span class="legend-item"><span class="legend-swatch" style="background:#2a78d6"></span>− 위상</span><span class="legend-item muted">위상 부호 ≠ 전하 부호</span></div>
+      <div class="legend" id="ws-mo-legend" style="padding:6px 12px 0"><span class="legend-item"><span class="legend-swatch" style="background:#e0663e"></span>+ 위상</span><span class="legend-item"><span class="legend-swatch" style="background:#2a78d6"></span>− 위상</span><span class="legend-item muted">위상 부호 ≠ 전하 부호</span></div>
       <p class="muted small" id="ws-mo-note" style="margin:4px 12px 8px"></p></div>
     <div class="ws-panel"><div class="ws-ph">Orbital Information</div><div class="ws-pb" id="ws-mo-info"></div></div>
   </div>
@@ -825,9 +904,39 @@ function wireGeometry(job, r, pane) {
     const info = $("ws-mo-info"); if (info) info.innerHTML = orbInfoTable(r, m);
     const oc = (r.orbital_clouds || {})[m], note = $("ws-mo-note");
     if (note) note.textContent = ORB_MODES.has(m) ? (oc ? `${ORB_LABEL[m]} ${fmtE(oc.energy_ev)} ${unitE()} · ${(r.grids || {})[m] ? "등가면 ±" + WS.mo.iso.toFixed(3) + " a.u. — 붉은 lobe = + 위상 · 파란 lobe = − 위상" : "점 구름(격자 없음) — 붉은 점 = + 위상 · 파란 점 = − 위상"}` : "궤도 데이터 없음 — 이전 버전 계산 또는 배치 결과") : (m === "cloud" ? "전자밀도 — 점의 밀집도 ∝ ρ(r)" : m === "mep" ? "정전위 근사 — 전자밀도 표면을 가까운 원자의 부분 전하로 색칠" : "부분 전하 — 파랑 음전하 · 빨강 양전하");
+    const esp = (r.grids || {}).esp;
+    const leg = $("ws-mo-legend");
+    if (leg) {
+      if (m === "mep" && esp) leg.innerHTML = espLegendHtml(Math.max(Math.abs(esp.min_kcal), Math.abs(esp.max_kcal)));
+      else if (m === "charge" || m === "mep") leg.innerHTML = '<span class="legend-item"><span class="legend-swatch" style="background:rgb(75,145,216)"></span>음전하</span><span class="legend-item"><span class="legend-swatch" style="background:rgb(214,45,40)"></span>양전하</span>';
+      else if (m === "cloud") leg.innerHTML = '<span class="legend-item muted">점의 밀집도 ∝ 전자밀도 ρ(r)</span>';
+      else leg.innerHTML = '<span class="legend-item"><span class="legend-swatch" style="background:#e0663e"></span>+ 위상</span><span class="legend-item"><span class="legend-swatch" style="background:#2a78d6"></span>− 위상</span><span class="legend-item muted">위상 부호 ≠ 전하 부호</span>';
+    }
+    if (m === "mep" && esp && note) note.textContent = `정전위(ESP) — 전자밀도에서 계산한 V(r) 를 ${esp.surface} 표면에 입힘 · ${esp.min_kcal} ~ ${esp.max_kcal} kcal/mol · 빨강 = 음(친핵) · 파랑 = 양(친전자)`;
     const lv = $("ws-levels"); if (lv) { lv.innerHTML = svgOrbitalLevels(orbLevelsOf(r), {active: ORB_LABEL[m], compact: true, height: 210}); lv.querySelectorAll("[data-lv]").forEach(g => g.addEventListener("click", () => { const k = ORB_BY_LABEL[g.dataset.lv]; if (k && (r.orbital_clouds || {})[k]) setMo(k); })); }
     drawMo();
   };
+  pane.querySelectorAll("[data-mo-tool='shot']").forEach(b => b.addEventListener("click", () => {
+    const c = $("viewer3d-mo") && $("viewer3d-mo").querySelector("canvas");
+    if (!c) return;
+    const esp = (r.grids || {}).esp, isEsp = WS.mo.mode === "mep" && esp;
+    const dpr = c.width / (c.clientWidth || c.width);
+    const pad = isEsp ? Math.round(44 * dpr) : 0;
+    const out = document.createElement("canvas");
+    out.width = c.width; out.height = c.height + pad;
+    const ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(c, 0, 0);
+    if (isEsp) {
+      ctx.save(); ctx.scale(dpr, dpr);
+      drawEspBar(ctx, out.width / dpr, out.height / dpr, Math.max(Math.abs(esp.min_kcal), Math.abs(esp.max_kcal)));
+      ctx.restore();
+    }
+    const a = document.createElement("a");
+    a.href = out.toDataURL("image/png");
+    a.download = `rhobench-${job.id}-${WS.mo.mode}.png`;
+    a.click();
+  }));
   pane.querySelectorAll("[data-geo]").forEach(b => b.addEventListener("click", () => { VIEW_MODE = b.dataset.geo; pane.querySelectorAll("[data-geo]").forEach(x => x.classList.toggle("on", x === b)); drawMain(); }));
   pane.querySelectorAll("[data-ws-tool]").forEach(b => b.addEventListener("click", () => {
     const t = b.dataset.wsTool;
@@ -836,7 +945,31 @@ function wireGeometry(job, r, pane) {
     else if (t === "zoomin") WS.zoom = Math.min(5, WS.zoom * 1.2);
     else if (t === "zoomout") WS.zoom = Math.max(0.3, WS.zoom / 1.2);
     else if (t === "full") { const v = $("viewer3d"); if (v && v.requestFullscreen) v.requestFullscreen(); return; }
-    else if (t === "shot") { const c = $("viewer3d").querySelector("canvas"); if (c) { const a = document.createElement("a"); a.href = c.toDataURL("image/png"); a.download = `rhobench-${job.id}-geometry.png`; a.click(); } return; }
+    else if (t === "shot") {
+      // 논문 그림용 저장 — ESP 보기에서는 색 막대와 설명을 함께 넣는다
+      const c = $("viewer3d").querySelector("canvas");
+      if (!c) return;
+      const esp = (r.grids || {}).esp, isEsp = WS.mo && false;   // 메인 뷰어의 모드
+      const mode = VIEW_MODE;
+      const out = document.createElement("canvas");
+      const pad = (mode === "mep" && esp) ? 46 : 0;
+      out.width = c.width; out.height = c.height + pad * (c.height / c.clientHeight || 1);
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = getComputedStyle(document.body).backgroundColor || "#fff";
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(c, 0, 0);
+      if (mode === "mep" && esp) {
+        const span = Math.max(Math.abs(esp.min_kcal), Math.abs(esp.max_kcal));
+        ctx.save(); ctx.scale(out.width / c.clientWidth, out.width / c.clientWidth);
+        drawEspBar(ctx, c.clientWidth, (out.height) / (out.width / c.clientWidth), span);
+        ctx.restore();
+      }
+      const a = document.createElement("a");
+      a.href = out.toDataURL("image/png");
+      a.download = `rhobench-${job.id}-${mode === "mep" ? "esp" : "geometry"}.png`;
+      a.click();
+      return;
+    }
     else { WS.tool = t; WS.measure = []; pane.querySelectorAll("[data-ws-tool='select'],[data-ws-tool='measure']").forEach(x => x.classList.toggle("on", x.dataset.wsTool === t)); }
     if (t === "label") { WS.redraw && WS.redraw(); WS.moRedraw && WS.moRedraw(); } else { drawMain(); drawMo(); }
   }));

@@ -96,6 +96,35 @@ def mep_extremes(mf, mol):
     }
 
 
+def esp_surface(mf, mol, max_points: int = 2500, seed: int = 0):
+    """반데르발스 표면 위 정전위 V(r) 표본 — 등가면을 «실제 ESP» 색으로 칠하는 데 쓴다.
+
+    V(r) = Σ Z_A/|r−R_A| − ∫ρ(r')/|r−r'| (Hartree/e) 를 kcal/mol 로 보고한다.
+    원자 부분전하 근사가 아니라 전자밀도에서 직접 계산한 값이라 논문 그림에 쓸 수 있다.
+    """
+    pts = _vdw_surface_points(mol, density=6.0)   # 그림용이라 극값 탐색보다 촘촘하게
+    if len(pts) == 0:
+        return None
+    if len(pts) > max_points:                      # 표면 전체에서 고르게 솎아 낸다
+        rng = np.random.default_rng(seed)
+        pts = pts[rng.choice(len(pts), max_points, replace=False)]
+    bohr = pts / 0.52917721092
+    dm = mf.make_rdm1()
+    if dm.ndim == 3:
+        dm = dm[0] + dm[1]
+    charges, acoords = mol.atom_charges(), mol.atom_coords()
+    v = np.empty(len(bohr))
+    for i, q in enumerate(bohr):
+        v_nuc = float(np.sum(charges / np.linalg.norm(acoords - q, axis=1)))
+        with mol.with_rinv_origin(q):
+            v[i] = v_nuc - float(np.einsum("ij,ji->", mol.intor("int1e_rinv"), dm))
+    kcal = v * HARTREE2KCAL
+    return {"points": [[round(float(c), 3) for c in p] for p in pts],
+            "values_kcal": [round(float(x), 2) for x in kcal],
+            "min_kcal": round(float(kcal.min()), 1), "max_kcal": round(float(kcal.max()), 1),
+            "n_points": int(len(pts)), "surface": "vdW × 1.4"}
+
+
 def tddft_lambda_max(mf, nstates=8):
     """TDDFT 수직 여기 → 진동자 세기가 가장 큰 전이의 λmax(nm)와 세기.
 

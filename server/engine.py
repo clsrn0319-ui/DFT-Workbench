@@ -1395,6 +1395,14 @@ def run_job(job, update, is_cancelled=lambda: False):
         orbital_clouds = desc_mod.orbital_clouds(mf, mol)   # HOMO−1/HOMO/LUMO/LUMO+1 3D 표면(점 구름)
         orbital_levels = desc_mod.orbital_levels(mf, mol)   # 에너지 준위도
         grids = desc_mod.split_grids(orbital_clouds, density_cloud)   # 등가면 격자 (별도 파일)
+        try:
+            # 실제 정전위(ESP) 표면 — 등가면을 원자 전하 근사가 아니라 계산값으로 색칠한다
+            esp = desc_mod.esp_surface(mf, mol)
+            if esp:
+                grids["esp"] = esp
+                log(f"ESP 표면 {esp['n_points']}점 — {esp['min_kcal']} ~ {esp['max_kcal']} kcal/mol")
+        except Exception as exc:  # noqa: BLE001 — 시각화용 부가 데이터
+            log(f"ESP 표면 생성 생략: {exc}")
         if restored:
             descriptors = dict(ckpt.get("descriptors") or {})
             notes = list(ckpt.get("notes") or [])

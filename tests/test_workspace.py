@@ -180,3 +180,25 @@ def test_snapshot_inlines_pages_script():
     from server.main import _snapshot_html
     html = _snapshot_html([])
     assert '<script src="/static/pages.js">' not in html
+
+
+def test_esp_surface_values_are_physical():
+    """정전위(ESP) 표면 — 물 분자는 산소 쪽 음(−), 수소 쪽 양(+)이 나와야 한다."""
+    import numpy as np
+    from server import descriptors as desc_mod
+    from server import engine
+    from server.geometry import smiles_to_xyz
+    atoms, _ = smiles_to_xyz("O", n_conformers=1)
+    mol = engine._build_mol(atoms, "sto-3g", 0, 1)
+    mf = engine._make_mf(mol, "pbe0", None, None, 1e-8)
+    mf.kernel()
+    esp = desc_mod.esp_surface(mf, mol, max_points=400)
+    assert esp and esp["n_points"] <= 400 and len(esp["points"]) == len(esp["values_kcal"])
+    assert esp["min_kcal"] < -5 and esp["max_kcal"] > 5      # 극성 분자 — 양·음이 모두 있다
+    assert esp["surface"].startswith("vdW")
+    # 가장 양(+)인 점은 수소 쪽(수소결합 주개), 가장 음(−)인 점은 산소 비공유 전자쌍 쪽
+    vals = np.array(esp["values_kcal"]); pts = np.array(esp["points"])
+    xyz = np.array([a[1:4] for a in atoms])
+    h = np.array([xyz[i] for i, a in enumerate(atoms) if a[0] == "H"])
+    near_h = lambda p: float(np.linalg.norm(h - p, axis=1).min())
+    assert near_h(pts[int(vals.argmax())]) < near_h(pts[int(vals.argmin())])
