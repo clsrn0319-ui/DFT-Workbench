@@ -437,20 +437,124 @@ async function rbRenderTrash() {
   }));
 }
 
-/* ── «Conformer 탐색»에서 고른 구조로 계산 ───────────────────────────── */
-function rbSyncConfPick() {
+/* ── «Conformer 탐색»에서 고른 구조로 계산 ───────────────────────────────
+   찾아 둔 구조를 그대로 쓰면 계산에서 conformer 탐색·DFT 재순위·전위 민감도를 건너뛴다.
+   그래서 세트를 쓰는 동안에는 구조(모노머/2·3량체)와 민감도 설정을 잠근다. */
+let CONF_SETS = null;        // 저장된 세트 목록 (알림·고르개 공용)
+
+async function rbConfSets(force) {
+  if (CONF_SETS && !force) return CONF_SETS;
+  try { CONF_SETS = (await (await fetch("/api/conformers")).json()).sets || []; }
+  catch (e) { CONF_SETS = []; }
+  return CONF_SETS;
+}
+
+/** 소재로 고른 분자에 저장된 세트가 있으면 알려 준다 (library.js 가 호출) */
+async function rbConfSetsHint(mols) {
+  const box = $("calc-confhint");
+  if (!box) return;
+  const sets = await rbConfSets();
+  const ids = new Set((mols || []).map(m => m.id)), smi = new Set((mols || []).map(m => m.smiles));
+  const hit = sets.filter(s => ids.has((s.molecule || {}).libraryId) || smi.has((s.molecule || {}).input_smiles));
+  box.hidden = !hit.length || !!window.rbConfPick;
+  if (box.hidden) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="cf-hint">고른 분자에 저장된 conformer 세트가 ${hit.length}개 있습니다 —
+    구조를 지정하면 구조 탐색·민감도를 건너뛰어 계산이 훨씬 빨라집니다.
+    <button class="btn sm" type="button" id="cf-hint-open">구조 고르기</button></div>`;
+  const b = $("cf-hint-open");
+  if (b) b.onclick = () => rbOpenConfPicker(hit[0].id);
+}
+window.rbConfSetsHint = rbConfSetsHint;
+
+/** 계산 화면 안에서 세트·구조를 고르는 작은 고르개 */
+async function rbOpenConfPicker(setId) {
   const wrap = $("calc-confpick-wrap");
   if (!wrap) return;
+  const sets = await rbConfSets(true);
+  if (!sets.length) {
+    alert("저장된 conformer 세트가 없습니다 — 메뉴 «계산 → Conformer 탐색»에서 먼저 구조를 찾으세요.");
+    return;
+  }
+  let cur = sets.find(s => s.id === setId) || sets[0], doc = null, sel = new Set();
+  const draw = () => {
+    wrap.hidden = false;
+    const rows = !doc ? '<div class="small muted">불러오는 중…</div>' : doc.conformers.map(c =>
+      `<label class="cf-prow"><input type="checkbox" data-pick="${c.index}" ${sel.has(c.index) ? "checked" : ""}>
+        <b>#${c.index}</b>${c.is_reference ? ' <span class="chip soft">기준</span>' : ""}
+        <span class="muted small">역장 ${fmt(c.ff_energy)}${c.dft_energy != null ? ` · DFT ${fmt(c.dft_energy)}` : ""} kcal/mol
+        · 비율 ${c.population_pct ?? "—"}%</span></label>`).join("");
+    wrap.innerHTML = `<div class="cf-pick" style="flex-direction:column;align-items:stretch">
+      <div class="toolbar" style="gap:8px"><b>Conformer 탐색에서 고르기</b>
+        <select class="input" id="cf-pick-set">${sets.map(s =>
+          `<option value="${esc(s.id)}" ${s.id === cur.id ? "selected" : ""}>${esc(s.id)} · ${esc((s.molecule || {}).name || "")} · ${esc((s.molecule || {}).structure || "")} · ${s.n_conformers}개</option>`).join("")}</select>
+        <span class="sp" style="margin-left:auto"><button class="btn ghost" type="button" id="cf-pick-cancel">취소</button>
+        <button class="btn primary" type="button" id="cf-pick-ok">이 구조로 계산 (${sel.size}건)</button></span></div>
+      <div class="cf-plist">${rows}</div>
+      <div class="small muted">기준 구조 ${esc(doc ? (doc.settings.reference === "all-trans" ? "all-trans" :
+        doc.settings.reference === "pattern" ? "패턴 " + doc.settings.pattern : "최저 에너지") : "")}
+        · 고른 구조마다 작업이 하나씩 생깁니다. 계산은 이 구조에서 바로 시작하며 conformer 탐색을 하지 않습니다.</div></div>`;
+    const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    const ss = $("cf-pick-set");
+    if (ss) ss.onchange = async () => { cur = sets.find(s => s.id === ss.value); doc = null; sel = new Set(); draw(); await load(); };
+    wrap.querySelectorAll("[data-pick]").forEach(b => b.onchange = () => {
+      const n = +b.dataset.pick;
+      b.checked ? sel.add(n) : sel.delete(n);
+      draw();
+    });
+    on("cf-pick-cancel", () => { wrap.hidden = true; wrap.innerHTML = ""; rbSyncConfPick(); });
+    on("cf-pick-ok", () => {
+      if (!sel.size) { alert("계산할 구조를 고르세요."); return; }
+      const s = doc.settings;
+      window.rbConfPick = {setId: doc.id, name: doc.molecule.name, structure: doc.molecule.structure,
+        reference: s.reference === "all-trans" ? "all-trans" : s.reference === "pattern" ? `패턴 ${s.pattern}` : "최저 에너지",
+        indices: [...sel].sort((a, b2) => a - b2)};
+      rbSyncConfPick();
+    });
+  };
+  const load = async () => {
+    try { doc = await (await fetch(`/api/conformers/${encodeURIComponent(cur.id)}`)).json(); }
+    catch (e) { doc = null; }
+    if (doc) sel = new Set(doc.conformers.filter(c => c.is_reference).map(c => c.index));
+    if (doc && !sel.size && doc.conformers.length) sel.add(doc.conformers[0].index);
+    draw();
+  };
+  draw();
+  await load();
+}
+window.rbOpenConfPicker = rbOpenConfPicker;
+
+function rbSyncConfPick() {
+  const wrap = $("calc-confpick-wrap"), hint = $("calc-confhint");
+  if (!wrap) return;
   const p = window.rbConfPick;
-  wrap.hidden = !p;
-  if (!p) { wrap.innerHTML = ""; return; }
+  // 세트를 쓰는 동안에는 구조·민감도 설정을 잠근다 (세트에서 이미 정해진 값)
+  const st = $("structure"), cs = $("conf-sens"), note = $("calc-structure-note");
+  if (st) {
+    st.disabled = !!p;
+    if (p && p.structure) st.value = p.structure;
+    st.title = p ? "Conformer 세트에서 가져온 구조입니다 — 바꾸려면 선택을 해제하세요" : "";
+  }
+  if (cs) {
+    cs.disabled = !!p;
+    cs.title = p ? "지정한 구조로 계산하므로 민감도는 돌지 않습니다 — 여러 구조를 보내 작업끼리 비교하세요" : "";
+  }
+  if (note) {
+    note.hidden = !p;
+    note.textContent = p ? `구조는 Conformer 세트에서 가져옵니다 (${p.structure || ""} · 기준 ${p.reference}) · 전위 conformer 민감도는 돌지 않습니다` : "";
+  }
+  if (hint && p) { hint.hidden = true; hint.innerHTML = ""; }
+  if (!p) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  wrap.hidden = false;
   wrap.innerHTML = `<div class="cf-pick"><b>Conformer 탐색에서 고른 구조 ${p.indices.length}개</b>
-    <span class="muted small">${esc(p.name)} · 기준 ${esc(p.reference)} · #${p.indices.join(", #")} ·
+    <span class="muted small">${esc(p.name)} · ${esc(p.structure || "")} · 기준 ${esc(p.reference)} · #${p.indices.join(", #")} ·
       <span class="mono">${esc(p.setId)}</span></span>
-    <span class="small muted">제출하면 구조마다 작업이 하나씩 생깁니다 — conformer 탐색은 다시 하지 않습니다.</span>
-    <button class="btn ghost" type="button" id="cf-pick-clear" style="margin-left:auto">선택 해제</button></div>`;
+    <span class="small muted">제출하면 구조마다 작업이 하나씩 생깁니다 — conformer 탐색·재순위·민감도를 건너뜁니다.</span>
+    <span style="margin-left:auto;display:flex;gap:6px"><button class="btn ghost" type="button" id="cf-pick-edit">구조 바꾸기</button>
+    <button class="btn ghost" type="button" id="cf-pick-clear">선택 해제</button></span></div>`;
   const b = $("cf-pick-clear");
-  if (b) b.onclick = () => { window.rbConfPick = null; rbSyncConfPick(); };
+  if (b) b.onclick = () => { window.rbConfPick = null; rbSyncConfPick(); if (window.rbLibBuildMaterialGrid) window.rbLibBuildMaterialGrid(); };
+  const e = $("cf-pick-edit");
+  if (e) e.onclick = () => rbOpenConfPicker(p.setId);
 }
 window.rbSyncConfPick = rbSyncConfPick;
 

@@ -851,10 +851,13 @@
     const list = [...selected.keys()].map(rec).filter(Boolean);
     grid.innerHTML = `${list.length ? `<div class="lb-calcchips">${list.map(m => `<span class="lb-calcchip" title="${h(m.smiles)}">${svgOf(m, "xs")}<span class="nm"><b>${h(m.name)}</b><span class="small muted">${fmtFormula(m.formula)} · ${h(CAT_LABEL[m.category] || "")}</span></span><button class="btn ghost sm" type="button" data-calcrm="${h(m.id)}" title="계산 목록에서 빼기">✕</button></span>`).join("")}</div>`
         : '<div class="lb-calcempty">계산할 분자를 아직 고르지 않았습니다. 아래 버튼으로 분자 검색 및 선택 또는 분자 라이브러리에서 고르세요.</div>'}
-      <div class="toolbar" style="margin:10px 0 0;gap:8px"><button class="btn primary" type="button" data-calcpick="molsearch">＋ 분자 검색 및 선택에서 고르기</button><button class="btn" type="button" data-calcpick="library">＋ 분자 라이브러리에서 고르기</button>
+      <div class="toolbar" style="margin:10px 0 0;gap:8px"><button class="btn primary" type="button" data-calcpick="molsearch">＋ 분자 검색 및 선택에서 고르기</button><button class="btn" type="button" data-calcpick="library">＋ 분자 라이브러리에서 고르기</button><button class="btn" type="button" id="lb-calcconf" title="Conformer 탐색에서 찾아 둔 구조를 그대로 씁니다 — 계산에서 구조 탐색·민감도를 건너뛰어 훨씬 빠릅니다">＋ Conformer 탐색에서 고르기</button>
         <span class="small muted">${list.length ? `${list.length}개 — 분자마다 작업이 따로 만들어집니다` : ""}</span>${list.length ? '<button class="btn ghost sm" type="button" data-calcclear="1">모두 빼기</button>' : ""}</div>`;
     grid.querySelectorAll("[data-calcrm]").forEach(b => b.addEventListener("click", () => { selected.delete(b.dataset.calcrm); rbLibBuildMaterialGrid(); }));
     const cl = grid.querySelector("[data-calcclear]"); if (cl) cl.addEventListener("click", () => { selected.clear(); rbLibBuildMaterialGrid(); });
+    const cf = grid.querySelector("#lb-calcconf");
+    if (cf) cf.addEventListener("click", () => { if (window.rbOpenConfPicker) window.rbOpenConfPicker(); });
+    if (window.rbConfSetsHint) window.rbConfSetsHint(list);
     grid.querySelectorAll("[data-calcpick]").forEach(b => b.addEventListener("click", () => {
       L.pickForCalc = true; L.sel = [...selected.keys()]; saveSel();
       window.rbOpenMode(b.dataset.calcpick, b.dataset.calcpick === "molsearch" ? "분자 검색 및 선택" : "분자 라이브러리");
