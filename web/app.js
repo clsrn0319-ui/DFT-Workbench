@@ -292,8 +292,10 @@ async function submit() {
   const env = document.querySelector('input[name="env"]:checked')?.value;
   const chosen = [...selected.values()];
   const cmpF = [...$("cmp-functionals").selectedOptions].map(o => o.value);
+  const pick = window.rbConfPick;
   const body = {
     compareFunctionals: cmpF,
+    conformerSet: pick ? {setId: pick.setId, indices: pick.indices} : null,
     materialIds: chosen.filter(c => c.dictId).map(c => c.dictId),
     customMaterials: chosen.filter(c => !c.dictId).map(c => ({smiles: c.smiles, name: c.name, libraryId: c.libraryId || null})),
     customSmiles: $("custom-smiles").value.trim() || null,
@@ -350,6 +352,8 @@ async function submit() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
+    window.rbConfPick = null;
+    if (window.rbSyncConfPick) window.rbSyncConfPick();
     await refreshJobs();
     if (window.rbOpenResults) window.rbOpenResults();  // 제출 후 결과 페이지로 이동
   } catch (e) {
@@ -432,6 +436,23 @@ async function rbRenderTrash() {
     rbRenderTrash();
   }));
 }
+
+/* ── «Conformer 탐색»에서 고른 구조로 계산 ───────────────────────────── */
+function rbSyncConfPick() {
+  const wrap = $("calc-confpick-wrap");
+  if (!wrap) return;
+  const p = window.rbConfPick;
+  wrap.hidden = !p;
+  if (!p) { wrap.innerHTML = ""; return; }
+  wrap.innerHTML = `<div class="cf-pick"><b>Conformer 탐색에서 고른 구조 ${p.indices.length}개</b>
+    <span class="muted small">${esc(p.name)} · 기준 ${esc(p.reference)} · #${p.indices.join(", #")} ·
+      <span class="mono">${esc(p.setId)}</span></span>
+    <span class="small muted">제출하면 구조마다 작업이 하나씩 생깁니다 — conformer 탐색은 다시 하지 않습니다.</span>
+    <button class="btn ghost" type="button" id="cf-pick-clear" style="margin-left:auto">선택 해제</button></div>`;
+  const b = $("cf-pick-clear");
+  if (b) b.onclick = () => { window.rbConfPick = null; rbSyncConfPick(); };
+}
+window.rbSyncConfPick = rbSyncConfPick;
 
 /* ── 시작 구조 (전문가 설정) ─────────────────────────────────────────── */
 function startStructureSettings() {
@@ -1658,9 +1679,20 @@ const COMPARE_SEL = new Set();
 
 // 비교 조건 = 계산식(범함수/기저) + 용매 환경. 같은 조건의 결과끼리만 비교한다.
 const CMP_COND_KEY = "rb-cmp-cond";
+function cmpRefLabel(j) {
+  // 기준 구조 — conformer 세트에서 보낸 작업이면 그 기준, 아니면 전문가 설정의 시작 구조
+  const cf = (j.material || {}).conformer;
+  if (cf && cf.reference) return cf.reference;
+  const e = ((j.settings || {}).expert) || {};
+  if (e.startStructure === "all-trans") return "all-trans";
+  if (e.startStructure === "pattern") return `패턴 ${e.torsionPattern || ""}`.trim();
+  return "최저 에너지";
+}
+window.rbCmpRefLabel = cmpRefLabel;
+
 function cmpCondKey(j) {
   const c = (j.result && j.result.conditions) || {};
-  return `${c.method || "?"} ‖ ${c.solvent_model || "vacuum"}`;
+  return `${c.method || "?"} ‖ ${c.solvent_model || "vacuum"} ‖ ${cmpRefLabel(j)}`;
 }
 window.rbCmpCondKey = cmpCondKey;
 const CMP_TAB_KEY = "rb-cmp-tab";
@@ -1721,18 +1753,18 @@ window.rbRenderCompare = function () {
   const dropped = [...COMPARE_SEL].map(id => jobs.find(j => j.id === id)).filter(j => j && cmpCondKey(j) !== cond);
   if (dropped.length) {
     dropped.forEach(j => COMPARE_SEL.delete(j.id));
-    if (window.rbToast) window.rbToast(`계산 조건이 다른 결과 ${dropped.length}개는 비교에서 뺐습니다 — 같은 계산식·용매 조건끼리만 비교합니다`);
+    if (window.rbToast) window.rbToast(`계산 조건이 다른 결과 ${dropped.length}개는 비교에서 뺐습니다 — 계산식·용매·기준 구조가 같은 결과끼리만 비교합니다`);
   }
   try { localStorage.setItem(CMP_COND_KEY, cond); } catch (e) {}
   const inGroup = [...groups.get(cond)].sort((a, b) => a.material.name.localeCompare(b.material.name, "ko") || (b.finishedAt || 0) - (a.finishedAt || 0));
   const sameName = n => inGroup.filter(j => j.material.name === n).length > 1;
   const day = t => t ? new Date(t * 1000).toLocaleDateString("ko-KR", {month: "numeric", day: "numeric"}) : "";
-  const condLabel_ = k => k.replace(" ‖ ", " · ");
+  const condLabel_ = k => { const p = k.split(" ‖ "); return p.length > 2 ? `${p[0]} · ${p[1]} · 기준 ${p[2]}` : p.join(" · "); };
   const selIds = [...COMPARE_SEL];
   const colorOf = id => { const k = selIds.indexOf(id); return k < 0 ? null : `var(--series-${(k % 8) + 1})`; };
   const tab = localStorage.getItem(CMP_TAB_KEY) === "plot" ? "plot" : "list";
-  let picker = `<div class="cmp-cond"><label class="small" for="cmp-cond">비교 조건 <span class="muted">(계산식 · 용매)</span></label>
-      <select class="input" id="cmp-cond">${[...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, v]) => `<option value="${esc(k)}" ${k === cond ? "selected" : ""}>${esc(condLabel_(k))} — ${v.length}건</option>`).join("")}</select>
+  let picker = `<div class="cmp-cond"><label class="small" for="cmp-cond">비교 조건 <span class="muted">(계산식 · 용매 · 기준 구조)</span></label>
+      <select class="input" id="cmp-cond" title="계산식(범함수·기저) · 용매 환경 · 기준 구조가 모두 같은 결과끼리만 비교합니다">${[...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, v]) => `<option value="${esc(k)}" ${k === cond ? "selected" : ""}>${esc(condLabel_(k))} — ${v.length}건</option>`).join("")}</select>
       <input class="input" id="cmp-q" placeholder="이름·약어로 찾기" value="${esc(CMP_Q)}" style="max-width:220px"></div>
     <div class="cmp-pick2">
       <div class="cmp-left">

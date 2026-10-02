@@ -23,7 +23,7 @@ from . import auth, binder, geometry
 from . import convergence, esw, mechanical, polymer, protocol
 from . import library
 from . import lookup as lookup_mod
-from . import benchmark, checkpoint, gpu, monitor, templates
+from . import benchmark, checkpoint, conformers, gpu, monitor, templates
 from . import presets, scoring, screening, store, structfile, worker
 
 # 다중 사용자 보호 한도 (환경변수로 조정 가능)
@@ -153,6 +153,12 @@ class CustomGeometry(BaseModel):
     rescan: bool = False
 
 
+class ConformerPick(BaseModel):
+    """conformer 세트에서 고른 구조 — 고른 수만큼 작업이 생긴다."""
+    setId: str = Field(..., max_length=40)
+    indices: list[int] = Field(..., min_length=1, max_length=20)
+
+
 class JobRequest(BaseModel):
     compareFunctionals: list[str] = []  # 지정 시 범함수마다 작업을 만들어 비교
     materialIds: list[str] = []
@@ -160,6 +166,7 @@ class JobRequest(BaseModel):
     customSmiles: Optional[str] = None
     customName: Optional[str] = None
     customGeometry: Optional[CustomGeometry] = None  # customSmiles의 업로드 3D 좌표
+    conformerSet: Optional[ConformerPick] = None    # «Conformer 탐색»에서 고른 구조들
     settings: JobSettings = JobSettings()
 
 
@@ -1053,6 +1060,14 @@ def submit_jobs(req: JobRequest, _: bool = Depends(require_login)):
                     raise HTTPException(400, "3D 좌표 형식 오류 — [원소, x, y, z] 목록이어야 합니다.")
             target["geometry"] = req.customGeometry.model_dump()
         targets.append(target)
+    if req.conformerSet is not None:
+        try:
+            targets += conformers.job_targets(req.conformerSet.setId, req.conformerSet.indices)
+        except KeyError:
+            raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
     if not targets:
         raise HTTPException(400, "계산할 소재를 선택하거나 SMILES를 입력하세요.")
 
@@ -1313,7 +1328,8 @@ def _snapshot_html(jobs: list[dict]) -> str:
     return page.replace(marker, shim + "\n" + _inline_script(app_js))
 
 
-SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js", "isosurface.js", "workspace.js", "library.js", "pages.js")
+SNAPSHOT_EXTRA_JS = ("manual_content.js", "help.js", "bench.js", "isosurface.js", "workspace.js", "library.js",
+                     "conformers.js", "pages.js")
 SNAPSHOT_LOG_TAIL = 400   # 사본에 담는 원본 로그 줄 수 (작업당)
 
 
@@ -1788,6 +1804,77 @@ def trash_purge(job_id: str, _: bool = Depends(require_login)):
     if not store.purge_trash(job_id):
         raise HTTPException(404, "휴지통에 없는 작업입니다.")
     return {"ok": True}
+
+
+# ── Conformer 세트 (구조 준비) ────────────────────────────────────────
+class ConformerSearchRequest(BaseModel):
+    smiles: str = Field(..., max_length=600)
+    name: Optional[str] = Field(None, max_length=60)
+    libraryId: Optional[str] = Field(None, max_length=40)
+    structure: str = Field("모노머", pattern="^(모노머|2량체|3량체)$")
+    reference: str = Field("all-trans", pattern="^(auto|all-trans|pattern)$")
+    pattern: Optional[str] = Field(None, max_length=200)
+    nConformers: int = Field(20, ge=1, le=200)
+    seed: int = Field(42, ge=0, le=10**6)
+    pruneRms: float = Field(0.5, ge=0.0, le=5.0)
+
+
+class ConformerRankRequest(BaseModel):
+    indices: list[int] = Field(..., min_length=1, max_length=20)
+    functional: Optional[str] = None
+    basis: Optional[str] = None
+
+
+@app.post("/api/conformers/search")
+def conformers_search(req: ConformerSearchRequest, _: bool = Depends(require_login)):
+    """conformer 탐색 — 역장 계산이라 수 초. DFT 계산 큐를 쓰지 않는다."""
+    try:
+        doc = conformers.search(req.model_dump())
+    except (ValueError, geometry.GeometryError) as exc:
+        raise HTTPException(400, str(exc))
+    n = doc["molecule"]["n_atoms"]
+    return {**conformers.public(doc), "max_atoms": MAX_ATOMS, "over_limit": n > MAX_ATOMS}
+
+
+@app.get("/api/conformers")
+def conformers_list(_: bool = Depends(require_login)):
+    return {"sets": conformers.list_sets()}
+
+
+@app.get("/api/conformers/{set_id}")
+def conformers_get(set_id: str, _: bool = Depends(require_login)):
+    doc = conformers.get(set_id)
+    if doc is None:
+        raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
+    return conformers.public(doc)
+
+
+@app.delete("/api/conformers/{set_id}")
+def conformers_delete(set_id: str, _: bool = Depends(require_login)):
+    if not conformers.delete(set_id):
+        raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
+    return {"ok": True}
+
+
+@app.post("/api/conformers/{set_id}/rank")
+def conformers_rank(set_id: str, req: ConformerRankRequest, _: bool = Depends(require_login)):
+    """고른 conformer 를 단일점 DFT 로 다시 순위 매긴다 (백그라운드 · 계산 큐와 별개)."""
+    settings = {"envType": "진공·기체", "solventId": None, "accuracy": "빠름"}
+    exp = {}
+    if req.functional:
+        if req.functional not in presets.FUNCTIONALS:
+            raise HTTPException(400, f"지원하지 않는 범함수: {req.functional}")
+        exp["functional"] = req.functional
+    if req.basis:
+        exp["basis"] = req.basis
+    settings["expert"] = exp
+    try:
+        doc = conformers.rank(set_id, req.indices, settings)
+    except KeyError:
+        raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    return conformers.public(doc)
 
 
 @app.get("/")

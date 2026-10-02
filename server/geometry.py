@@ -63,6 +63,53 @@ def smiles_to_conformers(smiles: str, n_conformers: int = 15, top_k: int = 1, se
     }
 
 
+def conformer_set(smiles: str, n_conformers: int = 20, seed: int = 42, prune_rms: float = 0.5):
+    """conformer 전부를 역장 에너지 오름차순으로 — 탐색 화면(구조 준비)이 쓴다.
+
+    Returns: [(atoms, ff_energy_kcal), ...], info {n_generated, n_kept, forcefield}
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise GeometryError(f"SMILES 파싱 실패: {smiles!r}")
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = seed
+    params.pruneRmsThresh = prune_rms
+    ids = AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n_conformers), params=params)
+    if len(ids) == 0:
+        params.useRandomCoords = True
+        ids = AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n_conformers), params=params)
+    if len(ids) == 0:
+        raise GeometryError(f"3D 임베딩 실패: {smiles!r}")
+    forcefield = "MMFF94"
+    res = AllChem.MMFFOptimizeMoleculeConfs(mol, maxIters=2000)
+    if all(code != 0 for code, _ in res):
+        forcefield = "UFF"
+        res = AllChem.UFFOptimizeMoleculeConfs(mol, maxIters=2000)
+    pairs = sorted(((e, cid) for (code, e), cid in zip(res, ids) if code == 0), key=lambda t: t[0])
+    if not pairs:
+        pairs = [(float("nan"), ids[0])]
+    out = []
+    for e, cid in pairs:
+        conf = mol.GetConformer(cid)
+        out.append(([(a.GetSymbol(), *conf.GetAtomPosition(a.GetIdx())) for a in mol.GetAtoms()], float(e)))
+    return out, {"n_generated": max(1, n_conformers), "n_kept": len(out), "forcefield": forcefield}
+
+
+def rmsd(atoms_a, atoms_b) -> float:
+    """두 구조의 최적 정렬 후 RMSD (Å) — 원자 순서가 같을 때만 쓴다 (Kabsch)."""
+    A = np.array([a[1:4] for a in atoms_a], float)
+    B = np.array([b[1:4] for b in atoms_b], float)
+    if A.shape != B.shape:
+        raise GeometryError("원자 수가 달라 RMSD 를 낼 수 없습니다")
+    A = A - A.mean(0)
+    B = B - B.mean(0)
+    v, s, wt = np.linalg.svd(A.T @ B)
+    d = np.sign(np.linalg.det(v @ wt))
+    r = v @ np.diag([1, 1, d]) @ wt
+    return float(np.sqrt(((A @ r - B) ** 2).sum() / len(A)))
+
+
 def smiles_to_xyz(smiles: str, n_conformers: int = 15, seed: int = 42):
     """최저 에너지 conformer 하나만 반환하는 편의 함수."""
     candidates, info = smiles_to_conformers(smiles, n_conformers, top_k=1, seed=seed)
