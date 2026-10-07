@@ -469,13 +469,18 @@ def build_cluster(solute_smiles: str, explicit, n_conformers: int = 10, seed: in
     return atoms, fragments, {"forcefield": forcefield, "n_molecules": len(fragments)}
 
 
-def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
-                             seed: int = 7, n_orientations: int = 12):
-    """DFT 최적화된 host 좌표는 고정한 채 guest 분자 1개를 접촉·이완 배치한다.
+def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
+                             seed: int = 7, n_orientations: int = 12, n_keep: int = 1):
+    """DFT 최적화된 host 좌표는 고정한 채 guest 를 여러 방향으로 붙여 접촉 후보를 만든다.
 
-    여러 방향으로 guest를 놓고 host 원자를 고정한 MMFF(폴백 UFF) 이완을 수행해
-    가장 낮은 역장 에너지의 접촉 기하를 선택한다. 표면 대용체·이량체 파트너를
-    DFT 최적화 용질에 붙일 때 사용한다.
+    각 방향마다 host 원자를 고정한 MMFF(폴백 UFF) 이완을 돌리고, 역장 에너지 순으로
+    정렬해 «서로 다른 접촉점»만 n_keep 개까지 돌려준다.
+
+    역장 1등이 DFT 1등과 다를 수 있다 — 부피 큰 분자에서는 입체 장애를 피한 대신
+    수소결합이 맺히지 않은 배향이 역장에서 1등이 되곤 한다. 그래서 후보를 여러 개
+    남겨 호출한 쪽이 DFT 로 고를 수 있게 한다 (n_keep=1 이면 종전과 같다).
+
+    돌려주는 값: [{"atoms", "fragments", "info"}] — 역장 에너지가 낮은 것부터.
     """
     rng = np.random.default_rng(seed)
     host = _embed_single(host_smiles, seed)
@@ -494,8 +499,8 @@ def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
     host_radius = np.linalg.norm(rel, axis=1).max()
     n_host = host.GetNumAtoms()
 
-    best = None
-    for _ in range(n_orientations):
+    cands = []
+    for i_or in range(n_orientations):
         direction = rng.normal(size=3)
         direction /= np.linalg.norm(direction)
         rot = g_xyz @ _random_rotation(rng).T
@@ -535,23 +540,52 @@ def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
             energy = ff.CalcEnergy()
         if energy is None:
             energy = 0.0
-        if best is None or energy < best[0]:
-            best = (energy, combo.GetConformer())
+        pos = combo.GetConformer()
+        g_placed = np.array([list(pos.GetAtomPosition(n_host + i))
+                             for i in range(guest.GetNumAtoms())])
+        contact = float(np.linalg.norm(host_xyz[:, None, :] - g_placed[None, :, :],
+                                       axis=2).min())
+        cands.append({"ff_energy": energy, "contact_A": contact,
+                      "orientation": i_or, "guest_xyz": g_placed,
+                      "centroid": g_placed.mean(axis=0)})
 
-    if best is None:
+    if not cands:
         raise GeometryError(f"게스트 배치 실패: {guest_smiles}")
 
-    pos = best[1]
-    guest_atoms = [(guest.GetAtomWithIdx(i).GetSymbol(),
-                    *(pos.GetAtomPosition(n_host + i)))
-                   for i in range(guest.GetNumAtoms())]
-    atoms = list(host_atoms) + guest_atoms
-    fragments = [
-        {"label": "용질", "start": 0, "end": len(host_atoms), "smiles": host_smiles},
-        {"label": guest_smiles, "start": len(host_atoms), "end": len(atoms),
-         "smiles": guest_smiles},
-    ]
-    return atoms, fragments, {"n_molecules": 2}
+    cands.sort(key=lambda c: c["ff_energy"])
+    kept = []
+    for c in cands:                       # 접촉점이 겹치는 후보는 버린다 (같은 자리 재계산 방지)
+        if any(np.linalg.norm(c["centroid"] - k["centroid"]) < 1.5 for k in kept):
+            continue
+        kept.append(c)
+        if len(kept) >= max(1, n_keep):
+            break
+
+    g_symbols = [guest.GetAtomWithIdx(i).GetSymbol() for i in range(guest.GetNumAtoms())]
+    out = []
+    for rank, c in enumerate(kept):
+        atoms = list(host_atoms) + [(s, *map(float, p))
+                                    for s, p in zip(g_symbols, c["guest_xyz"])]
+        fragments = [
+            {"label": "용질", "start": 0, "end": len(host_atoms), "smiles": host_smiles},
+            {"label": guest_smiles, "start": len(host_atoms), "end": len(atoms),
+             "smiles": guest_smiles},
+        ]
+        out.append({"atoms": atoms, "fragments": fragments,
+                    "info": {"n_molecules": 2, "rank": rank,
+                             "ff_energy": round(c["ff_energy"], 2),
+                             "contact_A": round(c["contact_A"], 2),
+                             "orientation": c["orientation"],
+                             "n_orientations": n_orientations}})
+    return out
+
+
+def build_cluster_from_atoms(host_atoms, host_smiles: str, guest_smiles: str,
+                             seed: int = 7, n_orientations: int = 12):
+    """접촉 후보 중 역장 에너지가 가장 낮은 하나를 (atoms, fragments, info) 로 돌려준다."""
+    best = build_cluster_candidates(host_atoms, host_smiles, guest_smiles,
+                                    seed=seed, n_orientations=n_orientations)[0]
+    return best["atoms"], best["fragments"], best["info"]
 
 
 def atom_count(smiles: str) -> int:

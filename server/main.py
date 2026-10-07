@@ -84,6 +84,10 @@ class ExpertSettings(BaseModel):
     # 대표값 기준 — start: 시작 구조의 값 / lowest: 가장 안정한 conformer 의 값 (나머지는 민감도)
     representative: Optional[str] = Field(None, pattern="^(start|lowest)$")
     fixBackboneTorsions: Optional[bool] = None   # 최적화 중 주사슬 비틀림 고정 (geomeTRIC 필요)
+    # 접촉 클러스터(표면·이량체·흡착) — 구조를 DFT 로 이완할지 (비우면 구조 최적화 설정을 따름)
+    pairRelax: Optional[bool] = None
+    # 접촉 배향 후보 수 — 2 이상이면 단일점 DFT 로 배향을 고른다 (역장 1등이 최적이 아닐 때)
+    pairOrientations: Optional[int] = Field(None, ge=1, le=6)
 
     @model_validator(mode="after")
     def _check_start_structure(self):

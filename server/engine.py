@@ -42,7 +42,8 @@ from . import store
 from . import thermo as thermo_mod
 from .geometry import (smiles_to_conformers, smiles_to_xyz, build_cluster, build_torsion_start, dihedral_deg,
                        parse_torsion_pattern, has_attachment_points, oligomerize,
-                       build_cluster_from_atoms, atoms_to_xyz_block)
+                       build_cluster_from_atoms, build_cluster_candidates,
+                       atoms_to_xyz_block)
 
 HARTREE2KJ = 2625.4996
 
@@ -168,6 +169,8 @@ def _resolve_params(settings):
         "opt_in_solvent": bool(exp.get("optimizeInSolvent")),
         # 접촉 구조(이량체·흡착·표면) 를 DFT 로 이완할지 — 역장 구조만 쓰면 수소결합을 과소평가한다
         "pair_relax": do_opt if exp.get("pairRelax") is None else bool(exp["pairRelax"]),
+        # 접촉 배향 후보 수 — 2 이상이면 단일점 DFT 로 배향을 고른다 (기본 1 = 역장 1등)
+        "pair_orientations": max(1, min(6, int(exp.get("pairOrientations") or 1))),
         # BDE 라디칼 조각 재최적화 (기본 활성 — 고정 구조는 BDE를 크게 과대평가)
         "bde_relax": True if exp.get("bdeRelaxFragments") is None
                      else bool(exp["bdeRelaxFragments"]),
@@ -1744,10 +1747,34 @@ def run_job(job, update, is_cancelled=lambda: False):
 
             역장으로 만든 접촉 구조는 수소결합 거리가 느슨해 상호작용을 과소평가한다.
             그래서 host 는 고정한 채 guest 만 DFT 로 이완한 뒤 에너지를 낸다 (geomeTRIC 필요).
+
+            접촉 배향은 역장 1등이 DFT 1등과 다를 수 있어(부피 큰 분자에서 수소결합을
+            놓친 배향이 역장 1등이 되곤 한다), pair_orientations 가 2 이상이면 후보를
+            그만큼 만들어 단일점 DFT 로 가려낸 뒤 이완한다.
             """
             stage(label, prog)
-            cl_atoms, frags, _ = build_cluster_from_atoms(
-                host_atoms, host_smiles or smiles, guest_smiles, seed=7)
+            n_try = max(1, int(params.get("pair_orientations", 1)))
+            cands = build_cluster_candidates(
+                host_atoms, host_smiles or smiles, guest_smiles, seed=7, n_keep=n_try)
+            if len(cands) > 1:                      # 단일점 DFT 로 배향 고르기 (이완보다 훨씬 싸다)
+                scored = []
+                for c in cands:
+                    try:
+                        m = _build_mol(c["atoms"], params["basis_opt"],
+                                       params["charge"] + charge, mult)
+                        e = _run_scf(_make_mf(m, params["xc"], params["disp"], solvent_key,
+                                              params["scf_tol"]), f"{label} 배향 선별", log)
+                        scored.append((e, c))
+                    except CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — 한 배향이 실패해도 나머지로 고른다
+                        log(f"{label}: 배향 {c['info']['orientation']} 선별 실패 ({exc})")
+                if scored:
+                    scored.sort(key=lambda t: t[0])
+                    cands = [scored[0][1]]
+                    log(f"{label}: 접촉 배향 {len(scored)}개 중 DFT 최저 배향 선택 "
+                        f"(접촉 {cands[0]['info']['contact_A']} Å)")
+            cl_atoms, frags = cands[0]["atoms"], cands[0]["fragments"]
             if params.get("pair_relax"):
                 try:
                     n_host = frags[0]["end"]
