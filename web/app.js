@@ -617,9 +617,66 @@ async function refreshJobs() {
   const {jobs} = await res.json();
   JOBS_CACHE = jobs;
   const real = document.getElementById("rb-real");
+  renderRunningCard();                       // 돌고 있는 계산을 결과 화면 맨 위에
   if (real?.classList.contains("mode-results") && window.rbRenderResults) window.rbRenderResults();
   else renderJobList();
   if (real?.classList.contains("mode-compare") && window.rbRenderCompare) window.rbRenderCompare();
+}
+
+/* ── 지금 돌고 있는 계산 ────────────────────────────────────────────────
+   결과 화면에서 «무엇이 돌고 있고 무엇이 대기인지»는 완료 결과보다 먼저 봐야 한다.
+   작업 큐 카드는 결과 아래에 있어 스크롤해야 보이므로, 맨 위에 상태 칩과
+   진행 중 전용 카드를 둔다. 도는 작업이 없으면 카드는 통째로 숨는다. */
+const RES_STATUS_LABEL = {RUNNING: "실행 중", QUEUED: "대기", PUBLISHED: "완료",
+                          REVIEW: "검토 필요", FAILED: "실패", CANCELLED: "취소"};
+let RES_STATUS_FILTER = "";
+
+function jobElapsed(j) {
+  const t0 = j.startedAt || j.createdAt;
+  if (!t0) return "";
+  const s = Math.max(0, Date.now() / 1000 - t0);
+  if (s < 60) return `${Math.round(s)}초째`;
+  if (s < 3600) return `${Math.floor(s / 60)}분째`;
+  return `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분째`;
+}
+
+function renderRunningCard() {
+  const bar = $("res-statusbar"), card = $("res-running");
+  if (!bar || !card) return;
+  const jobs = JOBS_CACHE || [];
+  const run = jobs.filter(j => j.status === "RUNNING");
+  const wait = jobs.filter(j => j.status === "QUEUED");
+  const count = k => k === "REVIEW"
+    ? jobs.filter(j => j.status === "PUBLISHED" && j.validation?.grade === "REVIEW").length
+    : jobs.filter(j => j.status === k).length;
+  const chips = [["RUNNING", run.length, "chip-run"], ["QUEUED", wait.length, ""],
+                 ["PUBLISHED", count("PUBLISHED"), ""], ["REVIEW", count("REVIEW"), "chip-review"],
+                 ["FAILED", count("FAILED"), "chip-fail"]];
+  bar.innerHTML = chips.filter(([, n]) => n > 0).map(([k, n, cls]) =>
+    `<button type="button" class="res-chip ${cls}${RES_STATUS_FILTER === k ? " on" : ""}" data-status="${k}"
+      title="누르면 작업 큐에서 이 상태만 봅니다">${RES_STATUS_LABEL[k]} ${n}</button>`).join("")
+    || '<span class="muted small">작업이 없습니다.</span>';
+  bar.querySelectorAll("[data-status]").forEach(b => b.addEventListener("click", () => {
+    RES_STATUS_FILTER = RES_STATUS_FILTER === b.dataset.status ? "" : b.dataset.status;
+    renderRunningCard();
+    renderJobList(true);
+    const q = $("job-list"); if (q && RES_STATUS_FILTER) q.scrollIntoView({block: "center", behavior: "smooth"});
+  }));
+
+  card.hidden = !run.length && !wait.length;
+  if (card.hidden) return;
+  const rows = run.map(j => {
+    const pct = j.progress != null ? Math.min(99, j.progress) : null;
+    return `<div class="res-runrow">
+      <div class="res-runtop"><b>${esc(j.material.name)}</b>
+        <span class="small muted">${esc(j.stage || "")}${pct != null ? ` · ${pct}%` : ""} · ${esc(jobElapsed(j))}</span></div>
+      ${pct != null ? `<div class="progress-track" style="margin-top:5px"><div class="progress-fill" style="width:${pct}%"></div></div>` : ""}</div>`;
+  }).join("");
+  card.querySelector(".card-head h2").innerHTML = run.length
+    ? `지금 돌고 있는 계산 <span class="muted small" style="font-weight:400">· ${run.length}건</span>`
+    : "대기 중인 계산";
+  card.querySelector("#res-running-body").innerHTML = rows
+    + (wait.length ? `<div class="res-waitline">대기 ${wait.length}건 — ${wait.slice(0, 6).map(j => esc(j.material.name)).join(" · ")}${wait.length > 6 ? " …" : ""}</div>` : "");
 }
 
 /* ── PySCF 원본 로그 보기 ───────────────────────────────────────────
@@ -665,31 +722,72 @@ function renderJobList(force = false) {
   const sig = jobsSignature();
   if (!force && sig === JOB_LIST_SIG && list.children.length) return;  // 변화 없음 → 유지
   JOB_LIST_SIG = sig;
-  if (!JOBS_CACHE.length) {
+  // 맨 위 상태 칩으로 거른 경우 그 상태만 (칩을 다시 누르면 해제)
+  const source = RES_STATUS_FILTER
+    ? JOBS_CACHE.filter(j => RES_STATUS_FILTER === "REVIEW"
+      ? (j.status === "PUBLISHED" && j.validation?.grade === "REVIEW")
+      : j.status === RES_STATUS_FILTER)
+    : JOBS_CACHE;
+  if (!source.length) {
     list.className = "empty small";
-    list.textContent = "작업이 없습니다.";
+    list.textContent = RES_STATUS_FILTER
+      ? `«${RES_STATUS_LABEL[RES_STATUS_FILTER]}» 인 작업이 없습니다 — 칩을 다시 누르면 전체를 봅니다.`
+      : "작업이 없습니다.";
     updateSelCount();
     return;
   }
   list.className = "";
-  // 소재별로 묶어서 표시 — 나중에 데이터를 찾기 쉽도록
-  const groups = new Map();
-  for (const job of JOBS_CACHE) {
-    if (!groups.has(job.material.name)) groups.set(job.material.name, []);
-    groups.get(job.material.name).push(job);
+  // 소재별로 묶어서 표시 — 나중에 데이터를 찾기 쉽도록.
+  // conformer 세트에서 제출한 작업은 이름이 «분자 · conf #n» 으로 저마다 달라 한 줄씩
+  // 쌓인다. 서버가 준 묶음 열쇠(conformerGroup)로 세트 하나를 한 줄로 모아, 분자가
+  // 몇 가지인지가 먼저 보이게 한다 — 라이브러리의 «conformer 세트» 묶음과 같은 방식.
+  JOB_GROUPS = new Map();
+  for (const job of source) {
+    const cg = job.conformerGroup || null;
+    const key = cg ? cg.key : "mat:" + job.material.name;
+    if (!JOB_GROUPS.has(key)) {
+      JOB_GROUPS.set(key, {key, conf: cg, name: cg ? cg.name : job.material.name, jobs: []});
+    }
+    JOB_GROUPS.get(key).jobs.push(job);
+  }
+  for (const g of JOB_GROUPS.values()) {
+    if (g.conf) g.jobs.sort((a, b) => (a.conformerGroup.index ?? 0) - (b.conformerGroup.index ?? 0));
   }
   for (const id of [...EXPORT_SEL]) if (!JOBS_CACHE.some(j => j.id === id)) EXPORT_SEL.delete(id);
 
-  list.innerHTML = [...groups.entries()].map(([name, jobs]) => {
+  list.innerHTML = [...JOB_GROUPS.values()].map(g => {
+    const jobs = g.jobs;
     const done = jobs.filter(j => j.status === "PUBLISHED").length;
     const active = jobs.filter(j => ["QUEUED", "RUNNING"].includes(j.status)).length;
     const failed = jobs.filter(j => j.status === "FAILED").length;
-    const open = OPEN_GROUPS.has(name) || (active && !OPEN_GROUPS.size);
-    return `<details class="job-group" data-group="${esc(name)}" ${open ? "open" : ""}
+    const open = OPEN_GROUPS.has(g.key) || (active && !OPEN_GROUPS.size);
+    let head, acts = "";
+    if (g.conf) {
+      // 세트 식별자 대신 «구조 · 기준 구조»로 구분한다 (라이브러리 화면과 같은 표기)
+      const set = [g.conf.structure, g.conf.reference].filter(Boolean).map(esc).join(" · ");
+      const grade = {};
+      for (const j of jobs) if (j.validation?.grade) grade[j.validation.grade] = (grade[j.validation.grade] || 0) + 1;
+      const state = [`${done}/${jobs.length} 완료`]
+        .concat(active ? [`진행 ${active}`] : [], failed ? [`실패 ${failed}`] : [],
+          ["REVIEW", "FAIL"].filter(k => grade[k]).map(k => `${k} ${grade[k]}`));
+      head = `${esc(g.name)} <span class="chip soft" style="font-weight:400"
+          title="${g.conf.resolvedBy === "name"
+            ? "세트 꼬리표가 없던 시절의 작업 — 이름이 같은 conformer 끼리 모았습니다"
+            : "conformer 세트 하나에서 제출한 작업들입니다 — 펼치면 구조별 작업이 보입니다"}">conformer 세트</span>
+        <span class="muted small" style="font-weight:400">— ${set ? set + " · " : ""}${state.join(" · ")}</span>`;
+      const selectable = jobs.filter(j => j.status === "PUBLISHED").length;
+      acts = `<span style="font-weight:400;margin-left:6px;white-space:nowrap">
+        ${selectable ? `<label class="compare-check" data-group-sel-wrap="1"><input type="checkbox"
+            data-group-sel="${esc(g.key)}"> 세트 내보내기</label> ` : ""}
+        <button class="btn ghost danger small" type="button" data-group-del="${esc(g.key)}"
+          title="이 세트의 작업 ${jobs.length}건을 모두 휴지통으로 (진행 중인 작업은 건너뜁니다)">세트 삭제</button></span>`;
+    } else {
+      head = `${esc(g.name)}
+        <span class="muted small" style="font-weight:400">— 총 ${jobs.length}건${done ? ` · 완료 ${done}` : ""}${active ? ` · 진행 ${active}` : ""}${failed ? ` · 실패 ${failed}` : ""}</span>`;
+    }
+    return `<details class="job-group" data-group="${esc(g.key)}" ${open ? "open" : ""}
         style="border:1px solid var(--grid);border-radius:10px;padding:8px 12px;margin-bottom:8px">
-      <summary style="cursor:pointer;font-weight:700">${esc(name)}
-        <span class="muted small" style="font-weight:400">— 총 ${jobs.length}건${done ? ` · 완료 ${done}` : ""}${active ? ` · 진행 ${active}` : ""}${failed ? ` · 실패 ${failed}` : ""}</span>
-      </summary>
+      <summary style="cursor:pointer;font-weight:700">${head}${acts}</summary>
       <div style="margin-top:8px">${jobs.map(jobRowHtml).join("")}</div>
     </details>`;
   }).join("");
@@ -698,8 +796,37 @@ function renderJobList(force = false) {
     d.open ? OPEN_GROUPS.add(d.dataset.group) : OPEN_GROUPS.delete(d.dataset.group);
     JOB_LIST_SIG = jobsSignature();   // 펼침 변화는 재렌더 대상이 아님
   }));
+  // 세트 단위 내보내기 — 세트의 완료 작업을 한꺼번에 체크/해제한다.
+  // 목록을 다시 그리지 않고 체크 상태만 맞춘다 (펼침·스크롤을 잃지 않도록).
+  const groupIds = key => (JOB_GROUPS.get(key)?.jobs || [])
+    .filter(j => j.status === "PUBLISHED").map(j => j.id);
+  const syncGroupSel = () => list.querySelectorAll("[data-group-sel]").forEach(cb => {
+    const ids = groupIds(cb.dataset.groupSel);
+    const n = ids.filter(id => EXPORT_SEL.has(id)).length;
+    cb.checked = n > 0 && n === ids.length;
+    cb.indeterminate = n > 0 && n < ids.length;      // 일부만 고른 상태
+  });
+  list.querySelectorAll("[data-group-sel-wrap]").forEach(l =>
+    l.addEventListener("click", e => e.stopPropagation()));   // summary 가 접히지 않게
+  list.querySelectorAll("[data-group-sel]").forEach(cb => cb.addEventListener("change", () => {
+    const ids = groupIds(cb.dataset.groupSel);
+    ids.forEach(id => cb.checked ? EXPORT_SEL.add(id) : EXPORT_SEL.delete(id));
+    list.querySelectorAll("[data-export-sel]").forEach(c => {
+      c.checked = EXPORT_SEL.has(c.dataset.exportSel);
+    });
+    syncGroupSel();
+    JOB_LIST_SIG = jobsSignature();
+    updateSelCount();
+  }));
+  syncGroupSel();
+  list.querySelectorAll("[data-group-del]").forEach(b => b.addEventListener("click", e => {
+    e.stopPropagation(); e.preventDefault();
+    const g = JOB_GROUPS.get(b.dataset.groupDel);
+    if (g) rbTrashJobs(g.jobs.map(j => j.id));
+  }));
   list.querySelectorAll("[data-export-sel]").forEach(cb => cb.addEventListener("change", () => {
     cb.checked ? EXPORT_SEL.add(cb.dataset.exportSel) : EXPORT_SEL.delete(cb.dataset.exportSel);
+    syncGroupSel();            // 한 건만 바뀌어도 세트 체크박스가 «일부»로 따라와야 한다
     JOB_LIST_SIG = jobsSignature();
     updateSelCount();
   }));
@@ -731,6 +858,18 @@ function jobSolventLabel(job) {
   return job.result?.conditions?.solvent_model || st.solventId || "용매";
 }
 
+/** conformer 세트 묶음 안에서 이 줄이 몇 번 구조인지 — 세트 줄에는 분자 이름만 있으므로 */
+function jobConfLabel(job) {
+  const cg = job.conformerGroup;
+  if (!cg) return "";
+  const c = job.material.conformer || {};
+  // 세트 안에서 이 구조가 얼마나 높은지 — DFT 재순위를 했으면 그 값으로
+  const e = c.dft_energy != null ? ["DFT", c.dft_energy]
+    : c.ff_energy != null ? ["역장", c.ff_energy] : null;
+  return `<b style="font-size:12px">conf #${cg.index ?? "?"}</b>${cg.nTotal ? `<span class="small muted"> / ${cg.nTotal}</span>` : ""}
+    ${e ? `<span class="small muted" title="세트의 최저 에너지 구조 대비">${esc(e[0])} +${e[1].toFixed(2)} kcal/mol</span>` : ""} `;
+}
+
 function jobRowHtml(job) {
   const method = job.result?.conditions?.method
     || `${job.settings.expert.functional}${job.settings.expert.basis ? "/" + job.settings.expert.basis : ""}`;
@@ -738,6 +877,7 @@ function jobRowHtml(job) {
   return `<div class="job-row">
     <div class="job-main">
       <div>
+        ${jobConfLabel(job)}
         ${done ? `<label class="compare-check"><input type="checkbox" data-export-sel="${esc(job.id)}"
             ${EXPORT_SEL.has(job.id) ? "checked" : ""}> 내보내기</label> ` : ""}
         <span class="mono small muted">${esc(job.id)}</span>
@@ -916,12 +1056,23 @@ function svgEswBar(red, ox, ref) {
     sv += `<line x1="${x(v)}" y1="34" x2="${x(v)}" y2="${H - 32}" class="gridline"/>
       <text x="${x(v)}" y="${H - 20}" text-anchor="middle" class="axis-label">${v}</text>`;
   }
+  // 전극 라벨은 2단으로 엇갈리게 두고, 같은 단 안에서 가까운 것끼리 가로로 벌린다
+  const elNames = ELECTRODES.map(el => el.label.split(" (")[0]);
+  const elGap = Math.max(...elNames.map(n => n.length)) * 7 + 6;
+  const elLx = [0, 1].flatMap(row => {
+    const idx = ELECTRODES.map((_, i) => i).filter(i => i % 2 === row);
+    const sp = spreadLabels(idx.map(i => x(ELECTRODES[i].v)), elGap, L + elGap / 2, W - 34 - elGap / 2);
+    return idx.map((i, k) => [i, sp[k]]);
+  }).reduce((m, [i, v]) => (m[i] = v, m), []);
   ELECTRODES.forEach((el, i) => {
-    const ly = i % 2 ? 26 : 12;  // 가까운 전극 라벨은 2단으로 엇갈리게
+    const ly = i % 2 ? 26 : 12;
     sv += `<line x1="${x(el.v)}" y1="${ly + 4}" x2="${x(el.v)}" y2="${H - 32}"
         stroke="var(--pin)" stroke-dasharray="4 3"/>
-      <text x="${x(el.v)}" y="${ly}" text-anchor="middle" class="axis-label"
-        fill="var(--pin)">${esc(el.label.split(" (")[0])}</text>`;
+      ${Math.abs(elLx[i] - x(el.v)) > 1.5
+        ? `<line x1="${elLx[i]}" y1="${ly + 3}" x2="${x(el.v)}" y2="${ly + 8}"
+            stroke="var(--pin)" stroke-width="0.8" stroke-opacity="0.5"/>` : ""}
+      <text x="${elLx[i]}" y="${ly}" text-anchor="middle" class="axis-label"
+        fill="var(--pin)">${esc(elNames[i])}</text>`;
   });
   sv += `<rect x="${x(red)}" y="52" width="${Math.max(2, x(ox) - x(red))}" height="18" rx="4"
       fill="color-mix(in srgb, var(--accent) 30%, transparent)" stroke="var(--accent)"/>
@@ -1086,7 +1237,8 @@ function toggleCmpMetric(key) {
 let SELECTED_RESULT = null;   // 상세를 보고 있는 작업 id
 let RES_SHOWN_IDS = [];       // 현재 필터를 통과한 결과 id (이전/다음 이동용)
 const EXPORT_SEL = new Set(); // 내보내기 선택 작업 id
-const OPEN_GROUPS = new Set(); // 사용자가 펼쳐 둔 소재 그룹
+const OPEN_GROUPS = new Set(); // 사용자가 펼쳐 둔 소재 그룹 (열쇠 = conformer 세트 또는 소재 이름)
+let JOB_GROUPS = new Map();    // 지금 그린 묶음 — 세트 단위 선택·삭제에서 쓴다
 let CMP_OPACITY = 0.7;         // 비교 차트 막대·영역 투명도
 let JOB_LIST_SIG = null;       // 목록 변화 없으면 다시 그리지 않음 (펼침 유지)
 
@@ -1508,12 +1660,22 @@ function svgHomoLumoAxis(entries) {
       <text x="${x(v)}" y="${H - 14}" text-anchor="middle" class="axis-label">${v}</text>`;
   }
   sv += `<text x="${W - 16}" y="30" class="axis-label">eV</text>`;
+  // 전극 라벨 — 2단으로 엇갈린 뒤 같은 단 안에서 가로로 벌린다 (흑연·리튬·Si 는 서로 가깝다)
+  const mGap = Math.max(...marks.map(m => m.label.length)) * 7 + 6;
+  const mLx = [0, 1].flatMap(row => {
+    const idx = marks.map((_, i) => i).filter(i => i % 2 === row);
+    const sp = spreadLabels(idx.map(i => x(marks[i].mu)), mGap, L + mGap / 2, W - 30 - mGap / 2);
+    return idx.map((i, k) => [i, sp[k]]);
+  }).reduce((o, [i, v]) => (o[i] = v, o), []);
   marks.forEach((m, i) => {
     const ly = i % 2 ? 40 : 26;
     const col = m.mu < -2.5 ? "var(--pin)" : "var(--accent)";
     sv += `<line x1="${x(m.mu)}" y1="${ly + 3}" x2="${x(m.mu)}" y2="${H - 30}"
         stroke="${col}" stroke-dasharray="4 3"/>
-      <text x="${x(m.mu)}" y="${ly}" text-anchor="middle" class="axis-label"
+      ${Math.abs(mLx[i] - x(m.mu)) > 1.5
+        ? `<line x1="${mLx[i]}" y1="${ly + 3}" x2="${x(m.mu)}" y2="${ly + 8}"
+            stroke="${col}" stroke-width="0.8" stroke-opacity="0.5"/>` : ""}
+      <text x="${mLx[i]}" y="${ly}" text-anchor="middle" class="axis-label"
         fill="${col}">${esc(m.label)}</text>`;
   });
   entries.forEach((e, k) => {
@@ -1526,8 +1688,11 @@ function svgHomoLumoAxis(entries) {
         stroke="${col}" stroke-width="8" stroke-linecap="round" opacity="0.5"/>
       <line x1="${x(e.homo)}" y1="${y - 7}" x2="${x(e.homo)}" y2="${y + 7}" stroke="${col}" stroke-width="2.5"/>
       <line x1="${x(e.lumo)}" y1="${y - 7}" x2="${x(e.lumo)}" y2="${y + 7}" stroke="${col}" stroke-width="2.5"/>
-      <text x="${x(e.homo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.homo}</text>
-      <text x="${x(e.lumo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.lumo}</text>`;
+      ${x(e.lumo) - x(e.homo) < 46        // 띠가 좁으면 두 수치를 바깥쪽으로 밀어낸다
+        ? `<text x="${x(e.homo) - 4}" y="${y - 10}" text-anchor="end" class="value-label">${e.homo}</text>
+           <text x="${x(e.lumo) + 4}" y="${y - 10}" class="value-label">${e.lumo}</text>`
+        : `<text x="${x(e.homo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.homo}</text>
+           <text x="${x(e.lumo)}" y="${y - 10}" text-anchor="middle" class="value-label">${e.lumo}</text>`}`;
   });
   return sv + "</svg>";
 }
@@ -2978,32 +3143,60 @@ function svgEaStages(d) {
   return s;
 }
 
+/** 라벨 위치를 최소 간격만큼 벌린다 (세로·가로 공통) — 값이 비슷하면 글씨가 포개지기 때문.
+    선·점은 실제 값 자리에 그대로 두고 글씨만 밀어낸 뒤, 필요하면 이음선으로 연결한다. */
+function spreadLabels(pos, gap, min, max) {
+  const order = pos.map((_, i) => i).sort((a, b) => pos[a] - pos[b]);
+  const out = pos.slice();
+  let prev = min - gap;                       // 앞에서 뒤로 밀기
+  for (const i of order) { out[i] = Math.max(out[i], prev + gap); prev = out[i]; }
+  let next = max + gap;                       // 끝을 넘으면 되밀기
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k];
+    out[i] = Math.min(out[i], next - gap);
+    next = out[i];
+  }
+  return out;
+}
+
 /** LUMO 사다리 — 「LUMO가 낮다」가 무엇에 비해 낮은지 보여준다 */
 function svgLumoLadder(d) {
   if (d.lumo_ev == null) return "";
   const refs = (d.lumo_reference || []).map(r => ({...r}));
-  const all = [...refs.map(r => r.lumo_ev), d.lumo_ev];
+  const items = [
+    ...refs.map(r => ({
+      v: r.lumo_ev, name: r.label, main: false,
+      val: `${r.lumo_ev}${r.reduction_v != null
+        ? ` (E_red ${r.reduction_v > 0 ? "+" : ""}${r.reduction_v} V)` : ""}`,
+    })),
+    {v: d.lumo_ev, name: d.name || "이 물질", main: true, val: `${fmt(d.lumo_ev)} eV`},
+  ];
+  const all = items.map(it => it.v);
   const lo = Math.min(...all) - 0.5, hi = Math.max(...all) + 0.5;
-  const W = 780, H = 150, L = 190, R = 20;
-  const y = v => H - 40 - (v - lo) / (hi - lo) * (H - 74);
+  const GAP = 14;                             // 글씨 한 줄이 차지하는 최소 높이
+  const W = 780, L = 190, R = 20, TOP = 34;
+  const H = Math.max(150, TOP + items.length * GAP + 42);
+  const y = v => H - 40 - (v - lo) / (hi - lo) * (H - TOP - 40);
+  const ly = spreadLabels(items.map(it => y(it.v)), GAP, TOP + 4, H - 30);
+  // 오른쪽 수치 글씨가 앉을 자리만큼 선을 짧게 끊는다 (글씨 위에 선이 지나가지 않게)
+  const valX = W - R - Math.max(...items.map(it => it.val.length)) * 5.4 - 8;
   let s = `<svg viewBox="0 0 ${W} ${H}" class="esw-chart" role="img"
     aria-label="LUMO 준위 비교">
     <text x="8" y="16" font-size="11" fill="var(--muted)">LUMO (eV) — 낮을수록 전자를 받기 쉬움</text>`;
-  for (const r of refs) {
-    s += `<line x1="${L}" y1="${y(r.lumo_ev)}" x2="${W - R}" y2="${y(r.lumo_ev)}"
-        stroke="var(--grid)" stroke-dasharray="4 3"/>
-      <text x="${L - 8}" y="${y(r.lumo_ev) + 4}" font-size="10.5" text-anchor="end"
-        fill="var(--muted)">${esc(r.label)}</text>
-      <text x="${W - R}" y="${y(r.lumo_ev) - 3}" font-size="9.5" text-anchor="end"
-        fill="var(--muted)">${r.lumo_ev}${r.reduction_v != null
-          ? ` (E_red ${r.reduction_v > 0 ? "+" : ""}${r.reduction_v} V)` : ""}</text>`;
-  }
-  s += `<line x1="${L}" y1="${y(d.lumo_ev)}" x2="${W - R}" y2="${y(d.lumo_ev)}"
-      stroke="var(--accent)" stroke-width="2.5"/>
-    <text x="${L - 8}" y="${y(d.lumo_ev) + 4}" font-size="11.5" text-anchor="end"
-      fill="var(--accent)" font-weight="600">${esc(d.name || "이 물질")}</text>
-    <text x="${W - R}" y="${y(d.lumo_ev) - 4}" font-size="10.5" text-anchor="end"
-      fill="var(--accent)" font-weight="600">${fmt(d.lumo_ev)} eV</text>`;
+  items.forEach((it, i) => {
+    const ty = y(it.v), col = it.main ? "var(--accent)" : "var(--muted)";
+    s += it.main
+      ? `<line x1="${L}" y1="${ty}" x2="${valX}" y2="${ty}" stroke="var(--accent)" stroke-width="2.5"/>`
+      : `<line x1="${L}" y1="${ty}" x2="${valX}" y2="${ty}" stroke="var(--grid)" stroke-dasharray="4 3"/>`;
+    if (Math.abs(ly[i] - ty) > 1.5) {         // 글씨를 밀었으면 선과 이어 준다
+      s += `<path d="M${L - 6},${ly[i]} L${L - 2},${ly[i]} L${L},${ty}"
+        fill="none" stroke="${col}" stroke-width="0.8" stroke-opacity="0.55"/>`;
+    }
+    s += `<text x="${L - 9}" y="${ly[i] + 3.5}" font-size="${it.main ? 11.5 : 10.5}"
+        text-anchor="end" fill="${col}"${it.main ? ' font-weight="600"' : ""}>${esc(it.name)}</text>
+      <text x="${W - R}" y="${ly[i] + 3.5}" font-size="${it.main ? 10.5 : 9.5}"
+        text-anchor="end" fill="${col}"${it.main ? ' font-weight="600"' : ""}>${esc(it.val)}</text>`;
+  });
   return s + "</svg>";
 }
 
@@ -4343,10 +4536,21 @@ function monWire() {
   $("mon-refresh").onclick = () => { monRenderList(); if (MON_SEL) monRenderDetail(); };
   $("mon-campaign").onchange = e => { MON_CAMPAIGN = e.target.value; monRenderList(); };
   $("mon-filter").onchange = () => monRenderList();
-  $("mon-detail-close").onclick = () => { MON_SEL = null; $("mon-detail").style.display = "none"; monRenderList(); };
+  $("mon-detail-close").onclick = () => {
+    MON_SEL = null;
+    $("mon-detail").style.display = "none";
+    if ($("mon-detail-ph")) $("mon-detail-ph").style.display = "";
+    monRenderList();
+  };
   if ($("mon-del")) {
     if (window.__RB_SNAPSHOT__) $("mon-del").hidden = true;
     $("mon-del").onclick = () => { if (MON_SEL) rbTrashJobs([MON_SEL]); };
+  }
+  if ($("mon-log-wrap")) {
+    $("mon-log-wrap").addEventListener("toggle", () => { if (monLogOpen()) monLoadLog(); });
+    const sum = $("mon-log-wrap").querySelector("summary");
+    // 요약줄 안에 끼어드는 «?» 도움말 단추는 로그 서랍을 여닫지 않는다
+    if (sum) sum.addEventListener("click", e => { if (e.target.closest(".rb-help-btn")) e.preventDefault(); });
   }
   $("mon-log-search-btn").onclick = () => monLogSearch();
   $("mon-log-search").addEventListener("keydown", e => { if (e.key === "Enter") monLogSearch(); });
@@ -4374,7 +4578,9 @@ window.rbMonitorSelect = function (jobId) {
   MON_SEL = jobId;
   MON_LOG = {mode: "tail", start: 1, follow: true, target: null, total: 0};
   $("mon-log-hits").innerHTML = "";
-  monRenderDetail().then(() => { const el = $("mon-detail"); if (el) el.scrollIntoView({block: "start"}); });
+  // 상세는 오른쪽 제자리에서 바뀐다 — 화면을 움직이지 않는다 (좁은 화면에서는 서랍이 덮는다)
+  monRenderDetail().then(() => { const el = $("mon-detail"); if (el) el.scrollTop = 0; });
+  monRenderList();                       // 고른 줄을 바로 강조
 };
 
 async function monRenderList() {
@@ -4408,34 +4614,28 @@ async function monRenderList() {
     || j.n_warn || j.n_error || j.heartbeat?.stale);
   const box = $("mon-table");
   if (!rows.length) { box.className = "empty small"; box.textContent = "표시할 작업이 없습니다."; return; }
-  box.className = "scroll-x";
-  const conv = x => x === true ? ' <span class="verdict-ok">✓</span>' : x === false ? ' <span class="verdict-no">✗</span>' : "";
-  box.innerHTML = `<table class="table" style="min-width:960px">
-    <tr><th>작업</th><th>캠페인</th><th>단계</th><th>SCF</th><th>OPT</th><th>FREQ</th><th>복구</th>
-      <th>heartbeat</th><th>판정</th><th>징후</th><th></th></tr>
-    ${rows.map(j => {
-      const s = j.scf || {}, o = j.opt || {}, f = j.freq || {};
-      const scf = s.cycle != null ? `${s.cycle}${s.max_cycle ? "/" + s.max_cycle : ""} · |g| ${fmtExp(s.gorb)}${conv(s.converged)}` : "—";
-      const opt = o.step != null ? `${o.step}${o.max_steps ? "/" + o.max_steps : ""} · |grad| ${fmtExp(o.grad_norm)}${conv(o.converged)}` : "—";
-      const freq = f.n_imag != null ? (f.n_imag === 0 ? '<span class="verdict-ok">허수 0</span>'
-        : `<span class="verdict-mid">허수 ${f.n_imag} (${Math.round(f.lowest_cm)} cm⁻¹)</span>`) : "—";
-      const hb = j.status === "RUNNING"
-        ? `<span style="${j.heartbeat?.stale ? "color:var(--danger);font-weight:700" : ""}">${fmtAge(j.heartbeat?.age_s)} 전</span>`
-        : (j.wall_s != null ? `<span class="muted">${fmtAge(j.wall_s)} 소요</span>` : "—");
-      const selStyle = MON_SEL === j.id ? ' style="background:color-mix(in srgb,var(--accent) 6%,transparent)"' : "";
-      return `<tr${selStyle}>
-        <td><b>${esc(j.name || "")}</b><br><span class="mono small muted">${esc(j.id)}</span></td>
-        <td class="small">${j.campaign
-          ? `${esc(j.campaign.name || j.campaign.id)}<br><span class="muted">${(j.campaign.stage ?? 0) + 1}단계 · ${esc(j.campaign.accuracy || "")}</span>`
-          : `<span class="muted">단건 · ${esc(j.accuracy || "")}</span>`}</td>
-        <td class="small">${esc(j.stage || "")}${j.status === "RUNNING" && j.progress != null ? ` <span class="muted">${Math.min(99, j.progress)}%</span>` : ""}</td>
-        <td class="small mono">${scf}</td><td class="small mono">${opt}</td><td class="small">${freq}</td>
-        <td class="small">${j.recovered ? `<span class="verdict-mid">${j.recovered}회</span>` : (j.attempts ? `${j.attempts} attempt` : '<span class="muted">—</span>')}</td>
-        <td class="small">${hb}</td>
-        <td><span class="badge ${MON_GRADE_BADGE[j.grade] || "queued"}" title="${esc(j.validation_summary || j.error || "")}">${esc(j.grade || j.status)}</span></td>
-        <td class="small">${j.n_error ? `<span class="verdict-no">ERROR ${j.n_error}</span> ` : ""}${j.n_warn ? `<span class="verdict-mid">WARN ${j.n_warn}</span>` : ""}${!j.n_error && !j.n_warn ? '<span class="muted">—</span>' : ""}</td>
-        <td><button class="btn ghost small" type="button" data-mon-open="${esc(j.id)}">열기</button></td></tr>`;
-    }).join("")}</table>`;
+  // 목록은 «어느 작업을 볼지» 고르는 자리 — 이름·단계·진행·판정·heartbeat 만 둔다.
+  // SCF·OPT·FREQ 숫자와 복구 이력은 오른쪽 상세에서 본다 (가로 스크롤이 사라진다).
+  box.className = "mon-rows";
+  box.innerHTML = rows.map(j => {
+    const hb = j.status === "RUNNING"
+      ? `<span style="${j.heartbeat?.stale ? "color:var(--danger);font-weight:700" : ""}">heartbeat ${fmtAge(j.heartbeat?.age_s)} 전</span>`
+      : (j.wall_s != null ? `${fmtAge(j.wall_s)} 소요` : "");
+    const sig = `${j.n_error ? `<span class="verdict-no">ERROR ${j.n_error}</span> ` : ""}`
+      + `${j.n_warn ? `<span class="verdict-mid">WARN ${j.n_warn}</span> ` : ""}`
+      + `${j.recovered ? `<span class="verdict-mid">복구 ${j.recovered}회</span>` : ""}`;
+    const pct = j.status === "RUNNING" && j.progress != null ? Math.min(99, j.progress) : null;
+    const where = j.campaign
+      ? `${esc(j.campaign.name || j.campaign.id)} · ${(j.campaign.stage ?? 0) + 1}단계`
+      : `단건 · ${esc(j.accuracy || "")}`;
+    return `<button type="button" class="mon-row${MON_SEL === j.id ? " on" : ""}" data-mon-open="${esc(j.id)}">
+      <span class="r1"><span class="nm">${esc(j.name || j.id)}</span>
+        <span class="badge ${MON_GRADE_BADGE[j.grade] || "queued"}"
+          title="${esc(j.validation_summary || j.error || "")}">${esc(j.grade || j.status)}</span></span>
+      <span class="r2"><span>${esc(j.stage || "")}${pct != null ? ` · ${pct}%` : ""}</span><span>${hb}</span></span>
+      ${pct != null ? `<span class="mon-bar"><i style="width:${pct}%"></i></span>` : ""}
+      <span class="r3">${where}${sig ? " · " + sig : ""}</span></button>`;
+  }).join("");
   box.querySelectorAll("[data-mon-open]").forEach(b => b.onclick = () => window.rbMonitorSelect(b.dataset.monOpen));
 }
 
@@ -4450,6 +4650,7 @@ async function monRenderDetail(quiet = false) {
   MON_DETAIL = d;
   const v = d.view, m = d.monitor || {};
   $("mon-detail").style.display = "";
+  if ($("mon-detail-ph")) $("mon-detail-ph").style.display = "none";
   $("mon-detail-title").textContent = `${v.name || ""} — ${v.id}`;
   $("mon-log-download").href = `/api/jobs/${encodeURIComponent(v.id)}/log?download=true`;
   const tj = $("mon-traj-download");
@@ -4503,9 +4704,12 @@ async function monRenderDetail(quiet = false) {
   html += `<details style="margin-top:10px"><summary class="small muted">입력값 검증 · 실제 실행값 (엔진에 실제로 들어간 값)</summary>
     <div class="grid-2" style="margin-top:6px"><div><b class="small">입력</b>${kv(inp)}</div><div><b class="small">실제 실행값 (최종 SCF 객체)</b>${kv(act)}</div></div></details>`;
   if (m.raw_log) html += `<p class="muted small" style="margin:8px 0 0">원본 로그 ${(m.raw_log.bytes / 1024).toFixed(0)} KB · SHA-256 ${esc(m.raw_log.sha256)} — 완료 후 변조·누락 확인용</p>`;
+  const pane = $("mon-detail"), keepTop = quiet ? pane.scrollTop : null;   // 자동 갱신이 보던 자리를 흔들지 않게
   $("mon-detail-body").innerHTML = html;
+  if (keepTop != null) pane.scrollTop = keepTop;
   $("mon-detail-body").querySelectorAll("[data-mon-goto]").forEach(b => b.onclick = () => monLogGoto(parseInt(b.dataset.monGoto)));
-  if (!quiet || (MON_LOG.mode === "tail" && MON_LOG.follow && v.status === "RUNNING")) monLoadLog();
+  // 원본 로그는 펼쳤을 때만 받아온다 (접힌 채로 300줄씩 당길 이유가 없다)
+  if (monLogOpen() && (!quiet || (MON_LOG.mode === "tail" && MON_LOG.follow && v.status === "RUNNING"))) monLoadLog();
 }
 
 /* 로그 스케일 시계열 — SCF |g| · OPT |grad| */
@@ -4602,7 +4806,12 @@ async function monLoadLog() {
     pre.scrollTop = pre.scrollHeight;
   }
 }
+/** 원본 로그 서랍이 펼쳐져 있는가 (접혀 있으면 받아오지 않는다) */
+function monLogOpen() { const w = $("mon-log-wrap"); return !w || w.open; }
+
 function monLogGoto(line) {
+  const w = $("mon-log-wrap");
+  if (w && !w.open) w.open = true;        // «원본에서 보기»는 접혀 있어도 펼쳐 준다
   MON_LOG.mode = "range";
   MON_LOG.follow = false;
   $("mon-log-follow").checked = false;

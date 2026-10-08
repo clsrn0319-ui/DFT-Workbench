@@ -51,12 +51,15 @@ def test_unknown_surface_is_rejected():
     assert ei.value.status_code == 400
 
 
-def _fake_pair(binder_e, solvent_e):
+def _fake_pair(binder_e, solvent_e, geometry=None):
     """pair_energy 를 대신해 정해진 상호작용 에너지를 돌려준다 (DFT 없이 판정만 본다)."""
     calls = []
 
-    def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None):
+    def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None,
+                    info=None):
         calls.append({"guest": guest_smiles, "host_smiles": host_smiles, "label": label})
+        if info is not None and geometry is not None:
+            info.update(geometry)
         return (solvent_e if len(calls) > 1 else binder_e), list(host_atoms)
     return pair_energy, calls
 
@@ -94,6 +97,35 @@ def test_surface_without_solvent_reports_binding_only():
     assert d["surface_binding_kj"] == -30.0 and "surface_exchange_kj" not in d
     assert "exchange_kj" not in d["surface_interaction"]
     assert any("미계산" in n for n in out["notes"])
+
+
+@pytest.mark.parametrize("geom,needle", [
+    ({"relaxed": True, "converged": False, "steps": 40, "max_steps": 40}, "수렴하지 못했습니다"),
+    ({"relaxed": False}, "역장 구조"),
+])
+def test_unconverged_contact_geometry_is_reported(geom, needle):
+    """접촉 구조가 수렴하지 않으면 값 옆에 반드시 표시해야 한다.
+
+    셀로비오스 이량체에서 이완을 12스텝에서 끊었을 때 -15.2 kJ/mol, 40스텝까지 돌렸을 때
+    -81.6 kJ/mol 로 5배 차이가 났다. 표시가 없으면 미수렴 값이 그대로 인용된다.
+    """
+    settings = _settings(envType="진공·기체", solventId=None, surfaceId="graphite")
+    params = engine._resolve_params(settings)
+    pair, _ = _fake_pair(-30.0, -10.0, geometry=geom)
+    out = engine._surface_interaction([("C", 0.0, 0.0, 0.0)], "C", settings, params, None,
+                                      lambda *_: None, lambda *_: None, pair)
+    assert any(needle in n for n in out["notes"])
+    assert out["descriptors"]["surface_interaction"]["geometry"] == geom
+
+
+def test_converged_contact_geometry_has_no_warning():
+    settings = _settings(envType="진공·기체", solventId=None, surfaceId="graphite")
+    params = engine._resolve_params(settings)
+    pair, _ = _fake_pair(-30.0, -10.0,
+                         geometry={"relaxed": True, "converged": True, "steps": 12, "max_steps": 100})
+    out = engine._surface_interaction([("C", 0.0, 0.0, 0.0)], "C", settings, params, None,
+                                      lambda *_: None, lambda *_: None, pair)
+    assert not any("수렴하지 못했습니다" in n or "역장 구조" in n for n in out["notes"])
 
 
 def test_run_job_with_surface_real_scf():

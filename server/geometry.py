@@ -469,6 +469,23 @@ def build_cluster(solute_smiles: str, explicit, n_conformers: int = 10, seed: in
     return atoms, fragments, {"forcefield": forcefield, "n_molecules": len(fragments)}
 
 
+def _polar_sites(mol, xyz):
+    """수소결합 자리 — (주개 [(H index, 무거운 원자 index)], 받개 [index]).
+
+    주개는 N·O·F 에 붙은 H, 받개는 N·O·F 자신이다. 접촉 구조를 만들 때 이 자리를
+    겨냥해야 수소결합 거리에서 시작할 수 있다.
+    """
+    donors, acceptors = [], []
+    for a in mol.GetAtoms():
+        if a.GetSymbol() not in ("N", "O", "F"):
+            continue
+        acceptors.append(a.GetIdx())
+        for nb in a.GetNeighbors():
+            if nb.GetSymbol() == "H":
+                donors.append((nb.GetIdx(), a.GetIdx()))
+    return donors, acceptors
+
+
 def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
                              seed: int = 7, n_orientations: int = 12, n_keep: int = 1):
     """DFT 최적화된 host 좌표는 고정한 채 guest 를 여러 방향으로 붙여 접촉 후보를 만든다.
@@ -499,18 +516,46 @@ def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
     host_radius = np.linalg.norm(rel, axis=1).max()
     n_host = host.GetNumAtoms()
 
+    # 수소결합을 겨냥한 배치용 자리 — 주개(극성 H)와 받개(N·O·F)
+    h_don, h_acc = _polar_sites(host, host_xyz)
+    g_don, g_acc = _polar_sites(guest, _coords(guest))
+    pairs = [("hd", d, a) for d in h_don for a in g_acc] + [("ha", a, d) for a in h_acc for d in g_don]
+    rng.shuffle(pairs) if pairs else None
+
     cands = []
     for i_or in range(n_orientations):
-        direction = rng.normal(size=3)
-        direction /= np.linalg.norm(direction)
         rot = g_xyz @ _random_rotation(rng).T
-        placed = None
-        for dist in np.arange(max(host_radius - 1.0, 1.0),
-                              host_radius + g_radius + 6.0, 0.3):
-            cand = rot + direction * (dist + g_radius)
-            if np.min(np.linalg.norm(rel[:, None, :] - cand[None, :, :], axis=2)) >= 2.6:
-                placed = cand + center
-                break
+        placed, aimed = None, False
+        # ① 극성 자리끼리 겨냥해 수소결합 거리로 바로 놓는다.
+        #    무작위 방향 + 최소 간격 2.6 Å 조건만으로는 H 결합 거리(1.8~2.0 Å)를 만들 수 없어,
+        #    부피 큰 분자는 3.5 Å 밖에서 시작했고 역장은 거기서 끌어당기지 못했다.
+        if pairs and i_or < len(pairs):
+            kind, hi, gi = pairs[i_or]
+            if kind == "hd":                      # host 의 극성 H → guest 받개
+                h_pos, heavy = host_xyz[hi[0]], host_xyz[hi[1]]
+                axis = h_pos - heavy
+                target = h_pos + axis / (np.linalg.norm(axis) or 1) * 1.95
+            else:                                 # host 받개 ← guest 의 극성 H
+                out_v = host_xyz[hi] - center
+                target = host_xyz[hi] + out_v / (np.linalg.norm(out_v) or 1) * 1.95
+                gi = gi[0]
+            # 자리만 맞추면 게스트의 다른 원자가 파고든다 — 겹치지 않는 방향을 찾는다
+            for _try in range(80):
+                rot_t = g_xyz @ _random_rotation(rng).T
+                cand = rot_t - rot_t[gi] + (target - center)
+                if np.linalg.norm(rel[:, None, :] - cand[None, :, :], axis=2).min() >= 1.7:
+                    placed, aimed = cand + center, True
+                    break
+        # ② 극성 자리가 없거나 겹치면 종전처럼 바깥에서 둘러놓는다
+        if placed is None:
+            direction = rng.normal(size=3)
+            direction /= np.linalg.norm(direction)
+            for dist in np.arange(max(host_radius - 1.0, 1.0),
+                                  host_radius + g_radius + 6.0, 0.3):
+                cand = rot + direction * (dist + g_radius)
+                if np.min(np.linalg.norm(rel[:, None, :] - cand[None, :, :], axis=2)) >= 2.6:
+                    placed = cand + center
+                    break
         if placed is None:
             continue
 
@@ -536,7 +581,10 @@ def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
         if ff is not None:
             for i in range(n_host):
                 ff.AddFixedPoint(i)
-            ff.Minimize(maxIts=1000)
+            # 겨냥해 놓은 접촉은 이완하지 않고 점수만 매긴다 — UFF 에는 수소결합 항이 없어
+            # 애써 맞춘 1.9 Å 을 2.6 Å 밖으로 도로 밀어낸다. 이완은 DFT(pair_relax)가 한다.
+            if not aimed:
+                ff.Minimize(maxIts=1000)
             energy = ff.CalcEnergy()
         if energy is None:
             energy = 0.0
@@ -545,14 +593,16 @@ def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
                              for i in range(guest.GetNumAtoms())])
         contact = float(np.linalg.norm(host_xyz[:, None, :] - g_placed[None, :, :],
                                        axis=2).min())
-        cands.append({"ff_energy": energy, "contact_A": contact,
+        cands.append({"ff_energy": energy, "contact_A": contact, "aimed": aimed,
                       "orientation": i_or, "guest_xyz": g_placed,
                       "centroid": g_placed.mean(axis=0)})
 
     if not cands:
         raise GeometryError(f"게스트 배치 실패: {guest_smiles}")
 
-    cands.sort(key=lambda c: c["ff_energy"])
+    # 수소결합 자리를 겨냥한 후보를 앞에 둔다 — 이완하지 않아 역장 에너지가 높게 나오지만
+    # 수소결합 거리에서 시작하는 구조라 DFT 이완이 제 자리를 찾는다 (역장은 H 결합을 모른다)
+    cands.sort(key=lambda c: (not c["aimed"], c["ff_energy"]))
     kept = []
     for c in cands:                       # 접촉점이 겹치는 후보는 버린다 (같은 자리 재계산 방지)
         if any(np.linalg.norm(c["centroid"] - k["centroid"]) < 1.5 for k in kept):
@@ -575,6 +625,7 @@ def build_cluster_candidates(host_atoms, host_smiles: str, guest_smiles: str,
                     "info": {"n_molecules": 2, "rank": rank,
                              "ff_energy": round(c["ff_energy"], 2),
                              "contact_A": round(c["contact_A"], 2),
+                             "aimed": bool(c["aimed"]),
                              "orientation": c["orientation"],
                              "n_orientations": n_orientations}})
     return out

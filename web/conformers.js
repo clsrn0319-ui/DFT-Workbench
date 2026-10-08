@@ -11,6 +11,7 @@
     sets: [], doc: null, cur: 1, sel: new Set(), tab: "prep", overlay: false,
     busy: false, error: "", timer: null,
     lib: null, libOpen: false, libQuery: "",
+    play: {on: false, order: "energy", pos: 0, raf: null, t0: 0},   // 탐색 과정 재생
     form: {smiles: "", name: "", libraryId: null, structure: "모노머", reference: "all-trans",
            pattern: "T G T G'", nConformers: 20, seed: 42, pruneRms: 0.5},
   };
@@ -170,6 +171,111 @@
       window.render3D({structure_xyz: xyz(list[0])}, {box: d, mode: "element"});
     }
   }
+  /* ── 탐색 과정 재생 ──────────────────────────────────────────────────────────
+     ETKDG 는 구조를 독립적으로 무작위 생성하므로 «경로»가 있는 것은 아니다.
+     여기서 보여 주는 것은 생성된 구조들을 한 줄로 세워 이어 보는 것이고,
+     순서는 에너지 순(어떻게 접히며 안정해지는가)과 생성 순(탐색이 훑은 차례) 둘이다.
+     구조 사이는 좌표를 선형 보간해 부드럽게 넘긴다 — 중간 모습은 보기 위한 전환이다. */
+  var STEP_MS = 900;
+
+  function energyOf(c) { return c.dft_energy != null ? c.dft_rel_kcal != null ? c.dft_rel_kcal : c.ff_energy : c.ff_energy; }
+  function ordered() {
+    var list = confs().slice();
+    if (S.play.order === "energy") list.sort(function (a, b) { return energyOf(a) - energyOf(b); });
+    else list.sort(function (a, b) { return a.index - b.index; });
+    return list;
+  }
+  /** 비틀림각을 T / G / G' 로 — 사슬이 어떤 모양인지 한 줄로 */
+  function torsionWord(c) {
+    return (c.torsions || []).map(function (t) {
+      var v = ((t + 180) % 360 + 360) % 360 - 180;
+      return Math.abs(v) > 150 ? "T" : v > 0 ? "G" : "G'";
+    }).join(" ") || "—";
+  }
+  function lerpXyz(a, b, t) {
+    var name = (S.doc.molecule.name || "") + " 재생";
+    var lines = a.atoms.map(function (at, i) {
+      var bt = b.atoms[i] || at;
+      return at[0] + " " + (at[1] + (bt[1] - at[1]) * t).toFixed(4) + " " +
+        (at[2] + (bt[2] - at[2]) * t).toFixed(4) + " " + (at[3] + (bt[3] - at[3]) * t).toFixed(4);
+    });
+    return a.atoms.length + "\n" + name + "\n" + lines.join("\n");
+  }
+  function playFrame(ts) {
+    var P = S.play, list = ordered();
+    if (!P.on || list.length < 2) return;
+    if (!P.t0) P.t0 = ts;
+    var span = (ts - P.t0) / STEP_MS;
+    var i = P.pos + Math.floor(span), t = span - Math.floor(span);
+    if (i >= list.length - 1) { i = list.length - 1; t = 0; P.on = false; }
+    var a = list[i], b = list[Math.min(i + 1, list.length - 1)];
+    var box = $("cf-view");
+    if (box) window.render3D({structure_xyz: t > 0.01 ? lerpXyz(a, b, t) : xyz(a)}, {box: box, mode: "element"});
+    if (S.cur !== a.index) { S.cur = a.index; syncCurrent(); }
+    updatePlayBar(i, list);
+    if (P.on) P.raf = requestAnimationFrame(playFrame);
+    else { P.pos = i; P.t0 = 0; updatePlayBar(i, list); }
+  }
+  function playToggle() {
+    var P = S.play;
+    if (P.on) { P.on = false; cancelAnimationFrame(P.raf); P.t0 = 0; var l = ordered(); P.pos = Math.max(0, l.findIndex(function (c) { return c.index === S.cur; })); }
+    else {
+      var list = ordered();
+      if (P.pos >= list.length - 1) P.pos = 0;
+      P.on = true; P.t0 = 0; P.raf = requestAnimationFrame(playFrame);
+    }
+    updatePlayBar(S.play.pos, ordered());
+  }
+  function playSeek(i) {
+    var P = S.play, list = ordered();
+    P.on = false; cancelAnimationFrame(P.raf); P.t0 = 0;
+    P.pos = Math.max(0, Math.min(list.length - 1, i));
+    S.cur = list[P.pos].index;
+    viewer(); syncCurrent(); updatePlayBar(P.pos, list);
+  }
+  /** 재생 중에는 전체를 다시 그리지 않고 강조만 옮긴다 */
+  function syncCurrent() {
+    var el = root();
+    if (!el) return;
+    el.querySelectorAll(".cf-node").forEach(function (n) { n.classList.toggle("on", +n.dataset.conf === S.cur); });
+    el.querySelectorAll(".cf-thumb").forEach(function (n) { n.classList.toggle("on", +n.dataset.conf === S.cur); });
+    el.querySelectorAll("tr[data-conf]").forEach(function (n) { n.classList.toggle("on", +n.dataset.conf === S.cur); });
+    if (S.tab === "map") drawMap();
+  }
+  function playBarHtml() {
+    var list = ordered();
+    if (list.length < 2) return "";
+    var seg = function (v, on) { return '<button type="button" class="btn sm ' + (on ? "primary" : "") + '" data-ord="' + v + '">' + (v === "energy" ? "에너지 순" : "생성 순") + "</button>"; };
+    return '<div class="cf-play"><div class="cf-playrow">' +
+      '<button class="btn sm" type="button" id="cf-playbtn" data-act="play">' + (S.play.on ? "⏸ 멈춤" : "▶ 재생") + "</button>" +
+      seg("energy", S.play.order === "energy") + seg("gen", S.play.order === "gen") +
+      '<span class="small muted" id="cf-playpos" style="margin-left:auto"></span></div>' +
+      '<div class="cf-ebar" id="cf-ebar"></div>' +
+      '<div class="small" id="cf-playlab"></div>' +
+      '<p class="small muted" style="margin:2px 0 0">구조 사이는 보기 위한 전환입니다 — 실제 분자가 지나간 경로가 아닙니다.</p></div>';
+  }
+  function updatePlayBar(i, list) {
+    var bar = $("cf-ebar"), pos = $("cf-playpos"), lab = $("cf-playlab");
+    if (!bar) return;
+    list = list || ordered();
+    var es = list.map(energyOf), hi = Math.max.apply(null, es) || 1;
+    bar.innerHTML = list.map(function (c, k) {
+      var hgt = 6 + (energyOf(c) / hi) * 26;
+      return '<i data-seek="' + k + '" class="' + (k === i ? "on" : k < i ? "done" : "") + '" style="height:' + hgt.toFixed(1) + 'px" title="#' + c.index + " · " + f2(energyOf(c)) + ' kcal/mol"></i>';
+    }).join("");
+    bar.querySelectorAll("[data-seek]").forEach(function (b) {
+      b.addEventListener("click", function () { playSeek(+b.dataset.seek); });
+    });
+    var c = list[i];
+    if (pos) pos.textContent = (i + 1) + " / " + list.length;
+    if (lab && c) {
+      lab.innerHTML = "#" + c.index + (c.is_reference ? ' <span class="star">★</span>' : "") +
+        " · ΔE " + f2(energyOf(c)) + " kcal/mol" +
+        (c.population_pct != null ? " · 존재 비율 " + c.population_pct + "%" : "") +
+        " · 비틀림 " + h(torsionWord(c));
+    }
+  }
+
   function thumbs() {
     var strip = $("cf-strip");
     if (!strip || !S.doc) return;
@@ -182,6 +288,53 @@
     confs().forEach(function (c) {
       var box = strip.querySelector('[data-tb="' + c.index + '"]');
       if (box) window.render3D({structure_xyz: xyz(c)}, {box: box, mode: "element", static: true});
+    });
+  }
+
+  /* ── 지도 — 주사슬 비틀림각 평면에 구조를 찍는다 (어디를 훑었고 어디가 비었나) ── */
+  function panelMap() {
+    var n = ((confs()[0] || {}).torsions || []).length;
+    if (n < 2) {
+      return '<div class="cf-sect"><h4>비틀림각 지도</h4><p class="small muted">주사슬 비틀림이 ' + n +
+        '개뿐이라 평면으로 그릴 수 없습니다. 2량체·3량체로 탐색하면 지도가 나옵니다.</p></div>';
+    }
+    return '<div class="cf-sect"><h4>비틀림각 지도</h4>' +
+      '<div id="cf-map"></div>' +
+      '<p class="small muted" style="margin:6px 0 0">가로·세로는 주사슬 첫 두 비틀림각(φ₁ · φ₂)입니다. ' +
+      '점이 몰린 곳은 여러 번 나온 모양, 빈 곳은 탐색이 닿지 않은 영역입니다 — 빈 곳이 넓으면 개수를 늘려 보세요. ' +
+      '점을 누르면 그 구조로 갑니다.</p></div>';
+  }
+  function drawMap() {
+    var box = $("cf-map");
+    if (!box) return;
+    var list = confs().filter(function (c) { return (c.torsions || []).length >= 2; });
+    if (!list.length) { box.innerHTML = ""; return; }
+    var W = 300, H = 300, M = 26;
+    var X = function (v) { return M + (((v + 180) % 360 + 360) % 360) / 360 * (W - M - 8); };
+    var Y = function (v) { return H - M - (((v + 180) % 360 + 360) % 360) / 360 * (H - M - 8); };
+    var es = list.map(energyOf), hi = Math.max.apply(null, es) || 1;
+    var s = '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;max-width:320px" role="img" aria-label="비틀림각 지도">';
+    [-180, -90, 0, 90, 180].forEach(function (g) {
+      s += '<line x1="' + X(g) + '" y1="' + M + '" x2="' + X(g) + '" y2="' + (H - M) + '" class="gridline"/>' +
+        '<line x1="' + M + '" y1="' + Y(g) + '" x2="' + (W - 8) + '" y2="' + Y(g) + '" class="gridline"/>' +
+        '<text x="' + X(g) + '" y="' + (H - M + 13) + '" text-anchor="middle" class="axis-label">' + g + "</text>" +
+        '<text x="' + (M - 5) + '" y="' + (Y(g) + 3.5) + '" text-anchor="end" class="axis-label">' + g + "</text>";
+    });
+    s += '<text x="' + (W / 2) + '" y="' + (H - 4) + '" text-anchor="middle" class="axis-label">φ₁ (°)</text>' +
+      '<text x="8" y="' + (M - 10) + '" class="axis-label">φ₂ (°)</text>';
+    list.forEach(function (c) {
+      var on = c.index === S.cur, t = energyOf(c) / hi;
+      s += '<circle data-mapi="' + c.index + '" cx="' + X(c.torsions[0]) + '" cy="' + Y(c.torsions[1]) +
+        '" r="' + (on ? 7 : 4.5) + '" fill="' + (on ? "var(--accent)" : "var(--muted)") +
+        '" fill-opacity="' + (on ? 1 : (1 - t * 0.6).toFixed(2)) + '" style="cursor:pointer">' +
+        "<title>#" + c.index + " · ΔE " + f2(energyOf(c)) + " kcal/mol · " + torsionWord(c) + "</title></circle>";
+    });
+    box.innerHTML = s + "</svg>";
+    box.querySelectorAll("[data-mapi]").forEach(function (p) {
+      p.addEventListener("click", function () {
+        var list2 = ordered(), i = list2.findIndex(function (c) { return c.index === +p.dataset.mapi; });
+        playSeek(i < 0 ? 0 : i);
+      });
     });
   }
 
@@ -272,17 +425,45 @@
     var el = root();
     if (!el) return;
     var f = S.form;
-    var sets = S.sets.map(function (s) {
-      return '<option value="' + h(s.id) + '"' + (S.doc && S.doc.id === s.id ? " selected" : "") + ">" +
-        h(s.id + " · " + ((s.molecule || {}).name || "") + " · " + s.n_conformers + "개") + "</option>";
-    }).join("");
+    // 저장된 세트는 «분자»로 묶어서 보여 준다 — 같은 분자의 세트가 흩어져 보이지 않게.
+    // 라이브러리에 없는 세트는 맨 아래 따로 모으고, 고르면 «라이브러리에 등록»을 띄운다.
+    var groups = {}, loose = [];
+    S.sets.forEach(function (s) {
+      if (s.library) (groups[s.library.name || s.library.id] = groups[s.library.name || s.library.id] || []).push(s);
+      else loose.push(s);
+    });
+    var when = function (t) {
+      return t ? new Date(t * 1000).toLocaleString("ko-KR",
+        {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false}) : "";
+    };
+    var rowOf = function (s) {
+      var m = s.molecule || {}, st = (m.structure || "모노머");
+      var ref = ((m.reference || (s.settings || {}).reference) === "all-trans") ? "all-trans"
+        : ((m.reference || (s.settings || {}).reference) === "pattern" ? "비틀림 패턴" : "자동");
+      var rank = s.n_ranked ? "DFT 재순위 " + s.n_ranked : (s.rank_status === "running" ? "재순위 중" : "역장 순위");
+      return '<button type="button" class="cf-setrow' + (S.doc && S.doc.id === s.id ? " on" : "") +
+        '" data-set="' + h(s.id) + '"><span class="t">' + h(st + " · " + ref) + "</span>" +
+        '<span class="d">' + s.n_conformers + "개 · " + h(rank) + "</span>" +
+        '<span class="d">' + h(when(s.createdAt)) + "</span></button>";
+    };
+    var setList = '<div class="cf-sethead">저장된 세트 <span class="chip">' + S.sets.length + "개</span></div>" +
+      '<button type="button" class="cf-setrow new' + (S.doc ? "" : " on") + '" data-set="">＋ 새로 탐색</button>' +
+      Object.keys(groups).sort().map(function (name) {
+        return '<div class="cf-setgrp">' + h(name) + "</div>" + groups[name].map(rowOf).join("");
+      }).join("") +
+      (loose.length ? '<div class="cf-setgrp loose">라이브러리에 없는 분자</div>' + loose.map(function (s) {
+        return '<button type="button" class="cf-setrow' + (S.doc && S.doc.id === s.id ? " on" : "") +
+          '" data-set="' + h(s.id) + '"><span class="t">' + h((s.molecule || {}).name || s.id) + "</span>" +
+          '<span class="d">' + h((s.molecule || {}).structure || "") + " · " + s.n_conformers + "개</span>" +
+          '<span class="d">' + h(when(s.createdAt)) + "</span></button>";
+      }).join("") : "") +
+      (S.sets.length ? "" : '<p class="small muted" style="padding:8px">아직 저장된 세트가 없습니다.</p>');
     var head = '<h1>Conformer 탐색</h1>' +
       '<p class="rb-note">구조를 먼저 찾아 눈으로 확인하고, 고른 구조로만 DFT 계산을 돌립니다. 탐색은 역장 계산이라 ' +
       '수 초면 끝나고 계산 큐를 쓰지 않습니다. 여러 분자를 비교할 때는 기준 구조(all-trans 등)를 맞춰 두면 ' +
       '사슬 모양 차이가 값 차이에 섞이지 않습니다.</p>' +
-      '<div class="card"><div class="card-head"><h2>분자와 탐색 설정</h2>' +
-      '<div class="toolbar"><label class="small">저장된 세트 <select class="input" id="cf-set">' +
-      '<option value="">(새로 탐색)</option>' + sets + "</select></label></div></div>" +
+      '<div class="cf-page"><aside class="card cf-setlist">' + setList + "</aside><div class='cf-main'>" +
+      '<div class="card"><div class="card-head"><h2>분자와 탐색 설정</h2></div>' +
       '<div class="cf-fields">' +
       field("분자 이름", '<input class="input" id="cf-name" value="' + h(f.name) + '" placeholder="예: PVDF 3량체">') +
       field("SMILES", '<input class="input" id="cf-smiles" value="' + h(f.smiles) + '" placeholder="예: C=C(F)F" style="min-width:220px">') +
@@ -301,10 +482,12 @@
         '<span class="small muted">' + ((S.lib || []).length) + '개 · 선택함에 담은 분자가 위에 옵니다</span>' +
         '<button class="btn ghost sm" type="button" id="cf-libclose" style="margin-left:auto">닫기</button></div>' +
         '<div class="cf-liblist">' + libRows() + "</div></div>" : "") +
-      (S.error ? '<div class="form-error">' + h(S.error) + "</div>" : "") + "</div>";
+      (S.error ? '<div class="form-error">' + h(S.error) + "</div>" : "") +
+      linkBanner() + "</div>";
 
     if (!S.doc) {
-      el.innerHTML = head + '<div class="card"><div class="empty small">분자를 넣고 «탐색»을 누르거나, 저장된 세트를 고르세요.</div></div>';
+      el.innerHTML = head + '<div class="card"><div class="empty small">분자를 넣고 «탐색»을 누르거나, ' +
+        '왼쪽에서 저장된 세트를 고르세요.</div></div></div></div>';
       wire();
       return;
     }
@@ -323,17 +506,50 @@
       '<div class="cf-center"><div class="cf-chead"><b>3D 작업공간</b>' +
       '<span class="chip">기준 ' + h(refLabel()) + "</span>" +
       '<span class="sp"><button class="btn sm ' + (S.overlay ? "primary" : "") + '" data-act="overlay">겹쳐 보기</button></span></div>' +
-      '<div id="cf-view"></div><div class="cf-strip" id="cf-strip"></div></div>' +
+      '<div id="cf-view"></div>' + playBarHtml() + '<div class="cf-strip" id="cf-strip"></div></div>' +
 
       '<div class="cf-right"><div class="cf-tabs">' +
-      [["prep", "준비"], ["conf", "Conformer"], ["dft", "계산"]].map(function (t) {
+      [["prep", "준비"], ["conf", "Conformer"], ["map", "지도"], ["dft", "계산"]].map(function (t) {
         return '<button data-tab="' + t[0] + '" class="' + (S.tab === t[0] ? "on" : "") + '">' + t[1] + "</button>";
       }).join("") + "</div><div class='cf-rbody'>" +
-      (S.tab === "prep" ? panelPrep() : S.tab === "conf" ? panelConf() : panelDft()) + "</div></div></div>";
+      (S.tab === "prep" ? panelPrep() : S.tab === "conf" ? panelConf()
+        : S.tab === "map" ? panelMap() : panelDft()) + "</div></div></div></div></div>";
     wire();
     viewer();
     thumbs();
+    updatePlayBar(S.play.pos, ordered());
+    if (S.tab === "map") drawMap();
   }
+  /** 이 세트의 분자를 라이브러리에 등록하고 세트를 그 분자 아래로 묶는다 */
+  async function linkToLibrary() {
+    if (!S.doc) return;
+    try {
+      var r = await api("/api/conformers/" + encodeURIComponent(S.doc.id) + "/library", {method: "POST"});
+      await loadSets();
+      if (window.rbReloadMaterials) window.rbReloadMaterials();
+      if (window.rbToast) window.rbToast("분자 라이브러리의 «" + (r.library || {}).name + "» 아래로 묶었습니다");
+      render();
+    } catch (e) {
+      S.error = e.message || "등록에 실패했습니다";
+      render();
+    }
+  }
+
+  /** 열린 세트가 라이브러리 분자와 묶여 있는지 알려 준다 — 안 묶였으면 등록 단추 */
+  function linkBanner() {
+    if (!S.doc) return "";
+    var s = (S.sets || []).find(function (x) { return x.id === S.doc.id; });
+    if (!s) return "";
+    if (s.library) {
+      return '<p class="small muted" style="margin:8px 0 0">분자 라이브러리의 «' + h(s.library.name) +
+        '» 아래에 있습니다' + (s.linked_by === "smiles" ? " (SMILES 로 자동 연결)" : "") +
+        ' — 그 분자의 «conformer 세트» 탭에서 다시 찾을 수 있습니다.</p>';
+    }
+    return '<div class="banner warn" style="margin:8px 0 0">이 세트는 분자 라이브러리에 없는 분자입니다 — ' +
+      '등록해 두면 분자 아래에 모여 다음에 찾기 쉽습니다. ' +
+      '<button class="btn sm" type="button" id="cf-link" style="margin-left:6px">라이브러리에 등록</button></div>';
+  }
+
   function field(label, inner) {
     return '<div class="cf-field"><span>' + label + "</span>" + inner + "</div>";
   }
@@ -357,6 +573,7 @@
     bind("cf-reference", "change", function (e) { S.form.reference = e.target.value; render(); });
     bind("cf-go", "click", search);
     bind("cf-lib", "click", openLib);
+    bind("cf-link", "click", linkToLibrary);
     bind("cf-libclose", "click", function () { S.libOpen = false; render(); });
     bind("cf-libq", "input", function (e) {
       S.libQuery = e.target.value;
@@ -364,7 +581,12 @@
       if (box) { box.innerHTML = libRows(); wireLibRows(); }
     });
     wireLibRows();
-    bind("cf-set", "change", function (e) { if (e.target.value) openSet(e.target.value); else { S.doc = null; render(); } });
+    el.querySelectorAll("[data-set]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (b.dataset.set) openSet(b.dataset.set);
+        else { S.doc = null; S.play.pos = 0; render(); }
+      });
+    });
     el.querySelectorAll("[data-tab]").forEach(function (b) {
       b.addEventListener("click", function () { S.tab = b.dataset.tab; render(); });
     });
@@ -386,6 +608,14 @@
         else if (a === "rank") rank();
         else if (a === "tocalc") toCalc();
         else if (a === "del") removeSet();
+        else if (a === "play") { playToggle(); var p = $("cf-playbtn") || b; p.textContent = S.play.on ? "⏸ 멈춤" : "▶ 재생"; }
+      });
+    });
+    el.querySelectorAll("[data-ord]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        S.play.on = false; cancelAnimationFrame(S.play.raf);
+        S.play.order = b.dataset.ord; S.play.pos = 0; S.play.t0 = 0;
+        render();
       });
     });
   }
@@ -408,4 +638,10 @@
     else render();
   };
   window.rbConformerOpen = function (id) { window.rbOpenMode("conf", "Conformer 탐색"); openSet(id); };
+  // 라이브러리의 «계산에 쓰기» — 세트를 열고 기본 선택(기준 구조)으로 계산 화면에 넘긴다
+  window.rbConformerUseInCalc = async function (id) {
+    if (!S.sets.length) await loadSets();
+    await openSet(id);
+    toCalc();
+  };
 })();

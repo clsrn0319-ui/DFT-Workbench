@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 import uuid
@@ -55,7 +56,7 @@ def get(set_id: str) -> dict | None:
 
 
 def list_sets() -> list[dict]:
-    """세트 목록 — 좌표는 빼고 요약만 (최근 생성순)."""
+    """세트 목록 — 좌표는 빼고 요약만 (최근 생성순). 라이브러리 분자와 묶어서 돌려준다."""
     out = []
     if not _dir().exists():
         return out
@@ -66,7 +67,56 @@ def list_sets() -> list[dict]:
             continue
         out.append(summary(d))
     out.sort(key=lambda d: d.get("createdAt") or 0, reverse=True)
-    return out
+    return attach_library(out)
+
+
+def _library_match(mol: dict):
+    """세트의 분자에 해당하는 라이브러리 레코드 — libraryId 가 없으면 SMILES 로 찾는다.
+
+    돌려주는 값: (레코드 | None, "id" | "smiles" | None). 탐색할 때 라이브러리를 거치지
+    않았거나 libraryId 가 없던 시절의 세트도 같은 분자 아래로 모이게 하기 위한 것이다.
+    """
+    from . import library as lib_mod
+    mol = mol or {}
+    rec = lib_mod.get(mol.get("libraryId")) if mol.get("libraryId") else None
+    if rec:
+        return rec, "id"
+    key = lib_mod.canonical(mol.get("input_smiles") or mol.get("smiles") or "")
+    if not key:
+        return None, None
+    for m in lib_mod.molecules():
+        if lib_mod.canonical(m.get("smiles") or "") == key:
+            return m, "smiles"
+    return None, None
+
+
+def attach_library(sets: list[dict]) -> list[dict]:
+    for s in sets:
+        rec, how = _library_match(s.get("molecule"))
+        s["library"] = {"id": rec["id"], "name": rec.get("name")} if rec else None
+        s["linked_by"] = how
+    return sets
+
+
+def link_library(set_id: str) -> dict:
+    """세트의 분자를 라이브러리에 등록(이미 있으면 연결)하고 libraryId 를 세트에 적는다."""
+    from . import library as lib_mod
+    doc = get(set_id)
+    if doc is None:
+        raise KeyError(set_id)
+    mol = doc.get("molecule") or {}
+    rec, _how = _library_match(mol)
+    if rec is None:
+        smiles = (mol.get("input_smiles") or mol.get("smiles") or "").strip()
+        if not smiles:
+            raise ValueError("세트에 SMILES 가 없어 등록할 수 없습니다.")
+        rec = lib_mod.add_molecule({"name": mol.get("name"), "smiles": smiles,
+                                    "source": "conformer 탐색"})
+    mol["libraryId"] = rec["id"]
+    doc["molecule"] = mol
+    _save(doc)
+    return {"library": {"id": rec["id"], "name": rec.get("name")},
+            "set": attach_library([summary(doc)])[0]}
 
 
 def delete(set_id: str) -> bool:
@@ -192,6 +242,52 @@ def reference_label(doc: dict) -> str:
     return "최저 에너지"
 
 
+# ── 작업 목록 묶음 ─────────────────────────────────────────────────────
+#: 세트에서 제출한 작업의 이름 — «분자 이름 · conf #3» (범함수 비교면 뒤에 더 붙는다)
+JOB_NAME_SEP = " · conf #"
+
+
+def job_group(job: dict) -> dict | None:
+    """작업 하나가 어느 conformer 세트에서 나왔는지 — 목록에서 한 줄로 묶는 열쇠.
+
+    세트에서 제출한 작업은 material.conformer.set 에 세트 id 가 적혀 있어 그것이
+    열쇠가 된다. 그 꼬리표가 없던 시절의 작업은 이름 앞부분(«분자 이름 · conf #3»
+    의 «분자 이름»)을 열쇠로 쓴다 — 세트 id 는 알 수 없지만 같은 분자의 conformer
+    끼리는 모인다. 세트에서 나온 작업이 아니면 None.
+    """
+    mat = job.get("material") or {}
+    name = mat.get("name") or ""
+    conf = mat.get("conformer") or {}
+    settings = job.get("settings") or {}
+    if conf.get("set"):
+        return {"key": "set:" + str(conf["set"]), "setId": conf["set"],
+                "name": name.split(JOB_NAME_SEP)[0].strip() or name,
+                "index": conf.get("index"),
+                "reference": conf.get("reference"),
+                "structure": conf.get("structure") or settings.get("structure"),
+                "nTotal": conf.get("n_total"),
+                "resolvedBy": "set"}
+    if JOB_NAME_SEP in name:
+        mol, _, rest = name.partition(JOB_NAME_SEP)
+        mol = mol.strip()
+        m = re.match(r"\s*(\d+)", rest)
+        return {"key": "name:" + mol, "setId": None, "name": mol,
+                "index": int(m.group(1)) if m else None,
+                "reference": None,
+                "structure": settings.get("structure"),
+                "nTotal": None,
+                "resolvedBy": "name"}
+    return None
+
+
+def attach_job_groups(jobs: list[dict]) -> list[dict]:
+    """작업 목록에 conformer 세트 묶음 정보를 붙인 얕은 사본을 돌려준다.
+
+    저장된 작업 dict 를 그대로 고치면 jobs.json 에 파생값이 섞이므로 사본에 붙인다.
+    """
+    return [{**j, "conformerGroup": job_group(j)} for j in jobs]
+
+
 # ── DFT 재순위 ─────────────────────────────────────────────────────────
 def rank(set_id: str, indices: list[int], settings: dict | None = None) -> dict:
     """고른 conformer 만 단일점 DFT 로 다시 계산해 순위를 바로잡는다 (백그라운드).
@@ -295,6 +391,7 @@ def job_targets(set_id: str, indices: list[int]) -> list[dict]:
             "libraryId": doc["molecule"].get("libraryId"),
             "geometry": {"atoms": c["atoms"], "source": "conformer", "rescan": False},
             "conformer": {"set": doc["id"], "index": c["index"], "reference": label,
+                          "structure": doc["molecule"].get("structure"),
                           "n_total": len(doc["conformers"]),
                           "ff_energy": c.get("ff_energy"), "dft_energy": c.get("dft_energy")},
         })

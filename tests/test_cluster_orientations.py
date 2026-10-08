@@ -67,3 +67,42 @@ def test_pair_orientations_setting_is_clamped(given, expected):
     s = {**presets.DEFAULT_SETTINGS, "expert": dict(presets.DEFAULT_SETTINGS["expert"])}
     s["expert"]["pairOrientations"] = given
     assert engine._resolve_params(s)["pair_orientations"] == expected
+
+
+# ── 수소결합 자리를 겨냥한 접촉 배치 ──────────────────────────────────────────
+# 종전에는 «최소 간격 2.6 Å 을 만족하는 첫 거리»에서 멈춰서, 수소결합 거리(1.8~2.0 Å)로는
+# 애초에 시작할 수 없었다. 부피 큰 분자는 3.5 Å 밖에서 출발했고 역장은 거기서 끌어당기지
+# 못해(UFF 에는 수소결합 항이 없다) 결합 에너지가 크게 과소평가됐다.
+
+def test_polar_sites_finds_donors_and_acceptors():
+    from server.geometry import _embed_single, _coords, _polar_sites
+
+    mol = _embed_single("CCO", 7)                      # 에탄올 — O 받개 1개, O-H 주개 1개
+    don, acc = _polar_sites(mol, _coords(mol))
+    assert len(acc) == 1
+    assert len(don) == 1 and mol.GetAtomWithIdx(don[0][1]).GetSymbol() == "O"
+
+
+@pytest.mark.parametrize("smiles", ["O", "OCC1OC(O)C(O)C(O)C1O"])
+def test_hydrogen_bonded_contacts_start_at_bond_distance(smiles):
+    atoms, _ = smiles_to_xyz(smiles, n_conformers=3)
+    cands = build_cluster_candidates(atoms, smiles, smiles, seed=7, n_keep=3)
+    first = cands[0]["info"]
+    assert first["aimed"] is True
+    assert first["contact_A"] <= 2.2, "수소결합 거리에서 시작해야 한다"
+
+
+def test_molecule_without_polar_hydrogen_falls_back():
+    smi = "CC(F)(F)CC(F)(F)CC(F)F"                      # PVDF 3량체 — 극성 H 없음
+    atoms, _ = smiles_to_xyz(smi, n_conformers=3)
+    cands = build_cluster_candidates(atoms, smi, smi, seed=7, n_keep=2)
+    assert all(c["info"]["aimed"] is False for c in cands)
+    assert all(c["info"]["contact_A"] >= 2.3 for c in cands)
+
+
+def test_aimed_candidates_are_ranked_first():
+    smi = "OCC1OC(O)C(O)C(O)C1O"
+    atoms, _ = smiles_to_xyz(smi, n_conformers=3)
+    cands = build_cluster_candidates(atoms, smi, smi, seed=7, n_keep=4)
+    aimed = [c["info"]["aimed"] for c in cands]
+    assert aimed == sorted(aimed, reverse=True), "겨냥한 후보가 앞에 와야 한다"

@@ -525,7 +525,7 @@ def _constraints_file(torsions=None, freeze=None):
     return fd.name
 
 
-def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None, freeze=None):
+def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None, freeze=None, out=None):
     """DFT 기체상 구조 최적화. geomeTRIC → pyberny 순으로 시도.
 
     optimize() 는 수렴 여부를 버리고 구조만 돌려준다 — 최대 스텝에서 멈춰도
@@ -577,6 +577,8 @@ def _optimize_geometry(mf, log, label="", max_steps=100, torsions=None, freeze=N
     steps = (mon.summary["opt"].get("step") if mon else None)
     if mon:
         mon.end_opt(bool(converged), steps)
+    if out is not None:          # 부른 쪽이 «이 값이 미수렴 구조에서 나왔는지»를 알 수 있게
+        out.update(converged=bool(converged), steps=steps, max_steps=max_steps)
     if not converged:
         log(f"구조 최적화{label} — 최대 {max_steps} 스텝에서 수렴 기준 미달 (결과는 마지막 구조, "
             "검증 등급 FAIL)")
@@ -870,9 +872,13 @@ def _surface_interaction(atoms, smiles, settings, params, solvent_key, log, stag
     surf = presets.SURFACES_BY_ID[settings["surfaceId"]]
     out = {"descriptors": {}, "structures": {}, "notes": []}
     stage(f"{surf['label']} 흡착", 83)
-    e_ads, ads_atoms = pair_energy(atoms, surf["smiles"], f"{surf['label']} 흡착", 83)
+    geo_info = {}
+    e_ads, ads_atoms = _call_pair(pair_energy, atoms, surf["smiles"], f"{surf['label']} 흡착", 83,
+                                  info=geo_info)
     info = {"surface": surf["key"], "label": surf["label"], "model": surf["desc"],
             "binding_kj": round(e_ads, 1)}
+    if geo_info:
+        info["geometry"] = geo_info
     out["structures"]["surface_complex"] = atoms_to_xyz_block(ads_atoms, f"{surf['label']} + 바인더")
     out["descriptors"]["surface_binding_kj"] = round(e_ads, 1)
 
@@ -881,8 +887,9 @@ def _surface_interaction(atoms, smiles, settings, params, solvent_key, log, stag
         sol = comps[0]            # 혼합 용매면 비율이 가장 큰 성분 하나로 경쟁을 본다
         stage(f"{surf['label']} · {sol['abbr']} 경쟁", 84)
         surf_atoms, _ = smiles_to_xyz(surf["smiles"], n_conformers=3)
-        e_sol, sol_atoms = pair_energy(surf_atoms, sol["smiles"], f"{surf['label']} · {sol['abbr']} 흡착", 84,
-                                       host_smiles=surf["smiles"])
+        e_sol, sol_atoms = _call_pair(pair_energy, surf_atoms, sol["smiles"],
+                                      f"{surf['label']} · {sol['abbr']} 흡착", 84,
+                                      host_smiles=surf["smiles"])
         ex = e_ads - e_sol
         key = next(k for lim, k, _ in SURFACE_VERDICT if lim is None or ex <= lim)
         text = next(t for lim, _, t in SURFACE_VERDICT if lim is None or ex <= lim)
@@ -901,8 +908,25 @@ def _surface_interaction(atoms, smiles, settings, params, solvent_key, log, stag
         "표면 상호작용은 슬랩이 아닌 작은 클러스터 모델이라 절대값은 문헌·실험과 직접 비교하지 말고, "
         "같은 표면 모델에서 후보끼리의 순위·경쟁 방향으로만 보세요. 금속 Al 이 아니라 자연 산화막을 "
         "모사한 모델입니다.")
+    # 접촉 구조가 수렴하지 않았으면 값이 몇 배까지 달라진다 — 숫자 옆에 반드시 남긴다
+    if geo_info.get("relaxed") and geo_info.get("converged") is False:
+        out["notes"].append(
+            f"{surf['label']}: 접촉 구조가 최대 {geo_info.get('max_steps')} 스텝에서 수렴하지 못했습니다 — "
+            "흡착 에너지는 하한으로만 보세요 (수렴 전 구조는 결합이 약하게 나옵니다).")
+    elif geo_info.get("relaxed") is False:
+        out["notes"].append(
+            f"{surf['label']}: 접촉 구조를 DFT 로 이완하지 않았습니다 (역장 구조) — "
+            "수소결합 거리가 느슨해 흡착이 과소평가됩니다.")
     out["descriptors"]["surface_interaction"] = info
     return out
+
+
+def _call_pair(pair_energy, *args, info=None, **kw):
+    """pair_energy 를 부르되 info 를 받지 못하는 구현(시험용 가짜 등)도 그대로 쓴다."""
+    try:
+        return pair_energy(*args, info=info, **kw)
+    except TypeError:
+        return pair_energy(*args, **kw)
 
 
 def _li_interaction(atoms, mol, e_total, smiles, params, settings, solvent_key, temperature,
@@ -1742,7 +1766,8 @@ def run_job(job, update, is_cancelled=lambda: False):
 
         # 8) 물성 지문 — 확장 기술자 (MEP · 반응성 지표 · 결합/흡착 · TDDFT)
         # 접촉 클러스터 상호작용 에너지 — 표면·이량체·흡착이 함께 쓴다 (BSSE counterpoise 보정)
-        def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None):
+        def pair_energy(host_atoms, guest_smiles, label, prog, charge=0, mult=1, host_smiles=None,
+                        info=None):
             """host + guest 접촉 클러스터를 만들어 상호작용 에너지(kJ/mol) 산출.
 
             역장으로 만든 접촉 구조는 수소결합 거리가 느슨해 상호작용을 과소평가한다.
@@ -1775,19 +1800,27 @@ def run_job(job, update, is_cancelled=lambda: False):
                     log(f"{label}: 접촉 배향 {len(scored)}개 중 DFT 최저 배향 선택 "
                         f"(접촉 {cands[0]['info']['contact_A']} Å)")
             cl_atoms, frags = cands[0]["atoms"], cands[0]["fragments"]
+            if info is not None:
+                info.update(contact_A=cands[0]["info"].get("contact_A"), relaxed=False)
             if params.get("pair_relax"):
                 try:
                     n_host = frags[0]["end"]
                     mol_r = _build_mol(cl_atoms, params["basis_opt"], params["charge"] + charge, mult)
                     mf_r = _make_mf(mol_r, params["xc"], params["disp"], solvent_key, params["scf_tol"])
+                    # 미수렴 구조에서 나온 값인지 호출한 쪽이 알아야 한다 — 결합 에너지가 몇 배까지 달라진다
+                    relax = {}
                     mol_opt = _optimize_geometry(mf_r, log, f" ({label} 접촉 구조)",
                                                  max_steps=params.get("opt_max_steps", 100),
-                                                 freeze=list(range(n_host)))
+                                                 freeze=list(range(n_host)), out=relax)
                     cl_atoms = _mol_to_atoms(mol_opt)
+                    if info is not None:
+                        info.update(relaxed=True, **relax)
                 except CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — 이완 실패해도 역장 구조로 계산한다
                     log(f"{label}: 접촉 구조 DFT 이완 실패 — 역장 구조로 진행 ({exc})")
+                    if info is not None:
+                        info.update(relaxed=False, relax_error=str(exc)[:120])
             mol_c = _build_mol(cl_atoms, params["basis_sp"],
                                params["charge"] + charge, mult)
             e_c = _run_scf(_make_mf(mol_c, params["xc"], params["disp"],

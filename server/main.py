@@ -1331,7 +1331,7 @@ def _snapshot_html(jobs: list[dict]) -> str:
 
     snapshot = {
         "exported_at": time.strftime("%Y-%m-%d %H:%M"),
-        "jobs": jobs,
+        "jobs": conformers.attach_job_groups(jobs),   # 사본에서도 세트 묶음이 보이게
         "presets": get_presets(_=True),
         "limits": {"max_atoms": MAX_ATOMS, "max_active_jobs": MAX_ACTIVE_JOBS},
         "csv": "\ufeff" + _csv_text(jobs),
@@ -1576,7 +1576,8 @@ def _job_or_404(job_id: str) -> dict:
 
 @app.get("/api/jobs")
 def list_jobs(_: bool = Depends(require_login)):
-    return {"jobs": store.list_jobs()}
+    # conformer 세트에서 나온 작업은 목록에서 한 줄로 묶는다 — 묶음 열쇠를 함께 준다
+    return {"jobs": conformers.attach_job_groups(store.list_jobs())}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1870,6 +1871,17 @@ def conformers_delete(set_id: str, _: bool = Depends(require_login)):
     if not conformers.delete(set_id):
         raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
     return {"ok": True}
+
+
+@app.post("/api/conformers/{set_id}/library")
+def conformers_link_library(set_id: str, _: bool = Depends(require_login)):
+    """세트의 분자를 라이브러리에 등록(이미 있으면 연결) — 세트가 분자 아래로 모이게."""
+    try:
+        return conformers.link_library(set_id)
+    except KeyError:
+        raise HTTPException(404, "conformer 세트를 찾을 수 없습니다.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.post("/api/conformers/{set_id}/rank")

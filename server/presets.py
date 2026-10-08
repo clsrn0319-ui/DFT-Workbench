@@ -179,6 +179,8 @@ FUNCTIONALS = {
     "B3LYP-D3(BJ)": ("b3lyp", "d3bj"),
     # GAMESS 기본 B3LYP(VWN5 상관) — 분산 보정 없음. 문헌 벤치마크(GAMESS 계산값) 재현용
     "B3LYP5 (VWN5)": ("b3lyp5", None),
+    # Gaussian 기본 B3LYP(VWN3 상관) — 분산 보정 없음. 분산 보정을 쓰지 않은 문헌 재현용
+    "B3LYP (분산 보정 없음)": ("b3lyp", None),
     "PBE-D3(BJ)": ("pbe", "d3bj"),
     "M06-2X": ("m062x", None),
     "HF": ("hf", None),
@@ -186,8 +188,8 @@ FUNCTIONALS = {
 
 # 음이온·EA 계산에는 diffuse 함수를 포함한 기저가 필요하다 (v2.0 P0-1)
 BASIS_SETS = ["def2-svp", "def2-tzvp", "ma-def2-tzvp", "def2-tzvpd",
-              "def2-svpd", "6-31g*", "6-311+g**", "sto-3g"]
-DIFFUSE_BASIS_SETS = ["ma-def2-tzvp", "def2-tzvpd", "def2-svpd", "6-311+g**"]
+              "def2-svpd", "6-31g*", "6-31+g**", "6-311+g**", "sto-3g"]
+DIFFUSE_BASIS_SETS = ["ma-def2-tzvp", "def2-tzvpd", "def2-svpd", "6-31+g**", "6-311+g**"]
 
 PURPOSES = [
     "전자구조(구조 최적화)",

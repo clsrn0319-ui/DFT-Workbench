@@ -54,6 +54,12 @@
     { id: "ms-env", sel: "#lb-envcard .card-head h2", section: "s5-3", pos: "after" },
     { id: "lib-title", sel: "#rbv-library h1", section: "s5-2", pos: "after" },
     { id: "lib-filter", sel: "#lb-filter b", section: "s5-2", pos: "after" },
+    // Conformer 탐색 — 화면이 통째로 빠져 있었다
+    { id: "conf-title", sel: "#rbv-conf > h1", section: "s5-4", pos: "after" },
+    { id: "conf-settings", sel: "#rbv-conf .card-head h2", text: "분자와 탐색 설정", section: "s5-4", pos: "after" },
+    { id: "conf-play", sel: "#rbv-conf .cf-chead b", section: "s5-4", pos: "after" },
+    { id: "conf-map", sel: "#rbv-conf .cf-sect h4", text: "비틀림각 지도", section: "s5-4", pos: "after" },
+    { id: "conf-dft", sel: "#rbv-conf .cf-sect h4", text: "DFT 재순위", section: "s5-4", pos: "after" },
     { id: "cmp-title", sel: "#rbv-compare > h1", section: "ch8", pos: "after" },
     { id: "cmp-display", sel: "#rbv-compare .card-head h2", text: "표시 설정", section: "ch8", pos: "after" },
     { id: "cmp-esw", sel: "#rbv-compare h3", text: "왜 «", section: "s8-1", pos: "after" },
@@ -302,9 +308,11 @@
       "<div class=\"rb-hd-body\" id=\"rb-hd-body\"></div>" +
       "<div class=\"rb-hd-foot\"><button class=\"btn ghost\" type=\"button\" id=\"rb-hd-prev\">‹ 이전 절</button>" +
       "<button class=\"btn\" type=\"button\" id=\"rb-hd-open\">설명서에서 열기</button>" +
-      "<button class=\"btn ghost\" type=\"button\" id=\"rb-hd-next\">다음 절 ›</button></div>";
+      "<button class=\"btn ghost\" type=\"button\" id=\"rb-hd-next\">다음 절 ›</button>" +
+      "<button class=\"btn\" type=\"button\" id=\"rb-hd-close2\" style=\"margin-left:auto\">닫기</button></div>";
     document.body.appendChild(drawer);
     document.getElementById("rb-hd-close").addEventListener("click", closeDrawer);
+    document.getElementById("rb-hd-close2").addEventListener("click", closeDrawer);
     document.getElementById("rb-hd-open").addEventListener("click", function () { var id = drawer.dataset.sec; closeDrawer(); window.rbOpenManual(id); });
     document.getElementById("rb-hd-prev").addEventListener("click", function () { step(-1); });
     document.getElementById("rb-hd-next").addEventListener("click", function () { step(1); });
@@ -661,7 +669,7 @@
 .rb-help-btn:hover{background:var(--accent);color:#fff}\
 .rb-help-btn.demo{cursor:default;pointer-events:none;margin:0 2px}\
 .rb-help-btn.end-flex{margin-left:auto}.rb-help-btn.end-float{float:right;margin-top:2px}\
-#rb-help-drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,92vw);background:var(--surface);border-left:1px solid var(--border);box-shadow:-8px 0 24px rgba(0,0,0,.08);z-index:910;display:flex;flex-direction:column;transform:translateX(105%);transition:transform .18s ease}\
+#rb-help-drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,92vw);background:var(--surface);border-left:1px solid var(--border);box-shadow:-8px 0 24px rgba(0,0,0,.08);z-index:9999;display:flex;flex-direction:column;transform:translateX(105%);transition:transform .18s ease}\
 #rb-help-drawer.open{transform:none}\
 .rb-hd-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:14px 16px 10px;border-bottom:1px solid var(--grid)}\
 .rb-hd-title{font-weight:700;font-size:15px}\

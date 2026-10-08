@@ -807,6 +807,74 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 #rb-real.mode-mech #rbv-mech{display:block}
 #rb-real.mode-screen #rbv-screen{display:block}
 #rb-real.mode-monitor #rbv-monitor{display:block}
+/* ── 계산 모니터 — 좌우 분할(목록 · 상세). 상세가 제자리에 머물러 스크롤 이동이 없다 ── */
+#rb-real .mon-split{display:grid;grid-template-columns:minmax(280px,360px) minmax(0,1fr);gap:14px;align-items:start}
+#rb-real .mon-listcol{margin-bottom:0;max-height:calc(100vh - 40px);overflow:auto;position:sticky;top:12px}
+#rb-real .mon-detailcol{margin-bottom:0;position:sticky;top:12px;max-height:calc(100vh - 40px);overflow:auto}
+#rb-real .mon-rows{display:flex;flex-direction:column;gap:6px}
+#rb-real .mon-row{display:block;width:100%;text-align:left;border:1px solid var(--grid);border-radius:10px;background:var(--surface);padding:8px 10px;cursor:pointer;color:var(--text-1);font:inherit}
+#rb-real .mon-row:hover{border-color:var(--accent)}
+#rb-real .mon-row.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+#rb-real .mon-row .r1{display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+#rb-real .mon-row .nm{font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rb-real .mon-row .r2{display:flex;gap:8px;align-items:baseline;justify-content:space-between;margin-top:3px;font-size:11.5px;color:var(--text-2)}
+#rb-real .mon-row .r3{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rb-real .mon-bar{height:4px;border-radius:2px;background:var(--grid);margin-top:6px;overflow:hidden}
+#rb-real .mon-bar i{display:block;height:100%;background:var(--accent)}
+#rb-real #mon-log-wrap summary::-webkit-details-marker{display:none}
+/* 결과 화면 맨 위 — 상태 칩과 «지금 돌고 있는 계산» 카드 */
+#rb-real .res-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+#rb-real .res-chip{border:1px solid var(--border);background:var(--surface);color:var(--text-2);
+  border-radius:99px;padding:5px 12px;font-size:12px;cursor:pointer}
+#rb-real .res-chip:hover{border-color:var(--accent)}
+#rb-real .res-chip.on{border-color:var(--accent);color:var(--accent);font-weight:700;
+  background:color-mix(in srgb,var(--accent) 10%,transparent)}
+#rb-real .res-chip.chip-run{border-color:color-mix(in srgb,var(--accent) 50%,transparent);color:var(--accent)}
+#rb-real .res-chip.chip-review{border-color:color-mix(in srgb,var(--pin) 50%,transparent);color:var(--pin)}
+#rb-real .res-chip.chip-fail{border-color:color-mix(in srgb,var(--danger) 45%,transparent);color:var(--danger)}
+#rb-real .res-running{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+#rb-real .res-runrow{padding:7px 0;border-bottom:1px solid var(--grid)}
+#rb-real .res-runrow:last-child{border-bottom:none}
+#rb-real .res-runtop{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+#rb-real .res-waitline{margin-top:8px;padding-top:8px;border-top:1px solid var(--grid);font-size:12px;color:var(--text-2)}
+/* Conformer 탐색 — 왼쪽 세트 목록(분자별) + 오른쪽 작업공간. 드롭다운을 걷어내고 늘 펼쳐 둔다 */
+#rb-real .cf-page{display:grid;grid-template-columns:minmax(190px,232px) minmax(0,1fr);gap:14px;align-items:start}
+#rb-real .cf-setlist{margin-bottom:0;padding:10px;position:sticky;top:12px;max-height:calc(100vh - 40px);overflow:auto}
+#rb-real .cf-sethead{font-weight:700;font-size:13px;margin-bottom:8px;display:flex;gap:6px;align-items:center}
+#rb-real .cf-setgrp{font-size:12px;font-weight:700;color:var(--text-2);margin:10px 0 4px}
+#rb-real .cf-setgrp.loose{color:var(--pin)}
+#rb-real .cf-setrow{display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;border:1px solid var(--grid);
+  border-radius:9px;background:var(--surface);padding:6px 9px;margin-bottom:5px;cursor:pointer;color:var(--text-1);font:inherit}
+#rb-real .cf-setrow:hover{border-color:var(--accent)}
+#rb-real .cf-setrow.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+#rb-real .cf-setrow .t{font-size:12.5px;font-weight:600}
+#rb-real .cf-setrow .d{font-size:11px;color:var(--muted)}
+#rb-real .cf-setrow.new{text-align:center;font-size:12.5px;color:var(--accent);border-style:dashed}
+@media (max-width:1000px){#rb-real .cf-page{grid-template-columns:1fr}
+  #rb-real .cf-setlist{position:static;max-height:260px}}
+/* 탐색 과정 재생 — 재생 막대와 에너지 띠 (띠 하나가 구조 하나) */
+#rb-real .cf-play{display:flex;flex-direction:column;gap:5px;padding:8px 10px;border-top:1px solid var(--grid)}
+#rb-real .cf-playrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#rb-real .cf-ebar{display:flex;align-items:flex-end;gap:2px;height:34px;background:var(--grid);border-radius:6px;padding:3px 5px}
+#rb-real .cf-ebar i{flex:1;min-width:3px;background:color-mix(in srgb,var(--accent) 35%,transparent);border-radius:1px;cursor:pointer}
+#rb-real .cf-ebar i.done{background:color-mix(in srgb,var(--accent) 70%,transparent)}
+#rb-real .cf-ebar i.on{background:var(--accent);outline:1px solid var(--accent)}
+#rb-real .cf-ebar i:hover{background:var(--accent)}
+/* 라이브러리 미리보기의 «새로 탐색» 줄 */
+#rb-real .lb-confnew{border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);border-radius:10px;
+  padding:9px 11px;margin-bottom:10px;background:color-mix(in srgb,var(--accent) 5%,transparent)}
+/* 분자 미리보기의 conformer 세트 카드 — 세트를 분자 아래에 모아 둔다 */
+#rb-real .lb-confset{border:1px solid var(--grid);border-radius:10px;padding:9px 11px;margin-bottom:8px}
+#rb-real .lb-confset-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+#rb-real .mon-ph{margin-bottom:0;position:sticky;top:12px}
+@media (max-width:1000px){
+  #rb-real .mon-split{grid-template-columns:1fr}
+  #rb-real .mon-listcol{position:static;max-height:none}
+  #rb-real .mon-ph{display:none}            /* 좁은 화면에서는 서랍이 덮으므로 안내 자리가 필요 없다 */
+  /* 좁은 화면 — 상세를 오른쪽 서랍으로 띄운다 */
+  #rb-real .mon-detailcol{position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);z-index:60;
+    border-radius:0;max-height:none;box-shadow:-10px 0 28px rgba(0,0,0,.18)}
+}
 #rb-real.mode-manual #rbv-manual{display:block}
 #rb-real.mode-bench #rbv-bench{display:block}#rb-real.mode-conf #rbv-conf{display:block}
 #rb-real.mode-dash #rbv-dash{display:block}
@@ -1228,6 +1296,14 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 <div id="rbv-results" class="rbv">
   <h1>DFT 계산 결과</h1>
   <p class="rb-note">이 페이지의 작업·결과는 전부 이 컴퓨터의 PySCF가 실제로 수행한 계산입니다.</p>
+
+  <!-- 무엇이 돌고 있고 무엇이 대기인지를 완료 결과보다 먼저 — 칩을 누르면 작업 큐가 그 상태만 보인다 -->
+  <div class="res-chips" id="res-statusbar"></div>
+  <div class="card res-running" id="res-running" hidden>
+    <div class="card-head"><h2>지금 돌고 있는 계산</h2>
+      <button class="btn ghost" type="button" onclick="window.rbOpenMonitor && window.rbOpenMonitor()">계산 모니터 →</button></div>
+    <div id="res-running-body"></div>
+  </div>
 
   <div class="card">
     <div class="card-head"><h2>결과 불러오기</h2>
@@ -1773,7 +1849,9 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
 
   <div class="stat-row" id="mon-tiles"></div>
 
-  <div class="card">
+  <!-- 좌우 분할 — 왼쪽에서 고르면 오른쪽만 바뀐다 (좁은 화면에서는 오른쪽이 서랍으로 덮는다) -->
+  <div class="mon-split">
+  <div class="card mon-listcol">
     <div class="card-head"><h2>작업</h2>
       <div class="toolbar">
         <label class="small">캠페인 <select class="input" id="mon-campaign"><option value="">전체</option></select></label>
@@ -1787,7 +1865,11 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <div id="mon-table" class="empty small">작업이 없습니다.</div>
   </div>
 
-  <div class="card" id="mon-detail" style="display:none">
+  <div class="card mon-ph" id="mon-detail-ph">
+    <p class="empty small" style="margin:0">왼쪽에서 작업을 고르면 여기에 상세가 나옵니다 —
+      SCF·구조 최적화·진동수 수렴, 이상 징후, 자동 복구 이력, 원본 로그.</p></div>
+
+  <div class="card mon-detailcol" id="mon-detail" style="display:none">
     <div class="card-head"><h2 id="mon-detail-title">작업 상세</h2>
       <div class="toolbar">
         <a class="btn small ghost" id="mon-log-download" href="#" download>원본 로그 내려받기</a>
@@ -1797,8 +1879,12 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       </div></div>
     <div id="mon-detail-body"></div>
 
-    <h3 style="font-size:13px;color:var(--accent);margin-top:16px">PySCF 원본 로그
-      <span class="muted small" id="mon-log-meta"></span></h3>
+    <!-- 원본 로그는 길어서 기본으로 접어 둔다 — 펼칠 때만 받아온다 -->
+    <details id="mon-log-wrap" style="margin-top:14px;border-top:1px solid var(--grid);padding-top:10px">
+    <summary style="cursor:pointer;list-style:none">
+      <h3 style="font-size:13px;color:var(--accent);margin:0;display:inline">PySCF 원본 로그</h3>
+      <span class="muted small" id="mon-log-meta"></span>
+      <span class="muted small">— 누르면 펼칩니다</span></summary>
     <div class="toolbar" style="margin:6px 0">
       <input class="input" id="mon-log-search" placeholder="검색 — converged, error, cycle, imaginary…" style="min-width:260px">
       <button class="btn small" id="mon-log-search-btn" type="button">검색</button>
@@ -1812,6 +1898,8 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
     <pre class="mon-log" id="mon-log"></pre>
     <p class="muted small" style="margin:6px 0 0">원본 로그는 수정하지 않고 그대로 보존합니다 (완료 후 SHA-256 기록).
       한 번에 300줄만 가져오며, 경고·오류·수렴 줄은 색으로 강조됩니다. 구조화 이벤트의 «원본에서 보기»는 이 창의 해당 줄로 이동합니다.</p>
+    </details>
+  </div>
   </div>
 </div>
 
@@ -1856,10 +1944,10 @@ window.__ml={getE:function(){return E.tot;},setIon:function(x,y,z){ion.x=x;ion.y
       // 분자 검색 및 선택(정밀 검색·선택) → 분자 라이브러리(카드 탐색). 예전 «화학물질 조회 · 물질 보관함 ·
       // 용매 라이브러리»는 서버 저장 분자 라이브러리로 통합 (용매는 역할 «용매» 레코드)
       {label: "분자 검색 및 선택", mode: "molsearch"},
-      {label: "분자 라이브러리", mode: "library"}]},
+      {label: "분자 라이브러리", mode: "library"},
+      // Conformer 탐색은 DFT 계산이 아니라 «분자의 구조를 준비하는 일»이라 분자 데이터에 둔다
+      {label: "Conformer 탐색", mode: "conf"}]},
     {group: "계산", items: [
-      // 구조 준비(Conformer 탐색, 역장)와 DFT 계산을 나눈다 — 찾은 구조를 골라 계산으로 보낸다
-      {label: "Conformer 탐색", mode: "conf"},
       // «계산» 하나로 통합 — 화면 위 토글로 분자 하나(calc) / 배치 스크리닝(screen) 전환
       {label: "계산", mode: "calc"},
       {label: "계산 모니터", mode: "monitor"},

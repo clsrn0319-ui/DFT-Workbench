@@ -297,6 +297,10 @@ function render3D(r, opts = {}) {
     cam.yaw = yaw += (e.clientX - px) * 0.01; cam.pitch = pitch = Math.max(-1.5, Math.min(1.5, pitch + (e.clientY - py) * 0.01));
     px = e.clientX; py = e.clientY; drawLinked();
   };
+  // 같은 상자를 다시 그릴 때 예전 처리기를 떼어 낸다 — 재생처럼 자주 다시 그리면 쌓인다
+  const prevH = box._rb3dHandlers;
+  if (prevH) { window.removeEventListener("mouseup", prevH.up); window.removeEventListener("mousemove", prevH.move); }
+  box._rb3dHandlers = {up: up, move: move};
   window.addEventListener("mouseup", up); window.addEventListener("mousemove", move);
   canvas.addEventListener("click", e => {
     if (moved) return;
@@ -335,19 +339,87 @@ function wsAtomCard(r, i) {
   $("ws-atom-x").onclick = () => { WS.sel = null; box.style.display = "none"; WS.redraw && WS.redraw(); };
 }
 
+/** 논문 Methods 에 그대로 넣을 수 있는 문단 — 기록(provenance)에서 그대로 만든다.
+    손으로 옮겨 적다 보면 기저·용매·수렴 기준 중 하나가 빠지기 때문에 자동으로 만든다. */
+function wsMethodsText(job, r) {
+  const p = r.provenance || {}, c = r.conditions || {}, s = job.settings || {};
+  // provenance 의 dispersion 은 PySCF 내부 키(d3bj 등)라 논문 표기로 바꾼다
+  const DISP_NAME = {d3bj: "Grimme D3(BJ)", d3zero: "Grimme D3(zero)", d3: "Grimme D3",
+                     d4: "Grimme D4", d3zerom: "Grimme D3M(zero)", d3bjm: "Grimme D3M(BJ)"};
+  const dispKey = p.dispersion && p.dispersion !== "없음" ? String(p.dispersion) : null;
+  const disp = dispKey ? (DISP_NAME[dispKey.toLowerCase()] || dispKey) : null;
+  const basisOpt = p.basis_optimization, basisSp = p.basis_singlepoint;
+  const solvent = p.solvent_model && p.solvent_model !== "vacuum" ? p.solvent_model : null;
+  const L = [];
+  L.push(`All calculations were performed with ${p.engine || "PySCF"}`
+    + (p.geometry_optimizer ? ` using the ${p.geometry_optimizer} optimizer` : "") + ".");
+  L.push(`Geometries were ${s.expert?.optimizeGeometry === false ? "taken as given (no optimization)"
+    : `optimized at the ${p.functional || c.method || "DFT"}/${basisOpt || "?"} level`}`
+    + (disp ? ` with ${disp} dispersion correction` : " without dispersion correction") + ".");
+  if (basisSp && basisSp !== basisOpt) {
+    L.push(`Single-point energies were evaluated with the ${basisSp} basis set.`);
+  }
+  L.push(solvent
+    ? `Solvation was described by the ${solvent} implicit model.`
+    : "Calculations were carried out in the gas phase.");
+  if (p.n_conformers_searched) {
+    L.push(`Conformers were generated with RDKit ${p.rdkit || ""} (ETKDG, `
+      + `${p.n_conformers_searched} structures`
+      + (p.n_conformers_dft_ranked ? `, ${p.n_conformers_dft_ranked} re-ranked at the DFT level` : "")
+      + (p.boltzmann_ensemble ? ", Boltzmann-averaged at " + (c.temperature_k || 298.15) + " K" : "")
+      + ").");
+  }
+  L.push(`The SCF convergence threshold was ${p.scf_conv_tol}`
+    + (p.density_fitting ? ", and density fitting was used" : "") + ".");
+  if (c.reference_electrode) L.push(`Potentials are reported versus ${c.reference_electrode}.`);
+  const warn = [];
+  if (!disp) warn.push("분산 보정 없음");
+  if (job.validation?.grade && job.validation.grade !== "PASS") warn.push(`검증 ${job.validation.grade}`);
+  return L.join(" ")
+    + `\n\n[RhoBench ${job.id} · ${p.platform || ""} · ${p.python ? "Python " + p.python : ""}`
+    + (warn.length ? " · 주의: " + warn.join(" · ") : "") + "]";
+}
+
+/** Methods 문단을 패널 안에 펼쳐 보여 주고 클립보드로도 넣어 준다 */
+function wsShowMethods(job, r, btn) {
+  const text = wsMethodsText(job, r);
+  let box = btn.closest(".ws-panel").querySelector(".ws-methods");
+  if (box) { box.remove(); btn.textContent = "Methods 문단"; return; }
+  box = document.createElement("div");
+  box.className = "ws-methods";
+  box.style.cssText = "margin-top:8px;border-top:1px solid var(--grid);padding-top:8px";
+  box.innerHTML = `<textarea class="input" rows="7" readonly
+      style="width:100%;font-size:12px;line-height:1.5">${esc(text)}</textarea>
+    <p class="muted small" style="margin:4px 0 0">그대로 Methods 에 넣고, 대괄호 줄은 지우거나 Supporting Information 으로 옮기세요.
+      값이 아니라 «어떻게 계산했는가»만 담습니다.</p>`;
+  btn.closest(".ws-panel").querySelector(".ws-pb").appendChild(box);
+  btn.textContent = "Methods 접기";
+  try {
+    navigator.clipboard.writeText(text).then(
+      () => { if (window.rbToast) window.rbToast("Methods 문단을 복사했습니다"); }, () => {});
+  } catch (e) { /* 클립보드가 막혀 있으면 아래 상자에서 직접 복사 */ }
+}
+
 /* ── 계산 설정(Input) 패널 ── */
 function wsInputPanel(job, r) {
   const s = job.settings || {}, e = s.expert || {}, c = r.conditions || {};
   const sol = c.solvent_model || (s.solventId ? s.solventId : "vacuum");
+  // 분산 보정은 범함수 이름 안에 묻혀 있어 문헌 비교에서 자주 놓친다 — 따로 한 줄로 세운다
+  const fn = e.functional || c.method?.split("/")[0] || "";
+  const disp = c.dispersion || (/-d3\(bj\)/i.test(fn) ? "D3(BJ)" : /-d3/i.test(fn) ? "D3"
+    : /-d4/i.test(fn) ? "D4" : "없음");
   const rows = [
-    ["Method", e.functional || c.method?.split("/")[0] || "—"],
+    ["Method", fn || "—"],
     ["Basis Set", (c.method || "").split("/")[1] || e.basis || "(프리셋)"],
+    ["분산 보정", disp === "없음"
+      ? "없음 — 분산이 중요한 계(수소결합·π 적층·접촉)는 과소평가됩니다"
+      : `${disp} 적용 — 분산 보정 없는 문헌값과는 직접 비교하지 마세요`],
     ["Solvent", sol], ["Charge · Multiplicity", `${e.charge ?? 0} · ${e.multiplicity ?? 1}`],
     ["정확도 · 목적", `${s.accuracy || "—"} · ${s.purpose || "—"}`],
     ["온도 · 기준 전극", `${c.temperature_k ?? s.temperature ?? "—"} K · ${c.reference_electrode || s.referenceElectrode || "—"}`],
   ];
   const adv = Object.entries(e).filter(([k, v]) => v != null && v !== "" && !["functional", "basis", "charge", "multiplicity", "scfTol"].includes(k));
-  return `<div class="ws-panel"><div class="ws-ph">계산 설정 (Input)<span class="sp"><button class="btn ghost sm" type="button" data-ws-rerun="${esc(job.id)}" title="이 조건을 «계산» 화면에 채워 넣습니다">같은 조건으로 재계산</button></span></div>
+  return `<div class="ws-panel"><div class="ws-ph">계산 설정 (Input)<span class="sp"><button class="btn ghost sm" type="button" data-ws-methods="${esc(job.id)}" title="논문 Methods 에 넣을 문단을 만들어 복사합니다">Methods 문단</button><button class="btn ghost sm" type="button" data-ws-rerun="${esc(job.id)}" title="이 조건을 «계산» 화면에 채워 넣습니다">같은 조건으로 재계산</button></span></div>
     <div class="ws-pb"><table class="ws-kv">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join("")}</table>
     ${adv.length ? `<details><summary class="small muted">고급 설정 보기 (${adv.length})</summary><table class="ws-kv small">${adv.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(JSON.stringify(v))}</td></tr>`).join("")}</table></details>` : ""}
     ${r.provenance?.protocol_hash ? `<div class="small muted">프로토콜 해시 <span class="mono">${esc(String(r.provenance.protocol_hash).slice(0, 10))}</span></div>` : ""}</div></div>`;
@@ -496,15 +568,27 @@ function svgOrbitalLevels(lv, o = {}) {
   let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block"><line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" class="baseline"/>`;
   for (let e = Math.ceil(e0 / step) * step; e <= e1; e += step) s += `<text x="${L - 5}" y="${y(e) + 3.5}" text-anchor="end" class="axis-label">${e}</text><line x1="${L - 3}" y1="${y(e)}" x2="${L}" y2="${y(e)}" class="baseline"/>`;
   const KEY = new Set(["HOMO−1", "HOMO", "LUMO", "LUMO+1"]);
+  const sorted = [...levels].sort((a, b) => b.energy_ev - a.energy_ev);
+  // 어떤 라벨을 보일지 먼저 정한다 — HOMO−1·HOMO 처럼 거의 겹치는 준위도 둘 다 보여야 한다
   let lastY = -1e9;
-  for (const l of [...levels].sort((a, b) => b.energy_ev - a.energy_ev)) {
+  const shown = [];
+  for (const l of sorted) {
+    const key = KEY.has(l.label), yy = y(l.energy_ev);
+    if ((key || Math.abs(yy - lastY) > 12) && (!o.compact || key)) { shown.push({l, yy}); lastY = yy; }
+  }
+  // 글씨만 세로로 벌리고 준위선은 제자리에 둔다 (겹치면 읽을 수 없기 때문)
+  const GAP = o.compact ? 12 : 13;
+  const ly = (window.spreadLabels || (a => a))(shown.map(x => x.yy), GAP, T + 5, H - B - 3);
+  const labelY = new Map(shown.map((x, i) => [x.l, ly[i]]));
+  for (const l of sorted) {
     const key = KEY.has(l.label), on = l.label === o.active, occ = l.occ > 0, col = occ ? "#2a78d6" : "#e0663e", yy = y(l.energy_ev);
-    const showLabel = (key || Math.abs(yy - lastY) > 12) && (!o.compact || key);
+    const ty = labelY.has(l) ? labelY.get(l) : null;
     s += `<g data-lv="${esc(l.label)}" style="cursor:${ORB_BY_LABEL[l.label] ? "pointer" : "default"}"><title>${esc(l.label)} · ${fmtE(l.energy_ev)} ${esc(u)} · 점유 ${l.occ}${l.index != null ? " · MO " + (l.index + 1) : ""}</title>
       <line x1="${L + 14}" y1="${yy}" x2="${L + 104}" y2="${yy}" stroke="${col}" stroke-width="${on ? 4 : 2}" opacity="${key ? 1 : .55}"/>
       <line x1="${L + 104}" y1="${yy}" x2="${L + 120}" y2="${yy}" stroke="${col}" stroke-dasharray="2 2" opacity=".6"/>
-      ${showLabel ? `<text x="${L + 124}" y="${yy + 3.5}" font-size="${o.compact ? 10 : 11}" fill="${col}" font-weight="${on ? 800 : 500}">${esc(l.label)} (${fmtE(l.energy_ev)} ${esc(u)})</text>` : ""}</g>`;
-    if (showLabel) lastY = yy;
+      ${ty != null && Math.abs(ty - yy) > 1.5
+        ? `<path d="M${L + 120},${yy} L${L + 122},${ty}" fill="none" stroke="${col}" stroke-width="0.8" opacity=".6"/>` : ""}
+      ${ty != null ? `<text x="${L + 124}" y="${ty + 3.5}" font-size="${o.compact ? 10 : 11}" fill="${col}" font-weight="${on ? 800 : 500}">${esc(l.label)} (${fmtE(l.energy_ev)} ${esc(u)})</text>` : ""}</g>`;
   }
   if (homo && lumo && !o.compact) {
     const x = L + 60, y0 = y(lumo.energy_ev), y1 = y(homo.energy_ev);
@@ -543,6 +627,12 @@ function surfaceCard(si) {
       ${si.exchange_kj != null ? row("교환 에너지", `<b>${fmt(si.exchange_kj)}</b> kJ/mol
         <span class="badge ${cls}" style="margin-left:6px">${label}</span>`) : ""}
     </table>
+    ${si.geometry && si.geometry.relaxed && si.geometry.converged === false
+      ? `<p class="small" style="margin:6px 0 0;color:var(--danger)">⚠ 접촉 구조가 최대 ${si.geometry.max_steps} 스텝에서
+         수렴하지 못했습니다 — 이 값은 <b>하한</b>입니다. 수렴 전 구조는 결합이 약하게 나옵니다.</p>` : ""}
+    ${si.geometry && si.geometry.relaxed === false
+      ? `<p class="small" style="margin:6px 0 0;color:var(--pin)">⚠ 접촉 구조를 DFT 로 이완하지 않았습니다 (역장 구조) —
+         수소결합 거리가 느슨해 흡착이 과소평가됩니다.</p>` : ""}
     <p class="muted small" style="margin:4px 0 0">${si.verdict_text ? esc(si.verdict_text) + " · " : ""}
       음수일수록 강하게 붙습니다. 교환 에너지가 음수면 바인더가 표면의 용매를 밀어내고 붙는다는 뜻입니다.
       슬랩이 아닌 클러스터 모델이라 절대값이 아니라 후보끼리의 순위로 보세요.</p></div>`;
@@ -835,6 +925,7 @@ function showResult(job) {
       else if (k === "files") { pane.innerHTML = tabFilesHtml(job, r); wireFiles(job, r, pane); }
     } catch (e) { console.error("tab", k, e); pane.innerHTML = `<p class="form-error">탭을 그리지 못했습니다: ${esc(e.message)}</p>`; }
     pane.querySelectorAll("[data-ws-rerun]").forEach(b => b.addEventListener("click", () => { if (window.rbPrefillCalc) window.rbPrefillCalc(job); }));
+    pane.querySelectorAll("[data-ws-methods]").forEach(b => b.addEventListener("click", () => wsShowMethods(job, r, b)));
     pane.querySelectorAll("[data-dl]").forEach(b => b.addEventListener("click", () => wsDownload(job, r, b.dataset.dl)));
   };
   const goTab = k => {

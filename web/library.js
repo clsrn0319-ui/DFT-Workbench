@@ -57,6 +57,81 @@
     return d;
   }
   L.load = load;
+
+  /* conformer 세트 — 분자 아래에 모아 보여 주려고 따로 받아 둔다 (세트에 libraryId 가 들어 있다) */
+  async function loadConfSets(force) {
+    if (L.sets && !force) return L.sets;
+    try {
+      const d = await fetch("/api/conformers").then(r => r.ok ? r.json() : {sets: []});
+      L.sets = d.sets || [];
+    } catch (e) { L.sets = []; }
+    return L.sets;
+  }
+  const confSetsOf = id => (L.sets || []).filter(s => s.library && s.library.id === id);
+
+  /** 이 분자로 탐색을 돌리고, 끝나면 탐색 화면에서 결과를 연다 */
+  async function startConfSearch(m, btn) {
+    const u = L.ui.cf;
+    btn.disabled = true; btn.textContent = "탐색 중…";
+    try {
+      const r = await fetch("/api/conformers/search", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({smiles: m.smiles, name: m.name, libraryId: m.id,
+                              structure: u.structure, reference: u.reference,
+                              nConformers: Number(u.n) || 20, seed: 42, pruneRms: 0.5}),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "탐색에 실패했습니다");
+      await loadConfSets(true);
+      if (window.rbConformerOpen) window.rbConformerOpen(d.id);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "탐색 ↗";
+      if (window.rbToast) window.rbToast(e.message);
+      else alert(e.message);
+    }
+  }
+
+  /** 분자를 다시 입력하지 않고 이 자리에서 바로 탐색 — 구조·기준 구조·개수만 고른다 */
+  function confSearchHtml(m) {
+    const u = L.ui.cf || (L.ui.cf = {structure: "모노머", reference: "all-trans", n: 20});
+    const chip = (v) => `<button type="button" class="btn sm ${u.structure === v ? "primary" : ""}" data-cfstruct="${v}">${v}</button>`;
+    return `<div class="lb-confnew">
+      <div class="small" style="color:var(--accent);margin-bottom:6px">새로 탐색</div>
+      <div class="toolbar" style="margin:0;gap:8px">
+        <span style="display:flex;gap:4px">${["모노머", "2량체", "3량체"].map(chip).join("")}</span>
+        <label class="small">기준 <select class="input" id="lb-cfref">
+          ${[["all-trans", "all-trans"], ["auto", "자동 (최저 에너지)"]].map(([v, t]) =>
+            `<option value="${v}"${u.reference === v ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label class="small">개수 <input class="input" id="lb-cfn" type="number" min="2" max="200" value="${u.n}" style="width:72px"></label>
+        <button class="btn primary sm" type="button" id="lb-cfgo" data-mol="${h(m.id)}" style="margin-left:auto">탐색 ↗</button>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">탐색은 역장 계산이라 수 초면 끝나고 계산 큐를 쓰지 않습니다.</p></div>`;
+  }
+
+  /** 그 분자의 conformer 세트 목록 — 식별자 대신 «구조 · 기준 구조»로 구분한다 */
+  function confSetsHtml(sets) {
+    if (!sets.length) {
+      return '<div class="banner warn">아직 탐색한 구조가 없습니다 — 위에서 구조를 고르고 «탐색»을 누르세요.</div>';
+    }
+    const refLabel = s => {
+      const r = (s.molecule || {}).reference || (s.settings || {}).reference;
+      return r === "all-trans" ? "all-trans" : r === "pattern" ? "비틀림 패턴" : "자동";
+    };
+    return sets.map(s => {
+      const mo = s.molecule || {};
+      const rank = s.n_ranked ? `DFT 재순위 ${s.n_ranked}개`
+        : s.rank_status === "running" ? "DFT 재순위 진행 중" : "역장 순위만";
+      return `<div class="lb-confset">
+        <div class="lb-confset-top"><b>${h(mo.structure || "모노머")} · ${h(refLabel(s))}</b>
+          <span class="small muted">${h(when(s.createdAt))}</span></div>
+        <div class="small muted">구조 ${s.n_conformers}개 · ${h(rank)}
+          ${s.linked_by === "smiles" ? " · SMILES 로 자동 연결" : ""}</div>
+        <div class="lb-acts2" style="margin-top:6px">
+          <button class="btn sm" type="button" data-cfopen="${h(s.id)}">탐색 화면에서 열기</button>
+          <button class="btn sm" type="button" data-cfcalc="${h(s.id)}">계산에 쓰기</button></div></div>`;
+    }).join("");
+  }
+
   const mols = () => (L.data ? L.data.molecules : []);
   const mixes = () => (L.data ? L.data.mixtures : []);
   const solvents = () => mols().filter(m => m.solvent);
@@ -673,7 +748,9 @@
     const u = L.ui, m = rec(u.preview);
     if (!m) { box.innerHTML = '<h2 style="font-size:15px;margin:0">분자 미리보기</h2><div class="empty small">카드를 누르면 여기에 구조·식별자·계산 이력이 나타납니다.</div>'; return; }
     const j = lastDone(m), [cls, st] = calcState(m), same = mols().filter(x => x.formula === m.formula && x.id !== m.id);
-    const tabs = [["overview", "개요"], ["struct", "구조"], ["calc", `계산 이력 (${m.n_jobs || 0})`]];
+    const sets = confSetsOf(m.id);
+    const tabs = [["overview", "개요"], ["struct", "구조"], ["calc", `계산 이력 (${m.n_jobs || 0})`],
+                  ["conf", `conformer 세트 (${sets.length})`]];
     let body = "";
     if (u.ptab === "overview") {
       body = `<table class="kv-table lb-kv"><tr><th>레코드 ID</th><td class="mono">${h(m.id)}</td></tr><tr><th>화학식</th><td>${fmtFormula(m.formula)}</td></tr><tr><th>분자량</th><td>${nf(m.mw, 3)} g/mol</td></tr><tr><th>CAS</th><td>${h(m.cas || "—")}</td></tr><tr><th>SMILES</th><td class="mono small" style="word-break:break-all">${h(m.smiles)}</td></tr><tr><th>출처</th><td>${h(m.source || "")}</td></tr>${m.note ? `<tr><th>메모</th><td class="small">${h(m.note)}</td></tr>` : ""}</table>
@@ -685,6 +762,8 @@
     } else if (u.ptab === "struct") {
       body = `<table class="kv-table lb-kv"><tr><th>입력 원본</th><td class="mono small" style="word-break:break-all">${h(m.input || m.smiles)}</td></tr><tr><th>InChIKey</th><td class="mono small">${h(m.inchikey || "—")}</td></tr><tr><th>형식 전하</th><td>${m.charge > 0 ? "+" : ""}${m.charge}</td></tr><tr><th>조각 수</th><td>${m.fragments}${m.fragments > 1 ? ' <span class="badge review">염·이온쌍</span>' : ""}</td></tr><tr><th>입체 중심</th><td>${m.stereo_centers || 0}</td></tr><tr><th>원자 수 (H 포함)</th><td>${m.n_atoms}</td></tr><tr><th>원소</th><td>${m.elements.join(" · ")}</td></tr><tr><th>기능기</th><td>${m.groups.join(" · ") || "—"}</td></tr><tr><th>역할</th><td>${m.roles.map(r => ROLE_LABEL[r]).join(" · ")}</td></tr>${m.oligomers ? `<tr><th>올리고머</th><td class="small">${Object.entries(m.oligomers).map(([k, v]) => `${h(k)} <span class="mono">${h(v)}</span>`).join("<br>")}</td></tr>` : ""}<tr><th>동일 화학식</th><td>${same.map(x => h(x.name)).join(", ") || "없음"}</td></tr></table>
         <p class="small muted">이성질체·토토머·염은 별도 레코드로 관리합니다. 3D 는 계산된 최적화 구조가 있으면 그것을, 없으면 RDKit 생성 conformer 를 보여 줍니다.</p>`;
+    } else if (u.ptab === "conf") {
+      body = confSearchHtml(m) + confSetsHtml(sets);
     } else {
       body = m.jobs.length ? `<table class="table lb-table"><tr><th>작업</th><th>조건</th><th>상태</th></tr>${m.jobs.map(x => `<tr><td>${jobLink(x)}<div class="small muted">${h(when(x.when))}</div></td><td class="small">${h(x.method)}<br>${h(x.solvent)} · ${h(x.structure)}</td><td>${gradeBadge(x)}</td></tr>`).join("")}</table>${m.n_jobs > m.jobs.length ? `<p class="small muted">최근 ${m.jobs.length}건만 표시 (전체 ${m.n_jobs}건)</p>` : ""}` : '<div class="banner warn">계산 이력이 없습니다 — «DFT 계산 설정으로 이동»에서 첫 계산을 만드세요.</div>';
     }
@@ -697,6 +776,20 @@
         ${!m.builtin && !IS_SNAPSHOT ? `<button class="btn sm" type="button" data-edit="${h(m.id)}">편집</button><button class="btn ghost danger sm" type="button" data-del="${h(m.id)}">삭제</button>` : ""}</div></div>`;
     wireViewer(box, m, "lb-pv3d"); wireJobLinks(box);
     box.querySelectorAll("[data-pt]").forEach(b => b.addEventListener("click", () => { u.ptab = b.dataset.pt; renderLibPanel(); }));
+    box.querySelectorAll("[data-cfstruct]").forEach(b => b.addEventListener("click", () => {
+      L.ui.cf.structure = b.dataset.cfstruct; renderLibPanel();
+    }));
+    const cfRef = box.querySelector("#lb-cfref"), cfN = box.querySelector("#lb-cfn");
+    if (cfRef) cfRef.addEventListener("change", () => { L.ui.cf.reference = cfRef.value; });
+    if (cfN) cfN.addEventListener("input", () => { L.ui.cf.n = cfN.value; });
+    const cfGo = box.querySelector("#lb-cfgo");
+    if (cfGo) cfGo.addEventListener("click", () => startConfSearch(m, cfGo));
+    box.querySelectorAll("[data-cfopen]").forEach(b => b.addEventListener("click", () => {
+      if (window.rbConformerOpen) window.rbConformerOpen(b.dataset.cfopen);
+    }));
+    box.querySelectorAll("[data-cfcalc]").forEach(b => b.addEventListener("click", () => {
+      if (window.rbConformerUseInCalc) window.rbConformerUseInCalc(b.dataset.cfcalc);
+    }));
     box.querySelector("[data-fav]").addEventListener("click", () => setFav(m.id, !m.fav));
     box.querySelector("[data-go]").addEventListener("click", () => goCalc([m.id]));
     const as = box.querySelector("[data-addsolv]"); if (as) as.addEventListener("click", () => addSolvent(m.id));
@@ -962,7 +1055,10 @@
     if (rootId === "rbv-library" && L.pendingAdd) { const p = L.pendingAdd; L.pendingAdd = null; openAddForm(p); }
   }
   window.rbRenderMolSearch = () => enter(renderMolSearch, "rbv-molsearch");
-  window.rbRenderLibrary = () => enter(renderLibrary, "rbv-library");
+  window.rbRenderLibrary = () => {
+    if (!L.sets) loadConfSets().then(() => { if (L.ui.preview) renderLibPanel(); });
+    enter(renderLibrary, "rbv-library");
+  };
   window.rbLibRefresh = async () => { if (!L.data) return; await load(true); rerender(); };
   // 계산 결과가 생기면 계산 이력·상태를 갱신 (라이브러리 화면을 보고 있을 때만, 30초 간격)
   if (!IS_SNAPSHOT) setInterval(() => { const real = document.getElementById("rb-real"); if (real && (real.classList.contains("mode-molsearch") || real.classList.contains("mode-library")) && L.data && !document.hidden) window.rbLibRefresh(); }, 30000);
